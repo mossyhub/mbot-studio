@@ -1,0 +1,21 @@
+node_modules
+npm-debug.log*
+.env
+.git
+.gitignore
+*.md
+
+# Frontend source (we copy only the build output)
+web/node_modules
+web/.vite
+
+# Firmware (not needed in Docker image)
+firmware/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea

@@ -1,0 +1,24 @@
+{
+  "name": "mbot-studio",
+  "version": "1.0.0",
+  "description": "AI-powered mBot2 programming platform for kids",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:web": "cd web && npm run dev",
+    "install:all": "npm install && cd server && npm install && cd ../web && npm install",
+    "build": "cd web && npm run build",
+    "start": "cd server && npm start",
+    "docker:build": "docker build -t mbot-studio .",
+    "docker:run": "docker run -p 3001:3001 --env-file .env mbot-studio",
+    "docker:push": "docker tag mbot-studio:latest ${npm_config_registry:-docker.io}/mbot-studio:latest && docker push ${npm_config_registry:-docker.io}/mbot-studio:latest"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}

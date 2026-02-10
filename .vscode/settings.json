@@ -1,0 +1,12 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd d:\\\\personal\\\\mbot\\\\server; node src/index\\.js$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^node src/index\\.js$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

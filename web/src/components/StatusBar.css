@@ -1,0 +1,64 @@
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 16px;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  font-size: 11px;
+  color: var(--color-text-light);
+  flex-shrink: 0;
+}
+
+.status-left, .status-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.status-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.status-connected {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.status-waiting {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.status-disconnected {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.status-hint {
+  font-style: italic;
+  color: #d97706;
+  font-size: 10px;
+}
+
+.status-item {
+  font-weight: 500;
+}
+
+.status-sound-btn {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: #dc2626;
+  font-weight: 500;
+}
+
+.status-sound-btn:hover {
+  background: #fee2e2;
+}
