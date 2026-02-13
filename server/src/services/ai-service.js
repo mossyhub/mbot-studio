@@ -415,10 +415,128 @@ Otherwise, respond with: {"chat": "your friendly message"}`;
   }
 }
 
+function getRequiredFieldsForType(type) {
+  if (type === 'servo') {
+    return ['port', 'label', 'partOf', 'purpose', 'states', 'homeState', 'actions', 'orientation'];
+  }
+  if (type === 'dc_motor') {
+    return ['port', 'label', 'partOf', 'purpose', 'states', 'homeState', 'actions'];
+  }
+  if (String(type || '').includes('sensor')) {
+    return ['port', 'label', 'partOf', 'purpose'];
+  }
+  return ['port', 'label', 'partOf', 'purpose'];
+}
+
+function hasMeaningfulActions(addition) {
+  if (!addition?.actions || addition.actions.length === 0) return false;
+  if (addition.type === 'servo') {
+    return addition.actions.some(a => a.name && (a.angle !== undefined || a.targetState));
+  }
+  if (addition.type === 'dc_motor') {
+    return addition.actions.some(a => a.name && a.motorDirection && a.speed !== undefined && a.duration !== undefined);
+  }
+  return addition.actions.some(a => a.name);
+}
+
+function getMissingFields(addition) {
+  const required = getRequiredFieldsForType(addition?.type);
+  const missing = [];
+
+  for (const field of required) {
+    if (field === 'states') {
+      if (!addition?.states || addition.states.length === 0) missing.push('states');
+      continue;
+    }
+    if (field === 'actions') {
+      if (!hasMeaningfulActions(addition)) missing.push('actions');
+      continue;
+    }
+    const value = addition?.[field];
+    if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) {
+      missing.push(field);
+    }
+  }
+
+  if (addition?.type === 'servo' && addition.orientation && !['vertical', 'horizontal'].includes(addition.orientation)) {
+    missing.push('orientation');
+  }
+
+  return Array.from(new Set(missing));
+}
+
+function questionForMissingField(addition, field) {
+  const name = addition?.label || addition?.partOf || addition?.port || 'that hardware';
+  if (field === 'type') return `Is ${name} controlled by a DC motor, a servo, or a sensor module?`;
+  if (field === 'port') return `Which port is ${name} connected to (M1-M4, S1-S4, or P1-P4)?`;
+  if (field === 'partOf') return `What assembly is ${name} part of (for example "robot arm" or "claw")?`;
+  if (field === 'purpose') return `What does ${name} do when your robot uses it?`;
+  if (field === 'states') return `What named positions or states does ${name} have (like up/down or open/closed)?`;
+  if (field === 'homeState') return `What is the safe home position for ${name} when starting up?`;
+  if (field === 'actions') return `What actions should the robot know for ${name} and how should each action move it?`;
+  if (field === 'orientation') return `For ${name}, is its motion vertical or horizontal?`;
+  return `Can you share more detail about ${field} for ${name}?`;
+}
+
+function enrichAndScoreAdditions(additions = []) {
+  const normalized = additions.map((addition) => {
+    const cloned = { ...addition };
+    if (cloned.type === 'servo' && !cloned.feedbackType) cloned.feedbackType = 'position';
+    if (cloned.type === 'dc_motor' && !cloned.feedbackType) cloned.feedbackType = 'none';
+    if (String(cloned.type || '').includes('sensor') && !cloned.feedbackType) cloned.feedbackType = 'sensor';
+    if (cloned.orientation && typeof cloned.orientation === 'string') {
+      cloned.orientation = cloned.orientation.trim().toLowerCase();
+    }
+    return cloned;
+  });
+
+  const completeness = normalized.map((addition) => {
+    const required = getRequiredFieldsForType(addition.type);
+    const missing = getMissingFields(addition);
+    const score = required.length === 0
+      ? 1
+      : Math.max(0, (required.length - missing.length) / required.length);
+
+    return {
+      port: addition.port || '',
+      label: addition.label || addition.type || 'hardware',
+      type: addition.type || 'custom',
+      score,
+      missing,
+      questions: missing.map((field) => ({
+        field,
+        question: questionForMissingField(addition, field),
+      })),
+    };
+  });
+
+  const allQuestions = completeness
+    .flatMap(entry => entry.questions.map(q => ({
+      port: entry.port,
+      label: entry.label,
+      type: entry.type,
+      field: q.field,
+      question: q.question,
+    })));
+
+  const averageScore = completeness.length === 0
+    ? 1
+    : completeness.reduce((sum, item) => sum + item.score, 0) / completeness.length;
+
+  return {
+    additions: normalized,
+    completeness,
+    needsClarification: allQuestions.length > 0,
+    averageScore,
+    questions: allQuestions.slice(0, 6),
+  };
+}
+
 /**
  * Convert a natural language robot configuration description to structured config
  */
-export async function parseRobotConfig(description) {
+export async function parseRobotConfig(description, existingAdditions = []) {
+  const existing = Array.isArray(existingAdditions) ? existingAdditions : [];
   const messages = [
     {
       role: 'system',
@@ -439,6 +557,7 @@ Return JSON in this format:
       "description": "DC motor that opens and closes the claw gripper",
       "partOf": "Robot Arm",
       "purpose": "Opens and closes to pick up and release small objects",
+      "orientation": "vertical",
       "feedbackType": "none",
       "states": ["open", "closed"],
       "homeState": "open",
@@ -464,7 +583,12 @@ Return JSON in this format:
       "settings": {"defaultSpeed": 70}
     }
   ],
-  "understood": "friendly summary of what you understood"
+  "understood": "friendly summary of what you understood",
+  "assumptions": ["list any guesses you made"],
+  "needsClarification": true,
+  "questions": [
+    {"field": "port", "question": "Which port is it connected to?"}
+  ]
 }
 
 FIELD GUIDE:
@@ -474,6 +598,7 @@ FIELD GUIDE:
   - "none" for DC motors (they just spin, no way to know position)
   - "position" for servos (they go to exact angles)
   - "sensor" for sensors that read values
+- "orientation": For moving parts, whether movement is "vertical" or "horizontal" (especially important for arms/lifters)
 - "states": Named physical states the hardware can be in. Infer from context:
   - Claw → ["open", "closed"]
   - Arm → ["up", "down"]  
@@ -495,6 +620,7 @@ FIELD GUIDE:
 
 For servos, actions use angle instead of motorDirection/speed/duration:
   - "angle": 0-180 degrees
+  - include "orientation" as "vertical" or "horizontal" when the mechanism is directional
 
 INFERENCE RULES:
 - If type is "dc_motor", feedbackType is always "none"
@@ -505,6 +631,10 @@ INFERENCE RULES:
 - Be creative in inferring actions from the description. Think about what a child would naturally say.
 
 Types can be: dc_motor, servo, ultrasonic, color_sensor, light_sensor, custom`,
+    },
+    {
+      role: 'user',
+      content: `Current additions already known:\n${JSON.stringify(existing, null, 2)}`,
     },
     { role: 'user', content: description },
   ];
@@ -518,7 +648,48 @@ Types can be: dc_motor, servo, ultrasonic, color_sensor, light_sensor, custom`,
       response_format: { type: 'json_object' },
     });
 
-    return JSON.parse(response.choices[0].message.content);
+    const parsed = JSON.parse(response.choices[0].message.content);
+    const merged = [...existing];
+
+    for (const addition of (parsed.additions || [])) {
+      const idx = merged.findIndex(a => a.port && addition.port && a.port === addition.port);
+      if (idx >= 0) {
+        merged[idx] = { ...merged[idx], ...addition };
+      } else {
+        merged.push(addition);
+      }
+    }
+
+    const scored = enrichAndScoreAdditions(merged);
+    const combinedQuestions = [
+      ...(Array.isArray(parsed.questions) ? parsed.questions : []),
+      ...scored.questions,
+    ];
+
+    const dedupedQuestions = [];
+    const seen = new Set();
+    for (const q of combinedQuestions) {
+      const question = typeof q === 'string' ? q : q.question;
+      const field = typeof q === 'string' ? 'general' : (q.field || 'general');
+      if (!question) continue;
+      const key = `${field}:${question.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupedQuestions.push({
+        field,
+        question,
+      });
+    }
+
+    return {
+      additions: scored.additions,
+      understood: parsed.understood || 'I updated your robot setup with the details you shared.',
+      assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : [],
+      needsClarification: scored.needsClarification || !!parsed.needsClarification,
+      questions: dedupedQuestions.slice(0, 6),
+      completeness: scored.completeness,
+      averageCompleteness: scored.averageScore,
+    };
   } catch (error) {
     console.error('Config parse error:', error);
     return { error: error.message };

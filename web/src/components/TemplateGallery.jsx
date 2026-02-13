@@ -204,6 +204,46 @@ const TEMPLATES = [
       ]},
     ],
   },
+  {
+    id: 'tmpl_servo_scan',
+    name: 'Arm Scanner 🦾',
+    description: 'Moves a configured servo through positions like a scanning arm.',
+    category: 'movement',
+    icon: '🦾',
+    difficulty: 'Medium',
+    requires: { types: ['servo'] },
+    blocks: [
+      { type: 'display_text', text: 'Scanning...' },
+      { type: 'repeat', times: 3, do: [
+        { type: 'servo', port: 'S1', angle: 20 },
+        { type: 'wait', duration: 0.4 },
+        { type: 'servo', port: 'S1', angle: 90 },
+        { type: 'wait', duration: 0.4 },
+        { type: 'servo', port: 'S1', angle: 160 },
+        { type: 'wait', duration: 0.4 },
+      ]},
+      { type: 'display_text', text: 'Done' },
+    ],
+  },
+  {
+    id: 'tmpl_claw_cycle',
+    name: 'Grabber Cycle ✋',
+    description: 'Opens and closes a configured DC motor grabber in a safe cycle.',
+    category: 'movement',
+    icon: '✋',
+    difficulty: 'Medium',
+    requires: { types: ['dc_motor'] },
+    blocks: [
+      { type: 'display_text', text: 'Grabber' },
+      { type: 'repeat', times: 3, do: [
+        { type: 'dc_motor', port: 'M3', speed: 60, duration: 0.6 },
+        { type: 'wait', duration: 0.5 },
+        { type: 'dc_motor', port: 'M3', speed: -60, duration: 0.6 },
+        { type: 'wait', duration: 0.5 },
+      ]},
+      { type: 'stop' },
+    ],
+  },
 ];
 
 const TEMPLATE_CATEGORIES = [
@@ -213,20 +253,42 @@ const TEMPLATE_CATEGORIES = [
   { key: 'sensors', label: '📡 Sensors' },
 ];
 
-export default function TemplateGallery({ onLoadTemplate }) {
+function isTemplateAvailable(template, robotConfig) {
+  if (!template.requires?.types?.length) return true;
+  const configuredTypes = new Set((robotConfig?.additions || []).map(a => a.type));
+  return template.requires.types.every(t => configuredTypes.has(t));
+}
+
+function resolveTemplatePorts(template, robotConfig) {
+  const additions = robotConfig?.additions || [];
+  return template.blocks.map((block) => {
+    if (block.type === 'servo' && block.port === 'S1') {
+      const servo = additions.find(a => a.type === 'servo');
+      if (servo?.port) return { ...block, port: servo.port };
+    }
+    if (block.type === 'dc_motor' && block.port === 'M3') {
+      const motor = additions.find(a => a.type === 'dc_motor');
+      if (motor?.port) return { ...block, port: motor.port };
+    }
+    return block;
+  });
+}
+
+export default function TemplateGallery({ onLoadTemplate, robotConfig }) {
   const [category, setCategory] = useState('all');
   const [selectedId, setSelectedId] = useState(null);
 
+  const availableTemplates = TEMPLATES.filter(t => isTemplateAvailable(t, robotConfig));
   const filtered = category === 'all'
-    ? TEMPLATES
-    : TEMPLATES.filter(t => t.category === category);
+    ? availableTemplates
+    : availableTemplates.filter(t => t.category === category);
 
-  const selected = TEMPLATES.find(t => t.id === selectedId);
+  const selected = availableTemplates.find(t => t.id === selectedId);
 
   function handleLoad(template) {
     playClick();
     if (onLoadTemplate) {
-      onLoadTemplate(template.blocks, template.name);
+      onLoadTemplate(resolveTemplatePorts(template, robotConfig), template.name);
     }
   }
 
@@ -234,7 +296,7 @@ export default function TemplateGallery({ onLoadTemplate }) {
     <div className="template-gallery">
       <div className="template-header">
         <h3>📚 Program Templates</h3>
-        <span className="template-count">{TEMPLATES.length} programs ready to go!</span>
+        <span className="template-count">{availableTemplates.length} programs ready for this robot!</span>
       </div>
 
       <div className="template-categories">

@@ -541,7 +541,10 @@ export default function App() {
 
             <div className="panel blocks-panel-container">
               <div className="panel-header">
-                <h2>🧩 Block Program</h2>
+                <div>
+                  <h2>🧩 Block Program</h2>
+                  <div className="panel-subtitle">Run sends commands to the robot firmware over MQTT.</div>
+                </div>
                 <div className="panel-actions">
                   <button
                     className="btn-secondary btn-small"
@@ -584,7 +587,7 @@ export default function App() {
                     onClick={handleRunProgram}
                     disabled={blocks.length === 0}
                   >
-                    ▶️ Run on Robot
+                    ▶️ Send via MQTT
                   </button>
                 </div>
               </div>
@@ -607,7 +610,7 @@ export default function App() {
 
               {showTemplates && (
                 <div className="templates-section">
-                  <TemplateGallery onLoadTemplate={handleTemplateLoad} />
+                  <TemplateGallery onLoadTemplate={handleTemplateLoad} robotConfig={robotConfig} />
                 </div>
               )}
 

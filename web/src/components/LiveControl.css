@@ -26,6 +26,12 @@
   margin-bottom: 10px;
 }
 
+.live-subtext {
+  font-size: 12px;
+  color: var(--color-text-light);
+  margin-bottom: 10px;
+}
+
 .live-input-row {
   display: flex;
   gap: 8px;

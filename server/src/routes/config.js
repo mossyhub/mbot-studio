@@ -11,6 +11,15 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../..');
 const CONFIG_PATH = path.join(DATA_DIR, 'robot-config.json');
+const FIRMWARE_DIR = path.join(__dirname, '../../..', 'firmware');
+const REQUIRED_FIRMWARE_FILES = [
+  'main.py',
+  'config.py',
+  'mqtt_client.py',
+  'motor_controller.py',
+  'sensor_reader.py',
+  'command_handler.py',
+];
 
 export const configRoutes = Router();
 
@@ -33,6 +42,48 @@ configRoutes.get('/', (req, res) => {
 });
 
 /**
+ * GET /api/config/firmware
+ * Return required firmware files for one-time USB flashing from Setup UI
+ */
+configRoutes.get('/firmware', (req, res) => {
+  try {
+    const files = REQUIRED_FIRMWARE_FILES.map((name) => {
+      const filePath = path.join(FIRMWARE_DIR, name);
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Missing firmware file: ${name}`);
+      }
+      const content = fs.readFileSync(filePath, 'utf-8');
+      return { name, content };
+    });
+
+    const mqttUrl = process.env.MQTT_BROKER_URL || '';
+    let broker = '';
+    let port = 1883;
+    if (mqttUrl) {
+      try {
+        const parsed = new URL(mqttUrl);
+        broker = parsed.hostname || '';
+        port = parsed.port ? parseInt(parsed.port, 10) : 1883;
+      } catch {
+        // ignore malformed URL and send empty defaults
+      }
+    }
+
+    res.json({
+      files,
+      suggested: {
+        mqttBroker: broker,
+        mqttPort: Number.isFinite(port) ? port : 1883,
+        topicPrefix: process.env.MQTT_TOPIC_PREFIX || 'mbot-studio',
+        clientId: 'mbot2-rover',
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * POST /api/config
  * Save robot configuration
  */
@@ -45,6 +96,13 @@ configRoutes.post('/', (req, res) => {
     };
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+
+    const mqtt = MqttService.getInstance();
+    mqtt.initHardwareStatesFromConfig(config);
+    if (mqtt.isConnected()) {
+      mqtt.sendConfig(config);
+    }
+
     res.json({ success: true, config });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -57,13 +115,13 @@ configRoutes.post('/', (req, res) => {
  */
 configRoutes.post('/parse', async (req, res) => {
   try {
-    const { description } = req.body;
+    const { description, existingAdditions = [] } = req.body;
 
     if (!description) {
       return res.status(400).json({ error: 'Description is required' });
     }
 
-    const result = await parseRobotConfig(description);
+    const result = await parseRobotConfig(description, existingAdditions);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -90,6 +148,12 @@ configRoutes.post('/addition', (req, res) => {
     config.updatedAt = new Date().toISOString();
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 
+    const mqtt = MqttService.getInstance();
+    mqtt.initHardwareStatesFromConfig(config);
+    if (mqtt.isConnected()) {
+      mqtt.sendConfig(config);
+    }
+
     res.json({ success: true, config });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -107,6 +171,13 @@ configRoutes.delete('/addition/:port', (req, res) => {
     config.updatedAt = new Date().toISOString();
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+
+    const mqtt = MqttService.getInstance();
+    mqtt.initHardwareStatesFromConfig(config);
+    if (mqtt.isConnected()) {
+      mqtt.sendConfig(config);
+    }
+
     res.json({ success: true, config });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -53,6 +53,12 @@
   font-weight: 700;
 }
 
+.panel-subtitle {
+  font-size: 12px;
+  color: var(--color-text-light);
+  margin-top: 2px;
+}
+
 .panel-actions {
   display: flex;
   gap: 8px;

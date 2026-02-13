@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './RobotConfig.css';
 import CalibrationChat from './CalibrationChat.jsx';
+import FirmwareFlasher from './FirmwareFlasher.jsx';
 
 export default function RobotConfig({ config, onConfigUpdate, robotConnected, onAchievement }) {
   const [robotName, setRobotName] = useState(config?.name || 'My mBot2');
@@ -10,12 +11,18 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
   const [loading, setLoading] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
   const [testStatus, setTestStatus] = useState({}); // { port: 'testing...' | 'done' | 'error' }
+  const [clarificationQuestions, setClarificationQuestions] = useState([]);
+  const [assumptions, setAssumptions] = useState([]);
+  const [completeness, setCompleteness] = useState([]);
 
   useEffect(() => {
     if (config) {
       setRobotName(config.name || 'My mBot2');
       setAdditions(config.additions || []);
       setNotes(config.notes || '');
+      setClarificationQuestions([]);
+      setAssumptions([]);
+      setCompleteness([]);
     }
   }, [config]);
 
@@ -28,24 +35,21 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
       const res = await fetch('/api/config/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: nlInput }),
+        body: JSON.stringify({ description: nlInput, existingAdditions: additions }),
       });
       const data = await res.json();
 
       if (data.additions) {
-        const merged = [...additions];
-        for (const newAdd of data.additions) {
-          const existIdx = merged.findIndex(a => a.port === newAdd.port);
-          if (existIdx >= 0) {
-            merged[existIdx] = newAdd;
-          } else {
-            merged.push(newAdd);
-          }
-        }
-        setAdditions(merged);
+        setAdditions(data.additions);
+        setCompleteness(data.completeness || []);
+        setClarificationQuestions(data.questions || []);
+        setAssumptions(data.assumptions || []);
         setNlInput('');
 
-        if (data.understood) {
+        if (data.needsClarification) {
+          setSaveStatus('🧠 I need a few more details before this hardware is fully ready.');
+          setTimeout(() => setSaveStatus(''), 5000);
+        } else if (data.understood) {
           setSaveStatus(`✅ Got it! ${data.understood}`);
           setTimeout(() => setSaveStatus(''), 5000);
         }
@@ -58,7 +62,58 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
     }
   };
 
+  const getMissingFields = (addition) => {
+    const type = addition?.type;
+    const required = type === 'servo'
+      ? ['port', 'label', 'partOf', 'purpose', 'states', 'homeState', 'actions', 'orientation']
+      : type === 'dc_motor'
+      ? ['port', 'label', 'partOf', 'purpose', 'states', 'homeState', 'actions']
+      : String(type || '').includes('sensor')
+      ? ['port', 'label', 'partOf', 'purpose']
+      : ['port', 'label', 'partOf', 'purpose'];
+
+    const missing = [];
+    for (const field of required) {
+      if (field === 'states') {
+        if (!addition.states || addition.states.length === 0) missing.push('states');
+        continue;
+      }
+      if (field === 'actions') {
+        if (!addition.actions || addition.actions.length === 0 || !addition.actions.some(a => a?.name)) {
+          missing.push('actions');
+        }
+        continue;
+      }
+      const value = addition?.[field];
+      if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) {
+        missing.push(field);
+      }
+    }
+    return missing;
+  };
+
   const handleSave = async () => {
+    const incomplete = additions
+      .map((addition, index) => ({
+        index,
+        label: addition.label || addition.port || `Hardware ${index + 1}`,
+        missing: getMissingFields(addition),
+      }))
+      .filter(item => item.missing.length > 0);
+
+    if (incomplete.length > 0) {
+      const first = incomplete[0];
+      setSaveStatus(`🧩 ${first.label} still needs: ${first.missing.join(', ')}.`);
+      setTimeout(() => setSaveStatus(''), 5000);
+      setClarificationQuestions(
+        incomplete.flatMap(item => item.missing.map(field => ({
+          field,
+          question: `For ${item.label}, what is the ${field}?`,
+        })))
+      );
+      return;
+    }
+
     const newConfig = {
       name: robotName,
       additions,
@@ -84,8 +139,8 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
     }
   };
 
-  const handleRemoveAddition = (port) => {
-    setAdditions(additions.filter(a => a.port !== port));
+  const handleRemoveAddition = (index) => {
+    setAdditions(additions.filter((_, i) => i !== index));
   };
 
   const handleAddManual = () => {
@@ -100,6 +155,7 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
       states: [],
       homeState: '',
       stallBehavior: 'caution',
+      orientation: '',
       actions: [],
     }]);
   };
@@ -214,6 +270,19 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           </div>
         </section>
 
+        <section className="config-section">
+          <h2>🔌 One-Time Firmware Setup (USB)</h2>
+          <p className="section-desc">
+            Flash the robot firmware once over USB. After that, Program and Live tabs control the robot by sending MQTT commands to the existing firmware.
+          </p>
+          <FirmwareFlasher />
+          <ol className="setup-steps">
+            <li>Connect your mBot2/CyberPi over USB-C.</li>
+            <li>Fill in WiFi + MQTT settings, then click <strong>Flash Firmware Now</strong>.</li>
+            <li>Wait for reboot and confirm the app shows robot online status.</li>
+          </ol>
+        </section>
+
         {/* Natural Language Hardware Setup */}
         <section className="config-section">
           <h2>🔧 Add Hardware (Talk to AI)</h2>
@@ -250,6 +319,29 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
               </button>
             ))}
           </div>
+
+          {clarificationQuestions.length > 0 && (
+            <div className="clarification-box">
+              <h4>🧠 A few details are still needed:</h4>
+              <ul>
+                {clarificationQuestions.map((q, idx) => (
+                  <li key={`${q.field || 'q'}_${idx}`}>{q.question}</li>
+                ))}
+              </ul>
+              <p className="section-desc">Reply in the box above and click <strong>✨ Add to Robot</strong> again.</p>
+            </div>
+          )}
+
+          {assumptions.length > 0 && (
+            <div className="clarification-box assumptions-box">
+              <h4>📝 Assumptions I made:</h4>
+              <ul>
+                {assumptions.map((item, idx) => (
+                  <li key={`assume_${idx}`}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
 
         {/* Hardware Additions List */}
@@ -326,7 +418,7 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                     </div>
                     <button
                       className="addition-remove"
-                      onClick={() => handleRemoveAddition(addition.port)}
+                      onClick={() => handleRemoveAddition(index)}
                       title="Remove"
                     >
                       🗑️
@@ -353,6 +445,19 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                         placeholder="e.g., Opens and closes claw to grab objects"
                       />
                     </div>
+                    {addition.type === 'servo' && (
+                      <div className="addition-field-row">
+                        <label>🧭 Orientation:</label>
+                        <select
+                          value={addition.orientation || ''}
+                          onChange={(e) => updateAddition(index, 'orientation', e.target.value)}
+                        >
+                          <option value="">Select...</option>
+                          <option value="vertical">Vertical</option>
+                          <option value="horizontal">Horizontal</option>
+                        </select>
+                      </div>
+                    )}
                   </div>
 
                   {/* Physical properties — feedback, states, stall behavior */}
@@ -596,6 +701,20 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {completeness.length > 0 && (
+            <div className="clarification-box">
+              <h4>📊 Setup completeness</h4>
+              <ul>
+                {completeness.map((item, idx) => (
+                  <li key={`cmp_${idx}`}>
+                    {item.label}: {Math.round((item.score || 0) * 100)}% complete
+                    {item.missing?.length > 0 ? ` (missing: ${item.missing.join(', ')})` : ' ✅'}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

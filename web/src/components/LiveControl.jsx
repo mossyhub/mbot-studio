@@ -332,6 +332,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         {/* Voice/Text Command */}
         <div className="live-command-area">
           <h3>Tell your robot what to do right now:</h3>
+          <p className="live-subtext">Live mode is a remote control surface. Commands are sent over MQTT to the firmware already running on your robot.</p>
           <VoiceControl
             onVoiceCommand={(text) => {
               setLiveInput(text);
@@ -420,6 +421,37 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
             <h3>Custom Hardware</h3>
             <div className="custom-buttons">
               {robotConfig.additions.map((hw, i) => {
+                if (hw.actions && hw.actions.length > 0) {
+                  return (
+                    <div key={i} className="custom-control-group">
+                      <span className="custom-label">{hw.type === 'servo' ? '🦾' : '⚡'} {hw.label || `${hw.type} ${hw.port}`}</span>
+                      {hw.actions.map((action, idx) => {
+                        if (!action?.name) return null;
+
+                        const command = hw.type === 'servo'
+                          ? { type: 'servo', port: hw.port, angle: action.angle ?? 90 }
+                          : {
+                              type: 'dc_motor',
+                              port: hw.port,
+                              speed: (action.motorDirection || 'forward') === 'reverse' ? -(action.speed ?? 50) : (action.speed ?? 50),
+                              duration: action.duration ?? 0.5,
+                            };
+
+                        return (
+                          <button
+                            key={`${hw.port}_action_${idx}`}
+                            className="btn-small btn-primary"
+                            onClick={() => enqueueDirectCommand(command)}
+                            title={action.description || action.name}
+                          >
+                            {action.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                }
+
                 if (hw.type === 'dc_motor') {
                   return (
                     <div key={i} className="custom-control-group">
