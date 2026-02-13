@@ -88,6 +88,16 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     };
   }, [missionPlaying, missionEvents.length]);
 
+  const addLog = useCallback((type, message) => {
+    const time = new Date().toLocaleTimeString();
+    setLog(prev => [...prev.slice(-100), { type, message, time }]);
+  }, []);
+
+  // Auto-scroll log
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [log]);
+
   // WebSocket connection with auto-reconnect
   useEffect(() => {
     function connect() {
@@ -154,16 +164,6 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       if (missionPlayTimer.current) clearInterval(missionPlayTimer.current);
     };
   }, [addLog, recordMissionEvent]);
-
-  // Auto-scroll log
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [log]);
-
-  const addLog = useCallback((type, message) => {
-    const time = new Date().toLocaleTimeString();
-    setLog(prev => [...prev.slice(-100), { type, message, time }]);
-  }, []);
 
   const sendLiveCommand = async (voiceText) => {
     const text = voiceText || liveInput.trim();
