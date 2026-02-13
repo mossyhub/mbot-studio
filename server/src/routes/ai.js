@@ -3,11 +3,15 @@ import { generateProgram, chatWithAI, fetchAvailableModels, getModel, setModel }
 import { blocksToMicroPython } from '../services/code-generator.js';
 import { loadConfig } from './config.js';
 import { MqttService } from '../services/mqtt-service.js';
+import { SessionStore } from '../services/session-store.js';
+import { getSessionId, validateBlocks, validateMessage } from '../services/validation.js';
 
 export const aiRoutes = Router();
 
-// Store conversation history per session (simple in-memory store)
-const conversations = new Map();
+const conversations = new SessionStore({
+  maxMessagesPerSession: 20,
+  maxSessions: 200,
+});
 
 /**
  * GET /api/ai/models
@@ -49,22 +53,33 @@ aiRoutes.put('/model', (req, res) => {
  */
 aiRoutes.post('/generate', async (req, res) => {
   try {
-    const { message, sessionId = 'default', currentBlocks } = req.body;
+    const { message, currentBlocks } = req.body;
+    const sessionId = getSessionId(req.body?.sessionId, 'default');
 
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
+    const msgValidation = validateMessage(message);
+    if (!msgValidation.ok) {
+      return res.status(400).json({ error: msgValidation.error });
+    }
+
+    let validatedCurrentBlocks = null;
+    if (currentBlocks !== undefined) {
+      const blocksValidation = validateBlocks(currentBlocks, 'currentBlocks');
+      if (!blocksValidation.ok) {
+        return res.status(400).json({ error: blocksValidation.error });
+      }
+      validatedCurrentBlocks = blocksValidation.value;
     }
 
     const robotConfig = loadConfig();
-    const history = conversations.get(sessionId) || [];
+    const history = conversations.get(sessionId);
 
     const hardwareStates = MqttService.getInstance().getHardwareStates();
-    const result = await generateProgram(message, robotConfig, history, currentBlocks, hardwareStates);
+    const result = await generateProgram(msgValidation.value, robotConfig, history, validatedCurrentBlocks, hardwareStates);
 
-    // Store conversation
-    history.push({ role: 'user', content: message });
-    history.push({ role: 'assistant', content: JSON.stringify(result) });
-    conversations.set(sessionId, history.slice(-20)); // Keep last 20 messages
+    conversations.append(sessionId, [
+      { role: 'user', content: msgValidation.value },
+      { role: 'assistant', content: JSON.stringify(result) },
+    ]);
 
     // If we got a program, update assumed states for any actions that have targetState
     if (result.program) {
@@ -103,22 +118,24 @@ aiRoutes.post('/generate', async (req, res) => {
  */
 aiRoutes.post('/chat', async (req, res) => {
   try {
-    const { message, sessionId = 'default' } = req.body;
+    const { message } = req.body;
+    const sessionId = getSessionId(req.body?.sessionId, 'default');
 
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
+    const msgValidation = validateMessage(message);
+    if (!msgValidation.ok) {
+      return res.status(400).json({ error: msgValidation.error });
     }
 
     const robotConfig = loadConfig();
-    const history = conversations.get(sessionId) || [];
+    const history = conversations.get(sessionId);
 
     const hardwareStates = MqttService.getInstance().getHardwareStates();
-    const result = await chatWithAI(message, robotConfig, history, hardwareStates);
+    const result = await chatWithAI(msgValidation.value, robotConfig, history, hardwareStates);
 
-    // Store conversation
-    history.push({ role: 'user', content: message });
-    history.push({ role: 'assistant', content: JSON.stringify(result) });
-    conversations.set(sessionId, history.slice(-20));
+    conversations.append(sessionId, [
+      { role: 'user', content: msgValidation.value },
+      { role: 'assistant', content: JSON.stringify(result) },
+    ]);
 
     // If AI decided to generate a program, include Python code too
     if (result.program) {
@@ -139,8 +156,12 @@ aiRoutes.post('/chat', async (req, res) => {
 aiRoutes.post('/blocks-to-code', (req, res) => {
   try {
     const { blocks } = req.body;
+    const blocksValidation = validateBlocks(blocks, 'blocks');
+    if (!blocksValidation.ok) {
+      return res.status(400).json({ error: blocksValidation.error });
+    }
     const robotConfig = loadConfig();
-    const code = blocksToMicroPython(blocks, robotConfig);
+    const code = blocksToMicroPython(blocksValidation.value, robotConfig);
     res.json({ code });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -152,7 +173,7 @@ aiRoutes.post('/blocks-to-code', (req, res) => {
  * Clear conversation history
  */
 aiRoutes.post('/clear', (req, res) => {
-  const { sessionId = 'default' } = req.body;
-  conversations.delete(sessionId);
+  const sessionId = getSessionId(req.body?.sessionId, 'default');
+  conversations.clear(sessionId);
   res.json({ success: true });
 });

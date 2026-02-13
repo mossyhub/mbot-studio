@@ -3,6 +3,7 @@ import { MqttService } from '../services/mqtt-service.js';
 import { TelemetryService } from '../services/telemetry-service.js';
 import { blocksToMicroPython, blockToMqttCommand } from '../services/code-generator.js';
 import { loadConfig } from './config.js';
+import { validateBlocks, validateCommand } from '../services/validation.js';
 
 export const robotRoutes = Router();
 
@@ -14,6 +15,11 @@ robotRoutes.post('/command', (req, res) => {
   const { command } = req.body;
   const mqtt = MqttService.getInstance();
 
+  const commandValidation = validateCommand(command);
+  if (!commandValidation.ok) {
+    return res.status(400).json({ error: commandValidation.error });
+  }
+
   if (!mqtt.isConnected()) {
     return res.status(503).json({
       error: 'Robot not connected',
@@ -21,7 +27,7 @@ robotRoutes.post('/command', (req, res) => {
     });
   }
 
-  const mqttCmd = blockToMqttCommand(command);
+  const mqttCmd = blockToMqttCommand(commandValidation.value);
   const sent = mqtt.sendCommand(mqttCmd);
 
   res.json({ sent, command: mqttCmd });
@@ -35,6 +41,11 @@ robotRoutes.post('/program', (req, res) => {
   const { program } = req.body;
   const mqtt = MqttService.getInstance();
 
+  const programValidation = validateBlocks(program, 'program');
+  if (!programValidation.ok) {
+    return res.status(400).json({ error: programValidation.error });
+  }
+
   if (!mqtt.isConnected()) {
     return res.status(503).json({
       error: 'Robot not connected',
@@ -42,8 +53,8 @@ robotRoutes.post('/program', (req, res) => {
     });
   }
 
-  const sent = mqtt.sendProgram(program);
-  res.json({ sent, blockCount: program.length });
+  const sent = mqtt.sendProgram(programValidation.value);
+  res.json({ sent, blockCount: programValidation.value.length });
 });
 
 /**
@@ -52,8 +63,12 @@ robotRoutes.post('/program', (req, res) => {
  */
 robotRoutes.post('/upload', (req, res) => {
   const { program } = req.body;
+  const programValidation = validateBlocks(program, 'program');
+  if (!programValidation.ok) {
+    return res.status(400).json({ error: programValidation.error });
+  }
   const robotConfig = loadConfig();
-  const code = blocksToMicroPython(program, robotConfig);
+  const code = blocksToMicroPython(programValidation.value, robotConfig);
   const mqtt = MqttService.getInstance();
 
   if (!mqtt.isConnected()) {

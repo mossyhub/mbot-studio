@@ -167,22 +167,32 @@ const CATEGORIES = [
   { key: 'advanced', label: '🔴 Advanced' },
 ];
 
-const CHALLENGE_STORAGE_KEY = 'mbot-studio-challenges';
+const CHALLENGE_STORAGE_KEY_PREFIX = 'mbot-studio-challenges';
 
-function loadChallengeState() {
-  try { return JSON.parse(localStorage.getItem(CHALLENGE_STORAGE_KEY) || '{}'); }
+function getChallengeStorageKey(profileId) {
+  return `${CHALLENGE_STORAGE_KEY_PREFIX}:${profileId || 'default'}`;
+}
+
+function loadChallengeState(profileId) {
+  try { return JSON.parse(localStorage.getItem(getChallengeStorageKey(profileId)) || '{}'); }
   catch { return {}; }
 }
 
-function saveChallengeState(state) {
-  localStorage.setItem(CHALLENGE_STORAGE_KEY, JSON.stringify(state));
+function saveChallengeState(profileId, state) {
+  localStorage.setItem(getChallengeStorageKey(profileId), JSON.stringify(state));
 }
 
-export default function Challenges({ onLoadProgram, onCelebration }) {
+export default function Challenges({ currentProfileId, onLoadProgram, onCelebration }) {
   const [category, setCategory] = useState('all');
-  const [completed, setCompleted] = useState(loadChallengeState);
+  const [completed, setCompleted] = useState(() => loadChallengeState(currentProfileId));
   const [activeChallenge, setActiveChallenge] = useState(null);
   const [showHint, setShowHint] = useState(false);
+
+  useEffect(() => {
+    setCompleted(loadChallengeState(currentProfileId));
+    setActiveChallenge(null);
+    setShowHint(false);
+  }, [currentProfileId]);
 
   const filteredChallenges = category === 'all'
     ? CHALLENGES
@@ -192,11 +202,11 @@ export default function Challenges({ onLoadProgram, onCelebration }) {
   const totalCompleted = Object.keys(completed).length;
 
   function handleComplete(challenge) {
-    const state = loadChallengeState();
+    const state = loadChallengeState(currentProfileId);
     if (state[challenge.id]) return; // Already completed
 
     state[challenge.id] = { stars: challenge.stars, completedAt: Date.now() };
-    saveChallengeState(state);
+    saveChallengeState(currentProfileId, state);
     setCompleted({ ...state });
 
     // Play sounds

@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { parseRobotConfig } from '../services/ai-service.js';
 import { calibrationChat } from '../services/calibration-service.js';
 import { MqttService } from '../services/mqtt-service.js';
+import { SessionStore } from '../services/session-store.js';
+import { getSessionId, validateMessage } from '../services/validation.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -113,8 +115,10 @@ configRoutes.delete('/addition/:port', (req, res) => {
 
 // ─── Calibration / Teaching Endpoints ───────────────────────────
 
-// In-memory conversation history for calibration sessions
-const calibrationConversations = new Map();
+const calibrationConversations = new SessionStore({
+  maxMessagesPerSession: 30,
+  maxSessions: 100,
+});
 
 /**
  * POST /api/config/calibrate
@@ -123,21 +127,23 @@ const calibrationConversations = new Map();
  */
 configRoutes.post('/calibrate', async (req, res) => {
   try {
-    const { message, sessionId = 'calibration' } = req.body;
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
+    const { message } = req.body;
+    const sessionId = getSessionId(req.body?.sessionId, 'calibration');
+    const msgValidation = validateMessage(message);
+    if (!msgValidation.ok) {
+      return res.status(400).json({ error: msgValidation.error });
     }
 
     const config = loadConfig();
-    const history = calibrationConversations.get(sessionId) || [];
+    const history = calibrationConversations.get(sessionId);
     const mqtt = MqttService.getInstance();
 
-    const result = await calibrationChat(message, config, history);
+    const result = await calibrationChat(msgValidation.value, config, history);
 
-    // Store conversation history
-    history.push({ role: 'user', content: message });
-    history.push({ role: 'assistant', content: JSON.stringify(result) });
-    calibrationConversations.set(sessionId, history.slice(-30));
+    calibrationConversations.append(sessionId, [
+      { role: 'user', content: msgValidation.value },
+      { role: 'assistant', content: JSON.stringify(result) },
+    ]);
 
     // If the AI wants to run the robot, execute the command
     if (result.robotCommand && mqtt.isConnected()) {
@@ -175,8 +181,8 @@ configRoutes.post('/calibrate', async (req, res) => {
  * Clear calibration conversation history
  */
 configRoutes.post('/calibrate/clear', (req, res) => {
-  const { sessionId = 'calibration' } = req.body;
-  calibrationConversations.delete(sessionId);
+  const sessionId = getSessionId(req.body?.sessionId, 'calibration');
+  calibrationConversations.clear(sessionId);
   res.json({ success: true });
 });
 

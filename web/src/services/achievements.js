@@ -4,7 +4,20 @@
  * Kids earn badges for milestones like first program, using sensors, etc.
  */
 
-const STORAGE_KEY = 'mbot-studio-achievements';
+const STORAGE_KEY_PREFIX = 'mbot-studio-achievements';
+let activeProfileId = 'default';
+
+function getStorageKey() {
+  return `${STORAGE_KEY_PREFIX}:${activeProfileId || 'default'}`;
+}
+
+export function setAchievementsProfile(profileId) {
+  activeProfileId = profileId || 'default';
+}
+
+export function getAchievementsProfile() {
+  return activeProfileId;
+}
 
 // ─── Badge Definitions ──────────────────────────────────────
 
@@ -54,7 +67,7 @@ export const BADGES = [
 
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(getStorageKey());
     return raw ? JSON.parse(raw) : { earned: {}, stats: {} };
   } catch {
     return { earned: {}, stats: {} };
@@ -62,7 +75,7 @@ function loadState() {
 }
 
 function saveState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(getStorageKey(), JSON.stringify(state));
 }
 
 // ─── Public API ─────────────────────────────────────────────
@@ -277,5 +290,5 @@ export function toggleBadge(badgeId) {
 
 /** Reset all achievements (for testing) */
 export function resetAchievements() {
-  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(getStorageKey());
 }

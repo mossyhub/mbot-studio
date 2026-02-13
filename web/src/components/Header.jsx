@@ -5,14 +5,18 @@ export default function Header({
   activeTab, onTabChange, robotConnected, robotStatus,
   models, currentModel, onModelChange, modelsLoading,
   projectName, onProjectSave, onProjectLoad, onProjectNew, savedProjects,
+  profiles, currentProfileId, onProfileSwitch, onProfileCreate,
   achievementCount, achievementTotal, soundMuted, onSoundToggle,
 }) {
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [showProjectMenu, setShowProjectMenu] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [newProfileName, setNewProfileName] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(projectName || '');
   const pickerRef = useRef(null);
   const projectRef = useRef(null);
+  const profileRef = useRef(null);
   const nameInputRef = useRef(null);
 
   // Sync external name changes
@@ -28,15 +32,26 @@ export default function Header({
     const handleClick = (e) => {
       if (pickerRef.current && !pickerRef.current.contains(e.target)) setShowModelPicker(false);
       if (projectRef.current && !projectRef.current.contains(e.target)) setShowProjectMenu(false);
+      if (profileRef.current && !profileRef.current.contains(e.target)) setShowProfileMenu(false);
     };
-    if (showModelPicker || showProjectMenu) document.addEventListener('mousedown', handleClick);
+    if (showModelPicker || showProjectMenu || showProfileMenu) document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [showModelPicker, showProjectMenu]);
+  }, [showModelPicker, showProjectMenu, showProfileMenu]);
 
   const handleNameSubmit = () => {
     setEditingName(false);
     if (nameInput.trim() && nameInput.trim() !== projectName) {
       onProjectSave(nameInput.trim());
+    }
+  };
+
+  const activeProfile = profiles?.find(p => p.id === currentProfileId);
+
+  const handleCreateProfile = () => {
+    const ok = onProfileCreate?.(newProfileName);
+    if (ok) {
+      setNewProfileName('');
+      setShowProfileMenu(false);
     }
   };
 
@@ -97,6 +112,40 @@ export default function Header({
             ) : (
               <div className="project-dropdown-empty">No saved projects yet. Click 💾 to save!</div>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Child Profile Switcher */}
+      <div className="profile-controls" ref={profileRef}>
+        <button className="profile-btn" onClick={() => setShowProfileMenu(!showProfileMenu)} title="Switch child profile">
+          👧 {activeProfile?.name || 'Kid 1'}
+        </button>
+
+        {showProfileMenu && (
+          <div className="profile-dropdown">
+            <div className="profile-dropdown-header">Child Profiles</div>
+            {(profiles || []).map((profile) => (
+              <button
+                key={profile.id}
+                className={`profile-option ${profile.id === currentProfileId ? 'profile-option-active' : ''}`}
+                onClick={() => { onProfileSwitch?.(profile.id); setShowProfileMenu(false); }}
+              >
+                {profile.name}
+              </button>
+            ))}
+
+            <div className="profile-create-row">
+              <input
+                className="profile-create-input"
+                value={newProfileName}
+                onChange={(e) => setNewProfileName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCreateProfile(); }}
+                placeholder="New child name"
+                maxLength={24}
+              />
+              <button className="profile-create-btn" onClick={handleCreateProfile} title="Add child profile">➕</button>
+            </div>
           </div>
         )}
       </div>

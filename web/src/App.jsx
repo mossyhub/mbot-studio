@@ -11,7 +11,7 @@ import Achievements from './components/Achievements.jsx';
 import Challenges from './components/Challenges.jsx';
 import TemplateGallery from './components/TemplateGallery.jsx';
 import { playProgramSent, playSuccess, playError, playStop, playConnect, playDisconnect, playClick, playAchievement, playCelebration, isMuted, setMuted } from './services/sound-service';
-import { checkProgramAchievements, tryEarnBadge, incrementStat, getProgress } from './services/achievements';
+import { checkProgramAchievements, tryEarnBadge, incrementStat, getProgress, setAchievementsProfile } from './services/achievements';
 import './App.css';
 
 const TABS = {
@@ -22,31 +22,61 @@ const TABS = {
   CONFIG: 'config',
 };
 
-const STORAGE_KEY = 'mbot-studio-projects';
-const CURRENT_PROJECT_KEY = 'mbot-studio-current-project';
+const PROFILES_KEY = 'mbot-studio-profiles';
+const CURRENT_PROFILE_KEY = 'mbot-studio-current-profile';
 
 const DEFAULT_WELCOME = {
   role: 'assistant',
   content: "Hi there! 👋 I'm your robot helper! Tell me what you want your mBot2 to do, and I'll help you program it!\n\nTry saying something like:\n• \"Go forward for 3 seconds\"\n• \"Explore the room and avoid obstacles\"\n• \"Do a dance!\"",
 };
 
-function loadProjects() {
+function getProjectStorageKey(profileId) {
+  return `mbot-studio-projects:${profileId || 'default'}`;
+}
+
+function getCurrentProjectStorageKey(profileId) {
+  return `mbot-studio-current-project:${profileId || 'default'}`;
+}
+
+function loadProfiles() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    const profiles = JSON.parse(localStorage.getItem(PROFILES_KEY) || '[]');
+    if (Array.isArray(profiles) && profiles.length > 0) return profiles;
+  } catch { }
+  return [{ id: 'profile_default', name: 'Kid 1', createdAt: new Date().toISOString() }];
+}
+
+function saveProfilesToStorage(profiles) {
+  localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+}
+
+function loadCurrentProfileId() {
+  return localStorage.getItem(CURRENT_PROFILE_KEY) || null;
+}
+
+function saveCurrentProfileId(id) {
+  if (id) localStorage.setItem(CURRENT_PROFILE_KEY, id);
+  else localStorage.removeItem(CURRENT_PROFILE_KEY);
+}
+
+function loadProjects(profileId) {
+  try {
+    return JSON.parse(localStorage.getItem(getProjectStorageKey(profileId)) || '[]');
   } catch { return []; }
 }
 
-function saveProjectsToStorage(projects) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+function saveProjectsToStorage(profileId, projects) {
+  localStorage.setItem(getProjectStorageKey(profileId), JSON.stringify(projects));
 }
 
-function loadCurrentProjectId() {
-  return localStorage.getItem(CURRENT_PROJECT_KEY) || null;
+function loadCurrentProjectId(profileId) {
+  return localStorage.getItem(getCurrentProjectStorageKey(profileId)) || null;
 }
 
-function saveCurrentProjectId(id) {
-  if (id) localStorage.setItem(CURRENT_PROJECT_KEY, id);
-  else localStorage.removeItem(CURRENT_PROJECT_KEY);
+function saveCurrentProjectId(profileId, id) {
+  const key = getCurrentProjectStorageKey(profileId);
+  if (id) localStorage.setItem(key, id);
+  else localStorage.removeItem(key);
 }
 
 export default function App() {
@@ -63,14 +93,51 @@ export default function App() {
   const [projectName, setProjectName] = useState('Untitled Project');
   const [projectId, setProjectId] = useState(null);
   const [savedProjects, setSavedProjects] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+  const [currentProfileId, setCurrentProfileId] = useState(null);
   const [messages, setMessages] = useState([DEFAULT_WELCOME]);
+  const [blockHistory, setBlockHistory] = useState([[]]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const [pendingSuggestion, setPendingSuggestion] = useState(null);
+  const [applyMode, setApplyMode] = useState('replace');
   const [celebrationQueue, setCelebrationQueue] = useState([]);
   const [soundMuted, setSoundMuted] = useState(isMuted());
   const prevRobotOnline = useRef(false);
 
-  // Load saved projects list on startup + restore last project
+  const commitBlocks = useCallback((newBlocks) => {
+    setBlocks(newBlocks);
+    setBlockHistory(prev => {
+      const base = prev.slice(0, historyIndex + 1);
+      return [...base, newBlocks];
+    });
+    setHistoryIndex(prev => prev + 1);
+  }, [historyIndex]);
+
+  const resetBlockHistory = useCallback((initialBlocks) => {
+    setBlockHistory([initialBlocks]);
+    setHistoryIndex(0);
+  }, []);
+
+  // Load profiles on startup
   useEffect(() => {
-    const projects = loadProjects();
+    const loadedProfiles = loadProfiles();
+    setProfiles(loadedProfiles);
+
+    const savedProfileId = loadCurrentProfileId();
+    const validProfile = loadedProfiles.find(p => p.id === savedProfileId) || loadedProfiles[0];
+    if (validProfile) {
+      setCurrentProfileId(validProfile.id);
+      saveCurrentProfileId(validProfile.id);
+    }
+  }, []);
+
+  // Load projects for active profile
+  useEffect(() => {
+    if (!currentProfileId) return;
+
+    setAchievementsProfile(currentProfileId);
+
+    const projects = loadProjects(currentProfileId);
     setSavedProjects(projects.map(p => ({
       id: p.id,
       name: p.name,
@@ -78,18 +145,29 @@ export default function App() {
       date: new Date(p.savedAt).toLocaleDateString(),
     })));
 
-    const lastId = loadCurrentProjectId();
+    const lastId = loadCurrentProjectId(currentProfileId);
     if (lastId) {
       const proj = projects.find(p => p.id === lastId);
       if (proj) {
         setProjectId(proj.id);
         setProjectName(proj.name);
         setBlocks(proj.blocks || []);
+        resetBlockHistory(proj.blocks || []);
         setPythonCode(proj.pythonCode || '');
         setMessages(proj.messages && proj.messages.length > 0 ? proj.messages : [DEFAULT_WELCOME]);
+        return;
       }
     }
-  }, []);
+
+    setProjectId(null);
+    setProjectName('Untitled Project');
+    setBlocks([]);
+    resetBlockHistory([]);
+    setPythonCode('');
+    setMessages([DEFAULT_WELCOME]);
+    setPendingSuggestion(null);
+    saveCurrentProjectId(currentProfileId, null);
+  }, [currentProfileId, resetBlockHistory]);
 
   // Load robot config and available AI models on startup
   useEffect(() => {
@@ -138,7 +216,10 @@ export default function App() {
 
   const handleAIResponse = useCallback((response) => {
     if (response.program) {
-      setBlocks(response.program);
+      setPendingSuggestion({
+        program: response.program,
+        explanation: response.explanation || '',
+      });
       if (response.pythonCode) {
         setPythonCode(response.pythonCode);
       }
@@ -149,7 +230,8 @@ export default function App() {
   }, []);
 
   const handleBlocksChange = useCallback((newBlocks) => {
-    setBlocks(newBlocks);
+    commitBlocks(newBlocks);
+    setPendingSuggestion(null);
     // Regenerate Python code when blocks change
     fetch('/api/ai/blocks-to-code', {
       method: 'POST',
@@ -159,7 +241,62 @@ export default function App() {
       .then(r => r.json())
       .then(data => setPythonCode(data.code))
       .catch(console.error);
+  }, [commitBlocks]);
+
+  const handleApplySuggestion = useCallback(() => {
+    if (!pendingSuggestion?.program) return;
+    const merged = applyMode === 'append'
+      ? [...blocks, ...pendingSuggestion.program]
+      : pendingSuggestion.program;
+    commitBlocks(merged);
+    setPendingSuggestion(null);
+    fetch('/api/ai/blocks-to-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blocks: merged }),
+    })
+      .then(r => r.json())
+      .then(data => setPythonCode(data.code))
+      .catch(console.error);
+  }, [pendingSuggestion, applyMode, blocks, commitBlocks]);
+
+  const handleDiscardSuggestion = useCallback(() => {
+    setPendingSuggestion(null);
   }, []);
+
+  const handleUndo = useCallback(() => {
+    if (historyIndex <= 0) return;
+    const nextIndex = historyIndex - 1;
+    const prevBlocks = blockHistory[nextIndex] || [];
+    setHistoryIndex(nextIndex);
+    setBlocks(prevBlocks);
+    setPendingSuggestion(null);
+    fetch('/api/ai/blocks-to-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blocks: prevBlocks }),
+    })
+      .then(r => r.json())
+      .then(data => setPythonCode(data.code))
+      .catch(console.error);
+  }, [historyIndex, blockHistory]);
+
+  const handleRedo = useCallback(() => {
+    if (historyIndex >= blockHistory.length - 1) return;
+    const nextIndex = historyIndex + 1;
+    const nextBlocks = blockHistory[nextIndex] || [];
+    setHistoryIndex(nextIndex);
+    setBlocks(nextBlocks);
+    setPendingSuggestion(null);
+    fetch('/api/ai/blocks-to-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blocks: nextBlocks }),
+    })
+      .then(r => r.json())
+      .then(data => setPythonCode(data.code))
+      .catch(console.error);
+  }, [historyIndex, blockHistory]);
 
   const handleRunProgram = useCallback(async () => {
     if (blocks.length === 0) return;
@@ -228,6 +365,7 @@ export default function App() {
 
   // === Project Management ===
   const handleProjectSave = useCallback((newName) => {
+    if (!currentProfileId) return;
     playClick();
     const name = newName || projectName || 'Untitled Project';
     const id = projectId || `proj_${Date.now()}`;
@@ -240,15 +378,15 @@ export default function App() {
       savedAt: new Date().toISOString(),
     };
 
-    const projects = loadProjects();
+    const projects = loadProjects(currentProfileId);
     const existingIdx = projects.findIndex(p => p.id === id);
     if (existingIdx >= 0) {
       projects[existingIdx] = project;
     } else {
       projects.unshift(project);
     }
-    saveProjectsToStorage(projects);
-    saveCurrentProjectId(id);
+    saveProjectsToStorage(currentProfileId, projects);
+    saveCurrentProjectId(currentProfileId, id);
 
     setProjectId(id);
     setProjectName(name);
@@ -262,29 +400,58 @@ export default function App() {
     // Achievement for first save
     const b = tryEarnBadge('first_save');
     if (b) setCelebrationQueue(prev => [...prev, { badge: b, type: 'confetti' }]);
-  }, [projectId, projectName, blocks, pythonCode, messages]);
+  }, [currentProfileId, projectId, projectName, blocks, pythonCode, messages]);
 
   const handleProjectLoad = useCallback((id) => {
-    const projects = loadProjects();
+    if (!currentProfileId) return;
+    const projects = loadProjects(currentProfileId);
     const proj = projects.find(p => p.id === id);
     if (!proj) return;
 
     setProjectId(proj.id);
     setProjectName(proj.name);
     setBlocks(proj.blocks || []);
+    resetBlockHistory(proj.blocks || []);
     setPythonCode(proj.pythonCode || '');
     setMessages(proj.messages && proj.messages.length > 0 ? proj.messages : [DEFAULT_WELCOME]);
-    saveCurrentProjectId(proj.id);
-  }, []);
+    setPendingSuggestion(null);
+    saveCurrentProjectId(currentProfileId, proj.id);
+  }, [currentProfileId, resetBlockHistory]);
 
   const handleProjectNew = useCallback(() => {
+    if (!currentProfileId) return;
     setProjectId(null);
     setProjectName('Untitled Project');
     setBlocks([]);
+    resetBlockHistory([]);
     setPythonCode('');
     setMessages([DEFAULT_WELCOME]);
-    saveCurrentProjectId(null);
+    setPendingSuggestion(null);
+    saveCurrentProjectId(currentProfileId, null);
+  }, [currentProfileId, resetBlockHistory]);
+
+  const handleProfileSwitch = useCallback((profileId) => {
+    setCurrentProfileId(profileId);
+    saveCurrentProfileId(profileId);
   }, []);
+
+  const handleProfileCreate = useCallback((profileName) => {
+    const cleaned = (profileName || '').trim();
+    if (!cleaned) return false;
+    if (profiles.some(p => p.name.toLowerCase() === cleaned.toLowerCase())) return false;
+
+    const newProfile = {
+      id: `profile_${Date.now()}`,
+      name: cleaned,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [...profiles, newProfile];
+    setProfiles(updated);
+    saveProfilesToStorage(updated);
+    setCurrentProfileId(newProfile.id);
+    saveCurrentProfileId(newProfile.id);
+    return true;
+  }, [profiles]);
 
   const handleCelebrationDone = useCallback(() => {
     setCelebrationQueue(prev => prev.slice(1));
@@ -310,7 +477,8 @@ export default function App() {
   }, []);
 
   const handleTemplateLoad = useCallback((templateBlocks, templateName) => {
-    setBlocks(templateBlocks);
+    commitBlocks(templateBlocks);
+    setPendingSuggestion(null);
     setProjectName(templateName || 'Template Program');
     // Regenerate code
     fetch('/api/ai/blocks-to-code', {
@@ -323,7 +491,7 @@ export default function App() {
       .catch(console.error);
     setShowTemplates(false);
     playClick();
-  }, []);
+  }, [commitBlocks]);
 
   const handleSoundToggle = useCallback(() => {
     const newMuted = !soundMuted;
@@ -349,6 +517,10 @@ export default function App() {
         onProjectLoad={handleProjectLoad}
         onProjectNew={handleProjectNew}
         savedProjects={savedProjects}
+        profiles={profiles}
+        currentProfileId={currentProfileId}
+        onProfileSwitch={handleProfileSwitch}
+        onProfileCreate={handleProfileCreate}
         achievementCount={achievementProgress.earned}
         achievementTotal={achievementProgress.total}
         soundMuted={soundMuted}
@@ -371,6 +543,22 @@ export default function App() {
               <div className="panel-header">
                 <h2>🧩 Block Program</h2>
                 <div className="panel-actions">
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={handleUndo}
+                    disabled={historyIndex <= 0}
+                    title="Undo"
+                  >
+                    ↶ Undo
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={handleRedo}
+                    disabled={historyIndex >= blockHistory.length - 1}
+                    title="Redo"
+                  >
+                    ↷ Redo
+                  </button>
                   <button
                     className="btn-secondary btn-small"
                     onClick={() => setShowTemplates(!showTemplates)}
@@ -401,6 +589,22 @@ export default function App() {
                 </div>
               </div>
 
+              {pendingSuggestion && (
+                <div className="suggestion-bar">
+                  <span className="suggestion-title">✨ AI draft ready ({pendingSuggestion.program.length} blocks)</span>
+                  <select
+                    value={applyMode}
+                    onChange={(e) => setApplyMode(e.target.value)}
+                    className="suggestion-mode"
+                  >
+                    <option value="replace">Replace current</option>
+                    <option value="append">Append to current</option>
+                  </select>
+                  <button className="btn-small btn-primary" onClick={handleApplySuggestion}>Apply</button>
+                  <button className="btn-small btn-secondary" onClick={handleDiscardSuggestion}>Dismiss</button>
+                </div>
+              )}
+
               {showTemplates && (
                 <div className="templates-section">
                   <TemplateGallery onLoadTemplate={handleTemplateLoad} />
@@ -424,6 +628,7 @@ export default function App() {
           <LiveControl
             robotConfig={robotConfig}
             robotConnected={robotStatus.connected}
+            currentProfileId={currentProfileId}
             onStop={handleStop}
             onAchievement={handleAchievement}
           />
@@ -432,6 +637,7 @@ export default function App() {
         {activeTab === TABS.CHALLENGES && (
           <div className="panel" style={{ height: '100%', overflow: 'hidden' }}>
             <Challenges
+              currentProfileId={currentProfileId}
               onLoadProgram={handleChallengeLoadProgram}
               onCelebration={handleChallengeCelebration}
             />
@@ -440,7 +646,7 @@ export default function App() {
 
         {activeTab === TABS.ACHIEVEMENTS && (
           <div className="panel" style={{ height: '100%', overflow: 'hidden' }}>
-            <Achievements />
+            <Achievements currentProfileId={currentProfileId} />
           </div>
         )}
 

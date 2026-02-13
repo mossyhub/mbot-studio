@@ -37,6 +37,19 @@
   color: #92400e;
 }
 
+.code-info-sub {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #92400e;
+}
+
+.code-info-status {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #7c2d12;
+}
+
 .code-block {
   flex: 1;
   overflow: auto;

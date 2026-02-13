@@ -215,3 +215,94 @@
 .log-ai { color: var(--color-secondary); }
 .log-robot { color: var(--color-success); }
 .log-error { color: var(--color-danger); background: #fef2f2; }
+
+/* === Mission Replay === */
+.mission-replay {
+  border-top: 1px solid var(--color-border);
+  padding: 10px;
+  background: var(--color-surface);
+}
+
+.mission-replay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.mission-replay-header h3 {
+  font-size: 13px;
+}
+
+.mission-count {
+  font-size: 11px;
+  color: var(--color-text-light);
+  font-weight: 600;
+}
+
+.mission-controls-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.mission-name-input,
+.mission-select {
+  flex: 1;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.mission-position {
+  font-size: 12px;
+  color: var(--color-text-light);
+  min-width: 44px;
+  text-align: right;
+}
+
+.mission-slider {
+  width: 100%;
+  margin: 2px 0 8px;
+}
+
+.mission-event-preview {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.mission-event-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.mission-event-type {
+  font-weight: 700;
+  color: var(--color-primary-dark);
+}
+
+.mission-event-time {
+  color: var(--color-text-light);
+}
+
+.mission-event-preview pre {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mission-empty {
+  font-size: 12px;
+  color: var(--color-text-light);
+}

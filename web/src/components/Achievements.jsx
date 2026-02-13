@@ -12,10 +12,14 @@ const CATEGORIES = [
   { id: 'explorer',     label: '🗺️ Explorer',      filter: 'explorer' },
 ];
 
-export default function Achievements() {
+export default function Achievements({ currentProfileId }) {
   const [activeCategory, setActiveCategory] = useState('all');
   const [refreshKey, setRefreshKey] = useState(0);
   const [showConfirmReset, setShowConfirmReset] = useState(false);
+  React.useEffect(() => {
+    setRefreshKey(k => k + 1);
+    setShowConfirmReset(false);
+  }, [currentProfileId]);
   const progress = getProgress();
   const earned = getEarnedBadgeObjects();
   const earnedIds = new Set(earned.map(b => b.id));
