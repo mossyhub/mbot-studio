@@ -1,7 +1,76 @@
 {
-  "name": "My mBot2",
-  "additions": [],
-  "notes": "smoke-test-214252",
+  "name": "My mBot2 Rover",
+  "additions": [
+    {
+      "port": "S1",
+      "type": "servo",
+      "label": "Left Claw Servo",
+      "description": "Left half of the Rover claw gripper. Works together with S2.",
+      "partOf": "Rover Claw",
+      "purpose": "Moves the left side of the claw to open and close the gripper.",
+      "orientation": "horizontal",
+      "feedbackType": "position",
+      "states": [
+        "open",
+        "closed"
+      ],
+      "homeState": "open",
+      "stallBehavior": "safe",
+      "actions": [
+        {
+          "name": "open",
+          "targetState": "open",
+          "angle": 30,
+          "description": "Set left claw servo to open position."
+        },
+        {
+          "name": "close",
+          "targetState": "closed",
+          "angle": 95,
+          "description": "Set left claw servo to closed position."
+        }
+      ],
+      "settings": {
+        "defaultOpenAngle": 30,
+        "defaultClosedAngle": 95
+      }
+    },
+    {
+      "port": "S2",
+      "type": "servo",
+      "label": "Right Claw Servo",
+      "description": "Right half of the Rover claw gripper. Works together with S1.",
+      "partOf": "Rover Claw",
+      "purpose": "Moves the right side of the claw to open and close the gripper.",
+      "orientation": "horizontal",
+      "feedbackType": "position",
+      "states": [
+        "open",
+        "closed"
+      ],
+      "homeState": "open",
+      "stallBehavior": "safe",
+      "actions": [
+        {
+          "name": "open",
+          "targetState": "open",
+          "angle": 150,
+          "description": "Set right claw servo to open position."
+        },
+        {
+          "name": "close",
+          "targetState": "closed",
+          "angle": 85,
+          "description": "Set right claw servo to closed position."
+        }
+      ],
+      "settings": {
+        "defaultOpenAngle": 150,
+        "defaultClosedAngle": 85
+      }
+    }
+  ],
+  "notes": "Default profile for mBot2 Rover two-servo claw.",
   "createdAt": "2026-02-13T05:42:36.178Z",
   "updatedAt": "2026-02-13T05:42:52.751Z"
 }

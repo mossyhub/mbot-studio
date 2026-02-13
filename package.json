@@ -11,6 +11,8 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
     "dev:server": "cd server && npm run dev",
     "dev:web": "cd web && npm run dev",
+    "dev:debug": "concurrently \"npm run dev:server:debug\" \"npm run dev:web\"",
+    "dev:server:debug": "cd server && npm run dev:debug",
     "install:all": "npm install && cd server && npm install && cd ../web && npm install",
     "build": "cd web && npm run build",
     "start": "cd server && npm start",

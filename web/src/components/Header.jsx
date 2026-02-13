@@ -3,24 +3,31 @@ import './Header.css';
 
 export default function Header({
   activeTab, onTabChange, robotConnected, robotStatus,
-  models, currentModel, onModelChange, modelsLoading,
+  currentModel,
   projectName, onProjectSave, onProjectLoad, onProjectNew, savedProjects,
-  profiles, currentProfileId, onProfileSwitch, onProfileCreate,
+  profiles, currentProfileId, onProfileSwitch, onProfileCreate, onProfileRename,
   achievementCount, achievementTotal, soundMuted, onSoundToggle,
 }) {
-  const [showModelPicker, setShowModelPicker] = useState(false);
   const [showProjectMenu, setShowProjectMenu] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
+  const [renameProfileName, setRenameProfileName] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(projectName || '');
-  const pickerRef = useRef(null);
   const projectRef = useRef(null);
   const profileRef = useRef(null);
   const nameInputRef = useRef(null);
 
   // Sync external name changes
   useEffect(() => { setNameInput(projectName || ''); }, [projectName]);
+
+  // Initialize profile rename input when menu opens
+  useEffect(() => {
+    if (showProfileMenu) {
+      const activeProfile = profiles?.find(p => p.id === currentProfileId);
+      setRenameProfileName(activeProfile?.name || '');
+    }
+  }, [showProfileMenu, profiles, currentProfileId]);
 
   // Focus input when editing
   useEffect(() => {
@@ -30,13 +37,12 @@ export default function Header({
   // Close picker on outside click
   useEffect(() => {
     const handleClick = (e) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target)) setShowModelPicker(false);
       if (projectRef.current && !projectRef.current.contains(e.target)) setShowProjectMenu(false);
       if (profileRef.current && !profileRef.current.contains(e.target)) setShowProfileMenu(false);
     };
-    if (showModelPicker || showProjectMenu || showProfileMenu) document.addEventListener('mousedown', handleClick);
+    if (showProjectMenu || showProfileMenu) document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [showModelPicker, showProjectMenu, showProfileMenu]);
+  }, [showProjectMenu, showProfileMenu]);
 
   const handleNameSubmit = () => {
     setEditingName(false);
@@ -51,6 +57,13 @@ export default function Header({
     const ok = onProfileCreate?.(newProfileName);
     if (ok) {
       setNewProfileName('');
+      setShowProfileMenu(false);
+    }
+  };
+
+  const handleRenameProfile = () => {
+    const ok = onProfileRename?.(renameProfileName);
+    if (ok) {
       setShowProfileMenu(false);
     }
   };
@@ -138,6 +151,18 @@ export default function Header({
             <div className="profile-create-row">
               <input
                 className="profile-create-input"
+                value={renameProfileName}
+                onChange={(e) => setRenameProfileName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleRenameProfile(); }}
+                placeholder="Rename current profile"
+                maxLength={24}
+              />
+              <button className="profile-create-btn" onClick={handleRenameProfile} title="Rename current profile">✏️</button>
+            </div>
+
+            <div className="profile-create-row">
+              <input
+                className="profile-create-input"
                 value={newProfileName}
                 onChange={(e) => setNewProfileName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleCreateProfile(); }}
@@ -192,38 +217,10 @@ export default function Header({
           {soundMuted ? '🔇' : '🔊'}
         </button>
 
-        <div className="model-selector" ref={pickerRef}>
-          <button
-            className="model-selector-btn"
-            onClick={() => setShowModelPicker(!showModelPicker)}
-            title="Change AI model"
-          >
-            🧠 {models.find(m => m.id === currentModel)?.name || currentModel || '...'}
-            <span className="model-chevron">{showModelPicker ? '▲' : '▼'}</span>
-          </button>
-
-          {showModelPicker && (
-            <div className="model-dropdown">
-              <div className="model-dropdown-header">AI Model</div>
-              {modelsLoading ? (
-                <div className="model-dropdown-loading">Loading models...</div>
-              ) : (
-                models.map(m => (
-                  <button
-                    key={m.id}
-                    className={`model-option ${m.id === currentModel ? 'model-option-active' : ''}`}
-                    onClick={() => { onModelChange(m.id); setShowModelPicker(false); }}
-                  >
-                    <span className="model-option-name">{m.name}</span>
-                    <span className="model-option-meta">
-                      <span className="model-option-publisher">{m.publisher}</span>
-                      {m.tier && <span className={`model-tier model-tier-${m.tier}`}>{m.tier}</span>}
-                    </span>
-                  </button>
-                ))
-              )}
-            </div>
-          )}
+        <div className="model-selector" title="AI model selected automatically by server startup">
+          <div className="model-selector-btn model-selector-readonly">
+            🧠 {currentModel || 'Detecting model...'}
+          </div>
         </div>
 
         <div className="header-status">

@@ -23,10 +23,77 @@ const REQUIRED_FIRMWARE_FILES = [
 
 export const configRoutes = Router();
 
+function buildDefaultRoverAdditions() {
+  return [
+    {
+      port: 'S1',
+      type: 'servo',
+      label: 'Left Claw Servo',
+      description: 'Left half of the Rover claw gripper. Works together with S2.',
+      partOf: 'Rover Claw',
+      purpose: 'Moves the left side of the claw to open and close the gripper.',
+      orientation: 'horizontal',
+      feedbackType: 'position',
+      states: ['open', 'closed'],
+      homeState: 'open',
+      stallBehavior: 'safe',
+      actions: [
+        {
+          name: 'open',
+          targetState: 'open',
+          angle: 30,
+          description: 'Set left claw servo to open position.',
+        },
+        {
+          name: 'close',
+          targetState: 'closed',
+          angle: 95,
+          description: 'Set left claw servo to closed position.',
+        },
+      ],
+      settings: {
+        defaultOpenAngle: 30,
+        defaultClosedAngle: 95,
+      },
+    },
+    {
+      port: 'S2',
+      type: 'servo',
+      label: 'Right Claw Servo',
+      description: 'Right half of the Rover claw gripper. Works together with S1.',
+      partOf: 'Rover Claw',
+      purpose: 'Moves the right side of the claw to open and close the gripper.',
+      orientation: 'horizontal',
+      feedbackType: 'position',
+      states: ['open', 'closed'],
+      homeState: 'open',
+      stallBehavior: 'safe',
+      actions: [
+        {
+          name: 'open',
+          targetState: 'open',
+          angle: 150,
+          description: 'Set right claw servo to open position.',
+        },
+        {
+          name: 'close',
+          targetState: 'closed',
+          angle: 85,
+          description: 'Set right claw servo to closed position.',
+        },
+      ],
+      settings: {
+        defaultOpenAngle: 150,
+        defaultClosedAngle: 85,
+      },
+    },
+  ];
+}
+
 // Default robot configuration
 const DEFAULT_CONFIG = {
-  name: 'My mBot2',
-  additions: [],
+  name: 'My mBot2 Rover',
+  additions: buildDefaultRoverAdditions(),
   notes: '',
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -289,10 +356,24 @@ export function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const data = fs.readFileSync(CONFIG_PATH, 'utf-8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+
+      const hasExistingAdditions = Array.isArray(parsed?.additions) && parsed.additions.length > 0;
+      if (hasExistingAdditions) {
+        return parsed;
+      }
+
+      return {
+        ...parsed,
+        name: parsed?.name || DEFAULT_CONFIG.name,
+        additions: buildDefaultRoverAdditions(),
+      };
     }
   } catch (e) {
     console.warn('Could not load config, using defaults:', e.message);
   }
-  return { ...DEFAULT_CONFIG };
+  return {
+    ...DEFAULT_CONFIG,
+    additions: buildDefaultRoverAdditions(),
+  };
 }

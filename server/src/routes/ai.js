@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { generateProgram, chatWithAI, fetchAvailableModels, getModel, setModel } from '../services/ai-service.js';
+import { generateProgram, chatWithAI, fetchAvailableModels, getAiDiagnostics, getModel } from '../services/ai-service.js';
 import { blocksToMicroPython } from '../services/code-generator.js';
 import { loadConfig } from './config.js';
 import { MqttService } from '../services/mqtt-service.js';
@@ -35,16 +35,11 @@ aiRoutes.get('/model', (req, res) => {
 });
 
 /**
- * PUT /api/ai/model
- * Switch the active AI model
+ * GET /api/ai/diagnostics
+ * Debug helper for AI connectivity and mode
  */
-aiRoutes.put('/model', (req, res) => {
-  const { model } = req.body;
-  if (!model) {
-    return res.status(400).json({ error: 'model is required' });
-  }
-  setModel(model);
-  res.json({ success: true, model: getModel() });
+aiRoutes.get('/diagnostics', (req, res) => {
+  res.json(getAiDiagnostics());
 });
 
 /**

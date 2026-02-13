@@ -87,9 +87,7 @@ export default function App() {
   const [showTemplates, setShowTemplates] = useState(false);
   const [robotConfig, setRobotConfig] = useState(null);
   const [robotStatus, setRobotStatus] = useState({ connected: false, mqttConnected: false, robotOnline: false, robotState: 'unknown' });
-  const [aiModels, setAiModels] = useState([]);
   const [currentModel, setCurrentModel] = useState('');
-  const [modelsLoading, setModelsLoading] = useState(true);
   const [projectName, setProjectName] = useState('Untitled Project');
   const [projectId, setProjectId] = useState(null);
   const [savedProjects, setSavedProjects] = useState([]);
@@ -169,22 +167,18 @@ export default function App() {
     saveCurrentProjectId(currentProfileId, null);
   }, [currentProfileId, resetBlockHistory]);
 
-  // Load robot config and available AI models on startup
+  // Load robot config and active AI model on startup
   useEffect(() => {
     fetch('/api/config')
       .then(r => r.json())
       .then(setRobotConfig)
       .catch(console.error);
 
-    // Fetch available AI models
-    fetch('/api/ai/models')
+    // Fetch active AI model selected by server startup logic
+    fetch('/api/ai/model')
       .then(r => r.json())
-      .then(data => {
-        setAiModels(data.models || []);
-        setCurrentModel(data.current || '');
-        setModelsLoading(false);
-      })
-      .catch(() => setModelsLoading(false));
+      .then(data => setCurrentModel(data.model || ''))
+      .catch(console.error);
 
     // Check robot status periodically
     const checkStatus = () => {
@@ -347,22 +341,6 @@ export default function App() {
     }
   }, []);
 
-  const handleModelChange = useCallback(async (modelId) => {
-    try {
-      const res = await fetch('/api/ai/model', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: modelId }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setCurrentModel(data.model);
-      }
-    } catch (err) {
-      console.error('Model switch error:', err);
-    }
-  }, []);
-
   // === Project Management ===
   const handleProjectSave = useCallback((newName) => {
     if (!currentProfileId) return;
@@ -453,6 +431,25 @@ export default function App() {
     return true;
   }, [profiles]);
 
+  const handleProfileRename = useCallback((profileName) => {
+    const cleaned = (profileName || '').trim();
+    if (!cleaned || !currentProfileId) return false;
+
+    if (profiles.some(p => p.id !== currentProfileId && p.name.toLowerCase() === cleaned.toLowerCase())) {
+      return false;
+    }
+
+    const updated = profiles.map(profile => (
+      profile.id === currentProfileId
+        ? { ...profile, name: cleaned }
+        : profile
+    ));
+
+    setProfiles(updated);
+    saveProfilesToStorage(updated);
+    return true;
+  }, [profiles, currentProfileId]);
+
   const handleCelebrationDone = useCallback(() => {
     setCelebrationQueue(prev => prev.slice(1));
   }, []);
@@ -508,10 +505,7 @@ export default function App() {
         onTabChange={(tab) => { playClick(); setActiveTab(tab); }}
         robotConnected={robotStatus.connected}
         robotStatus={robotStatus}
-        models={aiModels}
         currentModel={currentModel}
-        onModelChange={handleModelChange}
-        modelsLoading={modelsLoading}
         projectName={projectName}
         onProjectSave={handleProjectSave}
         onProjectLoad={handleProjectLoad}
@@ -521,6 +515,7 @@ export default function App() {
         currentProfileId={currentProfileId}
         onProfileSwitch={handleProfileSwitch}
         onProfileCreate={handleProfileCreate}
+        onProfileRename={handleProfileRename}
         achievementCount={achievementProgress.earned}
         achievementTotal={achievementProgress.total}
         soundMuted={soundMuted}

@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 import { formatCalibrationForPrompt } from './calibration-service.js';
 
@@ -8,8 +11,310 @@ import { formatCalibrationForPrompt } from './calibration-service.js';
 
 const INFERENCE_URL = 'https://models.github.ai/inference';
 const CATALOG_URL = 'https://models.github.ai/catalog/models';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../..');
+const MODEL_COMPAT_PATH = path.join(DATA_DIR, 'ai-model-compat.json');
 
 let client = null;
+let lastAiError = null;
+let compatibilityLoaded = false;
+let modelCatalogById = new Map();
+let modelCompatibility = {
+  version: 1,
+  updatedAt: null,
+  models: {},
+};
+
+function truthy(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+}
+
+function isLocalDebugEnabled() {
+  return truthy(process.env.AI_LOCAL_DEBUG);
+}
+
+function setLastAiError(error) {
+  const status = error?.status || error?.response?.status;
+  const code = error?.code || error?.error?.code;
+  const message = error?.message || 'Unknown AI error';
+  lastAiError = {
+    timestamp: new Date().toISOString(),
+    status: status || null,
+    code: code || null,
+    message,
+  };
+}
+
+function getFriendlyAiFailure(error, fallbackText) {
+  const msg = String(error?.message || '');
+  const status = error?.status || error?.response?.status;
+
+  if (!process.env.GITHUB_TOKEN) {
+    return `${fallbackText} (Missing GITHUB_TOKEN. For local testing, set AI_LOCAL_DEBUG=true in .env.)`;
+  }
+
+  if (status === 401 || msg.toLowerCase().includes('unauthorized')) {
+    return `${fallbackText} (GITHUB_TOKEN was rejected. Check token validity and Copilot access.)`;
+  }
+
+  if (status === 429) {
+    return `${fallbackText} (Rate limit reached. Try again in a minute or switch to AI_LOCAL_DEBUG=true.)`;
+  }
+
+  if (status >= 500) {
+    return `${fallbackText} (AI provider is temporarily unavailable: ${status}.)`;
+  }
+
+  return `${fallbackText} (${msg || 'Unknown error'})`;
+}
+
+function ensureCompatibilityLoaded() {
+  if (compatibilityLoaded) return;
+
+  try {
+    if (fs.existsSync(MODEL_COMPAT_PATH)) {
+      const raw = fs.readFileSync(MODEL_COMPAT_PATH, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && parsed.models && typeof parsed.models === 'object') {
+        modelCompatibility = {
+          version: parsed.version || 1,
+          updatedAt: parsed.updatedAt || null,
+          models: parsed.models,
+        };
+      }
+    }
+  } catch (error) {
+    console.warn('⚠️  Could not load AI model compatibility cache:', error.message);
+  }
+
+  compatibilityLoaded = true;
+}
+
+function saveCompatibilityCache() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    modelCompatibility.updatedAt = new Date().toISOString();
+    fs.writeFileSync(MODEL_COMPAT_PATH, JSON.stringify(modelCompatibility, null, 2));
+  } catch (error) {
+    console.warn('⚠️  Could not save AI model compatibility cache:', error.message);
+  }
+}
+
+function normalizeParamName(name) {
+  return String(name || '').trim();
+}
+
+function getCompatibilityForModel(modelId) {
+  ensureCompatibilityLoaded();
+  const key = String(modelId || '');
+  if (!key) return { unsupportedParams: [], errors: [] };
+
+  if (!modelCompatibility.models[key]) {
+    modelCompatibility.models[key] = {
+      unsupportedParams: [],
+      errors: [],
+      updatedAt: null,
+    };
+  }
+
+  return modelCompatibility.models[key];
+}
+
+function recordUnsupportedParam(modelId, paramName, error) {
+  const normalized = normalizeParamName(paramName);
+  if (!normalized) return;
+
+  const modelEntry = getCompatibilityForModel(modelId);
+  if (!modelEntry.unsupportedParams.includes(normalized)) {
+    modelEntry.unsupportedParams.push(normalized);
+  }
+
+  modelEntry.updatedAt = new Date().toISOString();
+  modelEntry.errors = [
+    {
+      timestamp: new Date().toISOString(),
+      message: String(error?.message || ''),
+      status: error?.status || error?.response?.status || null,
+    },
+    ...(Array.isArray(modelEntry.errors) ? modelEntry.errors : []),
+  ].slice(0, 5);
+
+  saveCompatibilityCache();
+}
+
+function getHeuristicUnsupportedParams(modelId) {
+  const heuristics = new Set();
+  const normalizedId = String(modelId || '').toLowerCase();
+  const meta = modelCatalogById.get(modelId);
+  const capabilities = Array.isArray(meta?.capabilities)
+    ? meta.capabilities.map(c => String(c || '').toLowerCase())
+    : [];
+
+  const looksReasoningFamily = /(^|\/)o\d|gpt-5/.test(normalizedId);
+  const hasReasoningCapability = capabilities.includes('reasoning');
+
+  if (looksReasoningFamily || hasReasoningCapability) {
+    heuristics.add('temperature');
+  }
+
+  return Array.from(heuristics);
+}
+
+function pruneUnsupportedParams(payload, modelId) {
+  const nextPayload = { ...payload };
+  const fromCache = getCompatibilityForModel(modelId).unsupportedParams || [];
+  const fromHeuristics = getHeuristicUnsupportedParams(modelId);
+  const toRemove = new Set([...fromCache, ...fromHeuristics].map(normalizeParamName));
+
+  for (const param of toRemove) {
+    if (param && Object.prototype.hasOwnProperty.call(nextPayload, param)) {
+      delete nextPayload[param];
+    }
+  }
+
+  return nextPayload;
+}
+
+function parseJsonFromContent(content) {
+  if (typeof content !== 'string') {
+    throw new Error('Model response was empty or non-text.');
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch {
+    const start = content.indexOf('{');
+    const end = content.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      return JSON.parse(content.slice(start, end + 1));
+    }
+    throw new Error('Model did not return valid JSON.');
+  }
+}
+
+function applyCompatibilityFallback(payload, error) {
+  const message = String(error?.message || '');
+  const nextPayload = { ...payload };
+
+  let unsupportedParam = message.match(/Unsupported parameter:\s*'([^']+)'/i)?.[1];
+  if (!unsupportedParam) {
+    unsupportedParam = message.match(/Unsupported value:\s*'([^']+)'/i)?.[1];
+  }
+
+  if (
+    !unsupportedParam
+    && message.toLowerCase().includes('temperature')
+    && message.toLowerCase().includes('only the default')
+  ) {
+    unsupportedParam = 'temperature';
+  }
+
+  if (unsupportedParam && Object.prototype.hasOwnProperty.call(nextPayload, unsupportedParam)) {
+    delete nextPayload[unsupportedParam];
+    return {
+      changed: true,
+      payload: nextPayload,
+      removedParam: unsupportedParam,
+    };
+  }
+
+  return {
+    changed: false,
+    payload,
+    removedParam: null,
+  };
+}
+
+async function createCompletionWithAdaptiveParams({ messages, temperature, maxCompletionTokens }) {
+  const modelId = getCurrentModel();
+  let payload = {
+    model: modelId,
+    messages,
+    max_completion_tokens: maxCompletionTokens,
+    response_format: { type: 'json_object' },
+  };
+
+  if (typeof temperature === 'number') {
+    payload.temperature = temperature;
+  }
+
+  payload = pruneUnsupportedParams(payload, modelId);
+
+  let attempts = 0;
+  let lastError = null;
+
+  while (attempts < 4) {
+    try {
+      return await getClient().chat.completions.create(payload);
+    } catch (error) {
+      lastError = error;
+      const fallback = applyCompatibilityFallback(payload, error);
+      if (!fallback.changed) {
+        throw error;
+      }
+
+      recordUnsupportedParam(modelId, fallback.removedParam, error);
+      payload = fallback.payload;
+      attempts += 1;
+      console.warn(`⚠️  Model ${modelId} rejected parameter "${fallback.removedParam}". Retrying without it.`);
+    }
+  }
+
+  throw lastError;
+}
+
+function makeLocalDebugProgram(userMessage, currentBlocks = null) {
+  const text = String(userMessage || '').toLowerCase();
+
+  const startsWithCurrent = Array.isArray(currentBlocks) && currentBlocks.length > 0
+    ? [...currentBlocks]
+    : [];
+
+  const program = [...startsWithCurrent];
+
+  if (text.includes('square')) {
+    program.push(
+      { type: 'repeat', times: 4, do: [
+        { type: 'move_forward', speed: 50, duration: 1.5 },
+        { type: 'turn_right', speed: 40, angle: 90 },
+      ] },
+      { type: 'stop' },
+    );
+  } else if (text.includes('dance')) {
+    program.push(
+      { type: 'repeat', times: 3, do: [
+        { type: 'turn_left', speed: 60, angle: 45 },
+        { type: 'turn_right', speed: 60, angle: 90 },
+        { type: 'turn_left', speed: 60, angle: 45 },
+        { type: 'play_tone', frequency: 880, duration: 0.2 },
+      ] },
+      { type: 'stop' },
+    );
+  } else if (text.includes('obstacle') || text.includes('avoid')) {
+    program.push(
+      { type: 'repeat_forever', do: [
+        { type: 'if_sensor_range', sensor: 'distance', min: 0, max: 18, then: [
+          { type: 'turn_right', speed: 45, angle: 90 },
+        ], else: [
+          { type: 'move_forward', speed: 40, duration: 0.4 },
+        ] },
+      ] },
+    );
+  } else {
+    program.push(
+      { type: 'move_forward', speed: 50, duration: 2 },
+      { type: 'stop' },
+    );
+  }
+
+  return {
+    success: true,
+    program,
+    explanation: 'Running in local AI debug mode. I generated a safe sample program so you can test the full UI flow without cloud AI.',
+    model: 'local/debug-rule-engine',
+    raw: JSON.stringify({ localDebug: true }),
+  };
+}
 
 function getClient() {
   if (!client) {
@@ -21,12 +326,11 @@ function getClient() {
   return client;
 }
 
-// Mutable model selection — can be changed at runtime from the UI
+// Active model chosen automatically at server startup
 // Model IDs use publisher/name format, e.g. 'openai/gpt-4o'
-let currentModel = null;
+let currentModel = process.env.AI_MODEL || 'openai/gpt-4o';
 
 function getCurrentModel() {
-  if (!currentModel) currentModel = process.env.AI_MODEL || 'openai/gpt-4o';
   return currentModel;
 }
 
@@ -34,9 +338,91 @@ export function getModel() {
   return getCurrentModel();
 }
 
-export function setModel(model) {
-  currentModel = model;
-  console.log(`🧠 AI model switched to: ${model}`);
+export function getAiDiagnostics() {
+  ensureCompatibilityLoaded();
+  const modelId = getCurrentModel();
+  const modelEntry = getCompatibilityForModel(modelId);
+
+  return {
+    localDebug: isLocalDebugEnabled(),
+    model: modelId,
+    baseURL: process.env.AI_BASE_URL || INFERENCE_URL,
+    hasGithubToken: !!process.env.GITHUB_TOKEN,
+    heuristicUnsupportedParams: getHeuristicUnsupportedParams(modelId),
+    cachedUnsupportedParams: modelEntry.unsupportedParams || [],
+    compatibilityCachePath: MODEL_COMPAT_PATH,
+    lastAiError,
+  };
+}
+
+function scoreOpenAiModel(model) {
+  const id = String(model?.id || '').toLowerCase();
+  const tier = String(model?.tier || '').toLowerCase();
+
+  let score = 0;
+
+  // Prefer newest major family first
+  if (id.includes('gpt-5-chat')) score += 1120;
+  else if (id.includes('gpt-5')) score += 1000;
+  else if (id.includes('gpt-4.1')) score += 900;
+  else if (id.includes('gpt-4o')) score += 800;
+  else if (id.includes('gpt-4')) score += 700;
+
+  // Prefer full-size models over cheaper variants
+  if (id.includes('mini')) score -= 250;
+  if (id.includes('nano')) score -= 300;
+
+  // Prefer stable over preview where possible
+  if (id.includes('preview') && !id.includes('gpt-5-chat')) score -= 100;
+
+  // Prefer higher rate-limit tier when available
+  if (tier === 'high') score += 30;
+  else if (tier === 'custom') score += 15;
+
+  return score;
+}
+
+function pickBestOpenAiModel(models = []) {
+  const openAiModels = models.filter((m) => {
+    const publisher = String(m?.publisher || '').toLowerCase();
+    const id = String(m?.id || '').toLowerCase();
+    return publisher === 'openai' || id.startsWith('openai/');
+  });
+
+  if (openAiModels.length === 0) return null;
+
+  return openAiModels
+    .slice()
+    .sort((a, b) => {
+      const diff = scoreOpenAiModel(b) - scoreOpenAiModel(a);
+      if (diff !== 0) return diff;
+      return String(a.id).localeCompare(String(b.id));
+    })[0];
+}
+
+export async function initializeModelSelection() {
+  if (isLocalDebugEnabled()) {
+    currentModel = 'local/debug-rule-engine';
+    console.log('🧪 AI local debug mode enabled (AI_LOCAL_DEBUG=true)');
+    return currentModel;
+  }
+
+  try {
+    const models = await fetchAvailableModels();
+    const selected = pickBestOpenAiModel(models);
+
+    if (selected?.id) {
+      currentModel = selected.id;
+      console.log(`🧠 AI model auto-selected: ${selected.id}`);
+      return currentModel;
+    }
+
+    console.warn(`⚠️  No OpenAI model found in catalog. Using fallback: ${currentModel}`);
+    return currentModel;
+  } catch (error) {
+    console.warn(`⚠️  AI model auto-selection failed. Using fallback: ${currentModel}. ${error.message}`);
+    return currentModel;
+  }
 }
 
 /**
@@ -48,6 +434,16 @@ let modelsCacheTime = 0;
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
 export async function fetchAvailableModels() {
+  if (isLocalDebugEnabled()) {
+    return [{
+      id: 'local/debug-rule-engine',
+      name: 'Local Debug Rule Engine',
+      publisher: 'Local',
+      summary: 'Offline deterministic fallback for local development',
+      tier: 'local',
+    }];
+  }
+
   const now = Date.now();
   if (modelsCache && (now - modelsCacheTime) < CACHE_TTL) {
     return modelsCache;
@@ -77,18 +473,25 @@ export async function fetchAvailableModels() {
         publisher: m.publisher,
         summary: m.summary || '',
         tier: m.rate_limit_tier || '',  // low, high, custom
+        capabilities: Array.isArray(m.capabilities) ? m.capabilities : [],
+        tags: Array.isArray(m.tags) ? m.tags : [],
+        limits: m.limits || null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
+
+    modelCatalogById = new Map(modelsCache.map(m => [m.id, m]));
 
     modelsCacheTime = now;
     return modelsCache;
   } catch (error) {
     console.error('Failed to fetch models:', error.message);
     // Return a minimal fallback list
-    return [
+    const fallbackModels = [
       { id: 'openai/gpt-4o', name: 'OpenAI GPT-4o', publisher: 'OpenAI', summary: '', tier: 'high' },
       { id: 'openai/gpt-4o-mini', name: 'OpenAI GPT-4o mini', publisher: 'OpenAI', summary: '', tier: 'low' },
     ];
+    modelCatalogById = new Map(fallbackModels.map(m => [m.id, m]));
+    return fallbackModels;
   }
 }
 
@@ -158,6 +561,10 @@ The robot configuration tells you what each motor/servo IS and what it DOES.
 If the config says a motor is "part of a robot arm" and its purpose is "opens and closes the claw", then when the child says "open the claw" or "grab something", you should generate the correct motor command for that port, direction, and speed.
 Use the named actions from the config when they match the child's request. For example, if the config defines an "open" action with motorDirection "forward", speed 70, and duration 0.5, generate: {"type": "dc_motor", "port": "M3", "speed": 70, "duration": 0.5}
 For "reverse" direction, negate the speed: {"type": "dc_motor", "port": "M3", "speed": -70, "duration": 0.5}
+If an assembly has MULTIPLE parts with the same partOf name (for example a two-servo claw), and the child asks for one named action like "open" or "close", apply that action to EACH part in that assembly in the same program.
+
+## Rover Default Hint
+If the config includes an assembly named "Rover Claw", treat it as a paired two-servo gripper. Commands like "open claw", "close claw", "grab", or "release" should normally generate servo commands for both claw servos.
 
 ## Stateless Actuators (IMPORTANT)
 Many custom hardware parts use DC motors which have NO position feedback — you cannot "read" whether a claw is open or closed. The configuration marks these with feedbackType: "none".
@@ -323,6 +730,10 @@ function formatRobotConfig(config, hardwareStates) {
  * Generate a block program from natural language
  */
 export async function generateProgram(userMessage, robotConfig, conversationHistory = [], currentBlocks = null, hardwareStates = null) {
+  if (isLocalDebugEnabled()) {
+    return makeLocalDebugProgram(userMessage, currentBlocks);
+  }
+
   const systemPrompt = buildSystemPrompt(robotConfig, hardwareStates);
 
   // Build the user message, including current program context if available
@@ -348,16 +759,14 @@ Return the COMPLETE updated program (existing blocks + modifications) in your re
   ];
 
   try {
-    const response = await getClient().chat.completions.create({
-      model: getCurrentModel(),
+    const response = await createCompletionWithAdaptiveParams({
       messages,
       temperature: 0.7,
-      max_tokens: 2000,
-      response_format: { type: 'json_object' },
+      maxCompletionTokens: 2000,
     });
 
     const content = response.choices[0].message.content;
-    const parsed = JSON.parse(content);
+    const parsed = parseJsonFromContent(content);
 
     return {
       success: true,
@@ -367,10 +776,11 @@ Return the COMPLETE updated program (existing blocks + modifications) in your re
     };
   } catch (error) {
     console.error('AI generation error:', error);
+    setLastAiError(error);
     return {
       success: false,
       error: error.message,
-      chat: "Oops! I had trouble thinking about that. Can you try saying it a different way? 🤔",
+      chat: getFriendlyAiFailure(error, 'Oops! I had trouble thinking about that. Can you try saying it a different way? 🤔'),
     };
   }
 }
@@ -379,6 +789,14 @@ Return the COMPLETE updated program (existing blocks + modifications) in your re
  * Chat with the AI assistant (for questions, not program generation)
  */
 export async function chatWithAI(userMessage, robotConfig, conversationHistory = [], hardwareStates = null) {
+  if (isLocalDebugEnabled()) {
+    return {
+      success: true,
+      chat: `Local debug mode is on, so I am not calling cloud AI right now. You said: "${userMessage}"`,
+      model: 'local/debug-rule-engine',
+    };
+  }
+
   const systemPrompt = buildSystemPrompt(robotConfig, hardwareStates) + `\n\nThe user is chatting, not necessarily requesting a program. 
 Be friendly, encouraging, and helpful. Explain robot concepts simply for an 8-year-old.
 If they seem to want a program, generate one using the JSON format above.
@@ -391,16 +809,14 @@ Otherwise, respond with: {"chat": "your friendly message"}`;
   ];
 
   try {
-    const response = await getClient().chat.completions.create({
-      model: getCurrentModel(),
+    const response = await createCompletionWithAdaptiveParams({
       messages,
       temperature: 0.8,
-      max_tokens: 1000,
-      response_format: { type: 'json_object' },
+      maxCompletionTokens: 1000,
     });
 
     const content = response.choices[0].message.content;
-    const parsed = JSON.parse(content);
+    const parsed = parseJsonFromContent(content);
 
     return {
       success: true,
@@ -408,9 +824,10 @@ Otherwise, respond with: {"chat": "your friendly message"}`;
     };
   } catch (error) {
     console.error('AI chat error:', error);
+    setLastAiError(error);
     return {
       success: false,
-      chat: "Hmm, I'm having trouble right now. Try again in a moment! 🤖",
+      chat: getFriendlyAiFailure(error, "Hmm, I'm having trouble right now. Try again in a moment! 🤖"),
     };
   }
 }
@@ -536,6 +953,19 @@ function enrichAndScoreAdditions(additions = []) {
  * Convert a natural language robot configuration description to structured config
  */
 export async function parseRobotConfig(description, existingAdditions = []) {
+  if (isLocalDebugEnabled()) {
+    const additions = Array.isArray(existingAdditions) ? existingAdditions : [];
+    return {
+      additions,
+      understood: 'Local debug mode is enabled. Keeping existing hardware config unchanged for offline testing.',
+      assumptions: ['Cloud AI parsing is disabled in local debug mode.'],
+      needsClarification: false,
+      questions: [],
+      completeness: [],
+      averageCompleteness: additions.length > 0 ? 1 : 0,
+    };
+  }
+
   const existing = Array.isArray(existingAdditions) ? existingAdditions : [];
   const messages = [
     {
@@ -640,15 +1070,13 @@ Types can be: dc_motor, servo, ultrasonic, color_sensor, light_sensor, custom`,
   ];
 
   try {
-    const response = await getClient().chat.completions.create({
-      model: getCurrentModel(),
+    const response = await createCompletionWithAdaptiveParams({
       messages,
       temperature: 0.3,
-      max_tokens: 500,
-      response_format: { type: 'json_object' },
+      maxCompletionTokens: 500,
     });
 
-    const parsed = JSON.parse(response.choices[0].message.content);
+    const parsed = parseJsonFromContent(response.choices[0].message.content);
     const merged = [...existing];
 
     for (const addition of (parsed.additions || [])) {
@@ -692,6 +1120,7 @@ Types can be: dc_motor, servo, ultrasonic, color_sensor, light_sensor, custom`,
     };
   } catch (error) {
     console.error('Config parse error:', error);
+    setLastAiError(error);
     return { error: error.message };
   }
 }

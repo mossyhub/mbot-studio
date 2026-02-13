@@ -63,9 +63,9 @@ Edit `.env`:
 # Required: Your GitHub personal access token (with Copilot access)
 GITHUB_TOKEN=ghp_your_token_here
 
-# AI Model (default works well)
-AI_MODEL=gpt-4o
-AI_BASE_URL=https://models.inference.ai.azure.com
+# AI model fallback (server auto-selects best available OpenAI model at startup)
+AI_MODEL=openai/gpt-5-chat
+AI_BASE_URL=https://models.github.ai/inference
 
 # MQTT broker — point to your external Mosquitto server
 MQTT_BROKER_URL=mqtt://your-mqtt-server:1883
@@ -87,6 +87,30 @@ npm run dev
 This starts both the backend (port 3001) and frontend (port 5173) concurrently.
 
 Open **http://localhost:5173** in your browser.
+
+### 3b. Live Debug Mode (no cloud AI required)
+
+If the Program tab keeps replying with "Oops! I had trouble thinking about that...", run in local debug mode:
+
+1) In `.env`, set:
+
+```env
+AI_LOCAL_DEBUG=true
+```
+
+2) Start with Node inspector enabled:
+
+```bash
+npm run dev:debug
+```
+
+3) Verify AI mode:
+
+```bash
+curl http://localhost:3001/api/ai/diagnostics
+```
+
+You should see `"localDebug": true` and model `local/debug-rule-engine`.
 
 ### 4. Upload Firmware to mBot2
 
@@ -158,8 +182,8 @@ docker run -d \
 |----------|----------|---------|-------------|
 | `GITHUB_TOKEN` | Yes | — | GitHub PAT with Copilot access |
 | `MQTT_BROKER_URL` | Yes | `mqtt://localhost:1883` | Your external Mosquitto server |
-| `AI_MODEL` | No | `gpt-4o` | AI model to use |
-| `AI_BASE_URL` | No | `https://models.inference.ai.azure.com` | GitHub Models endpoint |
+| `AI_MODEL` | No | `openai/gpt-5-chat` | Fallback model if auto-selection is unavailable |
+| `AI_BASE_URL` | No | `https://models.github.ai/inference` | GitHub Models endpoint |
 | `PORT` | No | `3001` | Server port inside container |
 | `DATA_DIR` | No | `/app/data` | Persistent config directory (mount a volume here) |
 | `MQTT_TOPIC_PREFIX` | No | `mbot-studio` | MQTT topic namespace |
@@ -168,7 +192,7 @@ docker run -d \
 
 The Docker container needs to reach:
 - **Your MQTT broker** — the mBot2 and the container must both be able to reach it
-- **GitHub Models API** (`models.inference.ai.azure.com`) — for AI features
+- **GitHub Models API** (`models.github.ai`) — for AI features
 - The mBot2 connects to the MQTT broker directly (not to this container)
 
 ```
@@ -197,7 +221,7 @@ Type what you want in plain English. The AI generates block programs:
 - Live sensor data display
 
 ### ⚙️ Robot Configuration
-- Describe custom hardware in plain English: *"I have a claw motor on port M3"*
+- Describe custom hardware in plain English: *"My Rover claw uses two servos on S1 and S2"*
 - AI parses descriptions into structured config
 - Supports DC motors (M1-M4), servos (S1-S4), and mBuild sensors (P1-P4)
 
@@ -301,6 +325,8 @@ mbot/
 - Verify your `GITHUB_TOKEN` is valid and not expired
 - Check you have an active Copilot subscription
 - Test the token: `curl -H "Authorization: Bearer YOUR_TOKEN" https://models.inference.ai.azure.com/models`
+- For offline local debugging, set `AI_LOCAL_DEBUG=true` and use `npm run dev:debug`
+- Check runtime diagnostics: `GET /api/ai/diagnostics`
 
 ### "Robot not connecting"
 - Ensure the robot and computer are on the same WiFi network

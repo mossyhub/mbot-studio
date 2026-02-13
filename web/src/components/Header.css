@@ -104,10 +104,18 @@
   text-overflow: ellipsis;
 }
 
+.model-selector-readonly {
+  cursor: default;
+}
+
 .model-selector-btn:hover {
   background: rgba(255, 255, 255, 0.25);
   transform: none;
   box-shadow: none;
+}
+
+.model-selector-readonly:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .model-chevron {

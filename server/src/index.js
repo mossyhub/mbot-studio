@@ -10,6 +10,7 @@ import { robotRoutes } from './routes/robot.js';
 import { configRoutes } from './routes/config.js';
 import { MqttService } from './services/mqtt-service.js';
 import { setupWebSocket } from './services/websocket.js';
+import { initializeModelSelection } from './services/ai-service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,15 +64,25 @@ mqttService.connect().then(() => {
 
 // Start server
 const HOST = process.env.HOST || '0.0.0.0';
-server.listen(PORT, HOST, () => {
-  console.log(`\n🤖 mBot Studio Server running on http://${HOST}:${PORT}`);
-  console.log(`🔌 WebSocket available on ws://localhost:${PORT}/ws`);
-  console.log(`\n📋 Endpoints:`);
-  console.log(`   POST /api/ai/generate    - Generate blocks from natural language`);
-  console.log(`   POST /api/ai/chat        - Chat with AI assistant`);
-  console.log(`   POST /api/robot/command   - Send command to robot`);
-  console.log(`   GET  /api/config          - Get robot configuration`);
-  console.log(`   POST /api/config          - Save robot configuration\n`);
+
+async function startServer() {
+  await initializeModelSelection();
+
+  server.listen(PORT, HOST, () => {
+    console.log(`\n🤖 mBot Studio Server running on http://${HOST}:${PORT}`);
+    console.log(`🔌 WebSocket available on ws://localhost:${PORT}/ws`);
+    console.log(`\n📋 Endpoints:`);
+    console.log(`   POST /api/ai/generate    - Generate blocks from natural language`);
+    console.log(`   POST /api/ai/chat        - Chat with AI assistant`);
+    console.log(`   POST /api/robot/command   - Send command to robot`);
+    console.log(`   GET  /api/config          - Get robot configuration`);
+    console.log(`   POST /api/config          - Save robot configuration\n`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error('❌ Failed to start server:', error);
+  process.exit(1);
 });
 
 export { mqttService };

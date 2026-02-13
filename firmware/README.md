@@ -44,8 +44,8 @@ If you've added motors or servos to the mBot2, edit the `CUSTOM_HARDWARE` dict i
 
 ```python
 CUSTOM_HARDWARE = {
-    "claw": {"port": "M3", "type": "dc_motor"},
-    "arm": {"port": "S1", "type": "servo"},
+    "claw_left": {"port": "S1", "type": "servo", "default_angle": 30},
+    "claw_right": {"port": "S2", "type": "servo", "default_angle": 150},
 }
 ```
 
