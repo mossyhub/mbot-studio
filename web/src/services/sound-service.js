@@ -16,6 +16,7 @@ function getCtx() {
 }
 
 function playTone(freq, duration = 0.15, type = 'sine', volume = 0.15) {
+  if (isMuted()) return;
   try {
     const ctx = getCtx();
     const osc = ctx.createOscillator();
