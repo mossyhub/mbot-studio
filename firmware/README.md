@@ -49,50 +49,18 @@ CUSTOM_HARDWARE = {
 }
 ```
 
-## Upload Methods
+## Upload Method (Supported)
 
-### Method A0: mBot Studio Native Flash (Recommended for CyberPi reliability)
+### mBot Studio Setup Tab (via Makeblock mLink2)
 
-This project now supports a **Native Flash** path from the Setup page that uses Python + `mpremote` on the machine running the server.
+This project uses Makeblock's local **mLink2** bridge to upload the firmware files to the CyberPi.
 
-Install once on this computer:
-
-```bash
-# Windows
-py -3 -m pip install --upgrade pip mpremote
-
-# macOS/Linux
-python3 -m pip install --upgrade pip mpremote
-```
-
-Then in the Setup tab:
-1. (Optional) Enter serial port (e.g. `COM5`) in **Native Serial Port**. Leave blank to auto-detect.
-2. Click **🛠️ Native Flash**.
-3. Wait for "Native flash complete".
-
-If browser Web Serial flashing fails, the app automatically attempts this native path.
-
-### Method A: mBlock IDE (Recommended for Beginners)
-
-1. Download [mBlock](https://mblock.makeblock.com/en/) (desktop version)
-2. Connect mBot2 via USB-C cable
-3. In mBlock, switch to **Python mode**
-4. Open each `.py` file and upload to the CyberPi
-5. Set `main.py` as the startup file
-
-### Method B: Makeblock App (Code Module)
-
-1. Open Makeblock app and connect to mBot2 via Bluetooth
-2. Create a new Python project
-3. Copy-paste each file's content into the code editor
-4. Upload to the device
-
-### Method C: Direct USB (Advanced)
-
-1. Connect CyberPi to computer via USB-C
-2. It may appear as a USB drive or serial device
-3. Copy all `.py` files to the root of the device
-4. Restart the CyberPi
+1. Download and install **mLink2** (Makeblock) and keep it running on this computer.
+2. Connect the mBot2/CyberPi via USB-C.
+3. In mBot Studio → **Setup** tab:
+    - Fill in WiFi + MQTT settings
+    - Click **Upload Firmware via mLink**
+4. Wait for the robot to reboot.
 
 > **Important**: Upload ALL files together. The firmware won't work with missing files.
 

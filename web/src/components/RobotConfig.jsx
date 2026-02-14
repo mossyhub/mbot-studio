@@ -271,14 +271,18 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
         </section>
 
         <section className="config-section">
-          <h2>🔌 One-Time Firmware Setup (USB)</h2>
+          <h2>🔌 One-Time Firmware Setup (mLink)</h2>
           <p className="section-desc">
-            Flash the robot firmware once over USB. After that, Program and Live tabs control the robot by sending MQTT commands to the existing firmware.
+            Upload the robot firmware once using Makeblock's mLink bridge. After that, Program and Live tabs control the robot by sending MQTT commands to the existing firmware.
+          </p>
+          <p className="section-desc">
+            <strong>Required:</strong> Download and install <strong>mLink2</strong> (Makeblock), then keep it running on this computer while you upload.
           </p>
           <FirmwareFlasher />
           <ol className="setup-steps">
+            <li>Install and run <strong>mLink2</strong> on this computer.</li>
             <li>Connect your mBot2/CyberPi over USB-C.</li>
-            <li>Fill in WiFi + MQTT settings, then click <strong>Flash Firmware Now</strong>.</li>
+            <li>Fill in WiFi + MQTT settings, then click <strong>Upload Firmware via mLink</strong>.</li>
             <li>Wait for reboot and confirm the app shows robot online status.</li>
           </ol>
         </section>

@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { parseRobotConfig } from '../services/ai-service.js';
 import { calibrationChat } from '../services/calibration-service.js';
 import { MqttService } from '../services/mqtt-service.js';
+import { discoverMlink, listMlinkSerialPorts, probeMlinkServices, uploadViaMlink } from '../services/mlink-bridge.js';
 import { SessionStore } from '../services/session-store.js';
-import { checkNativeFlashSupport, flashFirmwareNative, formatNativeFlashError, listNativeSerialPorts } from '../services/native-flash.js';
 import { getSessionId, validateMessage } from '../services/validation.js';
 import fs from 'fs';
 import path from 'path';
@@ -111,7 +111,7 @@ configRoutes.get('/', (req, res) => {
 
 /**
  * GET /api/config/firmware
- * Return required firmware files for one-time USB flashing from Setup UI
+ * Return required firmware files for one-time Setup upload via mLink
  */
 configRoutes.get('/firmware', (req, res) => {
   try {
@@ -152,47 +152,65 @@ configRoutes.get('/firmware', (req, res) => {
 });
 
 /**
- * GET /api/config/flash-native/check
- * Check whether native flashing prerequisites are installed
+ * GET /api/config/mlink/discover
+ * Probe local mLink bridge and return announced channels
  */
-configRoutes.get('/flash-native/check', async (req, res) => {
-  const result = await checkNativeFlashSupport();
-  if (!result.ok) {
-    return res.status(200).json(result);
-  }
-  return res.json(result);
-});
-
-/**
- * GET /api/config/flash-native/ports
- * List available serial ports for native flashing
- */
-configRoutes.get('/flash-native/ports', async (req, res) => {
+configRoutes.get('/mlink/discover', async (req, res) => {
   try {
-    const ports = await listNativeSerialPorts();
-    res.json({ ok: true, ports });
-  } catch (error) {
-    const formatted = formatNativeFlashError(error);
-    res.status(500).json({ ok: false, error: formatted.error, hint: formatted.hint });
-  }
-});
-
-/**
- * POST /api/config/flash-native
- * Native firmware flash path using Python + mpremote
- */
-configRoutes.post('/flash-native', async (req, res) => {
-  try {
-    const { files, port } = req.body || {};
-    const result = await flashFirmwareNative({ files, port });
+    const port = Number(req.query.port) || Number(process.env.MLINK_PORT) || 52384;
+    const result = await discoverMlink({ port, timeoutMs: 2500 });
     res.json(result);
   } catch (error) {
-    const formatted = formatNativeFlashError(error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/config/mlink/serialports
+ * List available serial ports reported by mLink data-channel
+ */
+configRoutes.get('/mlink/serialports', async (req, res) => {
+  try {
+    const port = Number(req.query.port) || Number(process.env.MLINK_PORT) || 52384;
+    const result = await listMlinkSerialPorts({ port });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/config/mlink/probe
+ * Run a targeted probe against known mLink services and return diagnostics
+ */
+configRoutes.get('/mlink/probe', async (req, res) => {
+  try {
+    const port = Number(req.query.port) || Number(process.env.MLINK_PORT) || 52384;
+    const result = await probeMlinkServices({ port });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/config/mlink/upload
+ * Upload firmware files through local mLink websocket bridge
+ */
+configRoutes.post('/mlink/upload', async (req, res) => {
+  try {
+    const { files, port, serialPort } = req.body || {};
+    const result = await uploadViaMlink({
+      files,
+      port: Number(port) || Number(process.env.MLINK_PORT) || 52384,
+      serialPort: serialPort || null,
+    });
+    res.json(result);
+  } catch (error) {
     res.status(500).json({
       ok: false,
-      error: formatted.error,
-      hint: formatted.hint,
-      installHint: formatted.installHint,
+      error: error.message,
+      details: error.details || null,
     });
   }
 });

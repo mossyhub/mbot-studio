@@ -35,6 +35,7 @@ A kid-friendly platform that blends block coding with AI-powered natural languag
 - **Node.js** 18+ — [Download](https://nodejs.org/) *(local dev only)*
 - **Docker** — [Download](https://docs.docker.com/get-docker/) *(for containerized deployment)*
 - **MQTT Broker** — An external [Mosquitto](https://mosquitto.org/) server on your network
+- **Makeblock mLink2** — required for one-time firmware upload from the Setup tab (runs locally on your computer)
 - **GitHub account** with Copilot subscription (for AI features)
 - **mBot2** with CyberPi (ESP32) and WiFi capability
 
@@ -114,7 +115,7 @@ You should see `"localDebug": true` and model `local/debug-rule-engine`.
 
 ### 4. Upload Firmware to mBot2
 
-See [firmware/README.md](firmware/README.md) for detailed upload instructions.
+Use the **Setup** tab (mLink2-based upload). See [firmware/README.md](firmware/README.md) for details.
 
 ## Docker Deployment
 
