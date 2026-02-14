@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS = {
   mqttPort: 1883,
   topicPrefix: 'mbot-studio',
   clientId: 'mbot2-rover',
+  nativePort: '',
 };
 
 const supportsWebSerial = typeof navigator !== 'undefined' && !!navigator.serial;
@@ -62,6 +63,8 @@ export default function FirmwareFlasher() {
   const [flashing, setFlashing] = useState(false);
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState([]);
+  const [nativeSupport, setNativeSupport] = useState({ checked: false, ok: false, error: '', installHint: '' });
+  const [nativePorts, setNativePorts] = useState([]);
 
   useEffect(() => {
     let active = true;
@@ -86,6 +89,57 @@ export default function FirmwareFlasher() {
       })
       .finally(() => {
         if (active) setLoadingFiles(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/config/flash-native/ports')
+      .then(r => r.json())
+      .then((data) => {
+        if (!active || !data?.ok) return;
+        const ports = Array.isArray(data.ports) ? data.ports : [];
+        setNativePorts(ports);
+        setSettings(prev => {
+          if (prev.nativePort || ports.length === 0) return prev;
+          return { ...prev, nativePort: ports[0].port || '' };
+        });
+      })
+      .catch(() => {
+        if (!active) return;
+        setNativePorts([]);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/config/flash-native/check')
+      .then(r => r.json())
+      .then((data) => {
+        if (!active) return;
+        setNativeSupport({
+          checked: true,
+          ok: !!data.ok,
+          error: data.error || '',
+          installHint: data.installHint || '',
+        });
+      })
+      .catch(() => {
+        if (!active) return;
+        setNativeSupport({
+          checked: true,
+          ok: false,
+          error: 'Could not check native flasher support',
+          installHint: 'Install Python 3.10+ and run: py -3 -m pip install mpremote',
+        });
       });
 
     return () => {
@@ -151,15 +205,16 @@ export default function FirmwareFlasher() {
     }
   };
 
-  const waitForText = async (reader, expectedText, timeoutMs = 12000) => {
+  const waitForAnyText = async (reader, expectedTexts, timeoutMs = 12000) => {
     const start = Date.now();
     let buffer = '';
+    const needles = (Array.isArray(expectedTexts) ? expectedTexts : [expectedTexts]).filter(Boolean);
 
     while ((Date.now() - start) < timeoutMs) {
       const chunk = await readWithTimeout(reader, 300);
       if (chunk?.value) {
         buffer += chunk.value;
-        if (buffer.includes(expectedText)) {
+        if (needles.some((needle) => buffer.includes(needle))) {
           return { ok: true, buffer };
         }
       }
@@ -169,6 +224,17 @@ export default function FirmwareFlasher() {
     return { ok: false, buffer };
   };
 
+  const readDrain = async (reader, durationMs = 250) => {
+    const start = Date.now();
+    let buffer = '';
+    while ((Date.now() - start) < durationMs) {
+      const chunk = await readWithTimeout(reader, 80);
+      if (chunk?.value) buffer += chunk.value;
+      if (chunk?.done) break;
+    }
+    return buffer;
+  };
+
   const writeBytes = async (writer, bytes) => {
     await writer.write(bytes);
   };
@@ -176,6 +242,97 @@ export default function FirmwareFlasher() {
   const writeText = async (writer, text) => {
     const encoder = new TextEncoder();
     await writer.write(encoder.encode(text));
+  };
+
+  const flashViaNative = async (reason = '') => {
+    setStatus(reason
+      ? `Browser flash failed (${reason}). Trying native flash helper...`
+      : 'Trying native flash helper...');
+
+    const res = await fetch('/api/config/flash-native', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: filesToFlash,
+        port: settings.nativePort?.trim() || undefined,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      const details = data.error || 'Native flashing failed.';
+      const hint = data.hint ? ` ${data.hint}` : '';
+      const install = data.installHint ? ` ${data.installHint}` : '';
+      throw new Error(`${details}${hint}${install}`.trim());
+    }
+
+    setProgress(data.flashedFiles.map((name) => `✅ ${name}`));
+    setStatus('✅ Native flash complete! Robot is rebooting.');
+  };
+
+  const enterRawRepl = async (reader, writer) => {
+    if (typeof port?.setSignals === 'function') {
+      try {
+        await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        await sleep(120);
+        await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+        await sleep(220);
+      } catch {
+        // Some devices/browsers ignore signal control.
+      }
+    }
+
+    const sequences = [
+      {
+        name: 'break+raw',
+        run: async () => {
+          await writeBytes(writer, new Uint8Array([0x03, 0x03])); // Ctrl-C Ctrl-C
+          await sleep(180);
+          await writeBytes(writer, new Uint8Array([0x01])); // Ctrl-A
+        },
+      },
+      {
+        name: 'normal->raw',
+        run: async () => {
+          await writeBytes(writer, new Uint8Array([0x02])); // Ctrl-B
+          await sleep(120);
+          await writeBytes(writer, new Uint8Array([0x03, 0x03])); // Ctrl-C Ctrl-C
+          await sleep(180);
+          await writeBytes(writer, new Uint8Array([0x01])); // Ctrl-A
+        },
+      },
+      {
+        name: 'soft-reboot->raw',
+        run: async () => {
+          await writeBytes(writer, new Uint8Array([0x03, 0x03])); // Ctrl-C Ctrl-C
+          await sleep(120);
+          await writeBytes(writer, new Uint8Array([0x04])); // Ctrl-D (soft reboot)
+          await sleep(1200);
+          await writeBytes(writer, new Uint8Array([0x03])); // Ctrl-C
+          await sleep(120);
+          await writeBytes(writer, new Uint8Array([0x01])); // Ctrl-A
+        },
+      },
+    ];
+
+    let combinedBuffer = '';
+    for (let i = 0; i < sequences.length; i++) {
+      await readDrain(reader, 220);
+      await sequences[i].run();
+
+      const result = await waitForAnyText(
+        reader,
+        ['raw REPL; CTRL-B to exit', 'raw REPL', 'raw REPL; CTRL-B to exit\r\n>', 'raw REPL; CTRL-B to exit\n>'],
+        i === sequences.length - 1 ? 9000 : 5000,
+      );
+
+      combinedBuffer += result.buffer || '';
+      if (result.ok) {
+        return { ok: true, attempt: sequences[i].name, buffer: combinedBuffer };
+      }
+    }
+
+    return { ok: false, buffer: combinedBuffer };
   };
 
   const flashFirmware = async () => {
@@ -193,19 +350,18 @@ export default function FirmwareFlasher() {
 
     let reader;
     let writer;
+    let webFlashError = null;
 
     try {
       reader = port.readable.getReader();
       writer = port.writable.getWriter();
 
       setStatus('Entering raw REPL...');
-      await writeBytes(writer, new Uint8Array([0x03, 0x03]));
-      await sleep(120);
-      await writeBytes(writer, new Uint8Array([0x01]));
-
-      const rawReplResult = await waitForText(reader, 'raw REPL', 7000);
+      const rawReplResult = await enterRawRepl(reader, writer);
       if (!rawReplResult.ok) {
-        throw new Error('Could not enter raw REPL. Put CyberPi in MicroPython mode and retry.');
+        const tail = (rawReplResult.buffer || '').slice(-160).replace(/\s+/g, ' ').trim();
+        const details = tail ? ` Last serial output: "${tail}".` : '';
+        throw new Error(`Could not enter raw REPL after multiple attempts. On CyberPi, switch to MicroPython/upload mode, close mBlock/serial monitor apps, unplug/replug USB, then retry. If this browser method still fails, use mLink-based upload (official Makeblock workflow).${details}`);
       }
 
       for (let i = 0; i < filesToFlash.length; i++) {
@@ -235,7 +391,7 @@ export default function FirmwareFlasher() {
         await writeText(writer, script);
         await writeBytes(writer, new Uint8Array([0x04]));
 
-        const wrote = await waitForText(reader, marker, 20000);
+        const wrote = await waitForAnyText(reader, marker, 20000);
         if (!wrote.ok) {
           throw new Error(`Failed writing ${file.name}`);
         }
@@ -250,7 +406,7 @@ export default function FirmwareFlasher() {
 
       setStatus('✅ Firmware flashed! The robot should reboot and reconnect over WiFi/MQTT.');
     } catch (error) {
-      setStatus(`❌ Flash failed: ${error.message}`);
+      webFlashError = error;
     } finally {
       if (reader) {
         try { await reader.cancel(); } catch {}
@@ -259,6 +415,15 @@ export default function FirmwareFlasher() {
       if (writer) {
         try { writer.releaseLock(); } catch {}
       }
+
+      if (webFlashError) {
+        try {
+          await flashViaNative(webFlashError.message);
+        } catch (nativeError) {
+          setStatus(`❌ Flash failed: ${nativeError.message}`);
+        }
+      }
+
       setFlashing(false);
     }
   };
@@ -299,7 +464,30 @@ export default function FirmwareFlasher() {
           Client ID
           <input value={settings.clientId} onChange={(e) => setSetting('clientId', e.target.value)} disabled={flashing} />
         </label>
+        <label>
+          Native Serial Port (optional)
+          <select
+            value={settings.nativePort}
+            onChange={(e) => setSetting('nativePort', e.target.value)}
+            disabled={flashing}
+          >
+            <option value="">Auto-detect</option>
+            {nativePorts.map((port) => (
+              <option key={port.port} value={port.port}>
+                {port.port} {port.description ? `— ${port.description}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
+
+      {nativeSupport.checked && (
+        <p className="section-desc" style={{ marginTop: 8 }}>
+          {nativeSupport.ok
+            ? '✅ Native flash helper ready (Python + mpremote detected).'
+            : `⚠️ Native flash helper not ready. ${nativeSupport.error || ''} ${nativeSupport.installHint || ''}`}
+        </p>
+      )}
 
       <div className="firmware-actions">
         {!connected ? (
@@ -314,6 +502,20 @@ export default function FirmwareFlasher() {
 
         <button className="btn-primary" onClick={flashFirmware} disabled={!connected || loadingFiles || flashing || firmwareFiles.length === 0}>
           {flashing ? '⏳ Flashing...' : '⬆️ Flash Firmware Now'}
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={() => {
+            setFlashing(true);
+            setProgress([]);
+            flashViaNative()
+              .catch((error) => setStatus(`❌ Native flash failed: ${error.message}`))
+              .finally(() => setFlashing(false));
+          }}
+          disabled={loadingFiles || flashing || firmwareFiles.length === 0}
+          title="Uses server-side Python mpremote; no Web Serial required"
+        >
+          🛠️ Native Flash
         </button>
       </div>
 

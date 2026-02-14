@@ -51,6 +51,27 @@ CUSTOM_HARDWARE = {
 
 ## Upload Methods
 
+### Method A0: mBot Studio Native Flash (Recommended for CyberPi reliability)
+
+This project now supports a **Native Flash** path from the Setup page that uses Python + `mpremote` on the machine running the server.
+
+Install once on this computer:
+
+```bash
+# Windows
+py -3 -m pip install --upgrade pip mpremote
+
+# macOS/Linux
+python3 -m pip install --upgrade pip mpremote
+```
+
+Then in the Setup tab:
+1. (Optional) Enter serial port (e.g. `COM5`) in **Native Serial Port**. Leave blank to auto-detect.
+2. Click **🛠️ Native Flash**.
+3. Wait for "Native flash complete".
+
+If browser Web Serial flashing fails, the app automatically attempts this native path.
+
 ### Method A: mBlock IDE (Recommended for Beginners)
 
 1. Download [mBlock](https://mblock.makeblock.com/en/) (desktop version)

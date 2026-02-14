@@ -3,6 +3,7 @@ import { parseRobotConfig } from '../services/ai-service.js';
 import { calibrationChat } from '../services/calibration-service.js';
 import { MqttService } from '../services/mqtt-service.js';
 import { SessionStore } from '../services/session-store.js';
+import { checkNativeFlashSupport, flashFirmwareNative, formatNativeFlashError, listNativeSerialPorts } from '../services/native-flash.js';
 import { getSessionId, validateMessage } from '../services/validation.js';
 import fs from 'fs';
 import path from 'path';
@@ -147,6 +148,52 @@ configRoutes.get('/firmware', (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/config/flash-native/check
+ * Check whether native flashing prerequisites are installed
+ */
+configRoutes.get('/flash-native/check', async (req, res) => {
+  const result = await checkNativeFlashSupport();
+  if (!result.ok) {
+    return res.status(200).json(result);
+  }
+  return res.json(result);
+});
+
+/**
+ * GET /api/config/flash-native/ports
+ * List available serial ports for native flashing
+ */
+configRoutes.get('/flash-native/ports', async (req, res) => {
+  try {
+    const ports = await listNativeSerialPorts();
+    res.json({ ok: true, ports });
+  } catch (error) {
+    const formatted = formatNativeFlashError(error);
+    res.status(500).json({ ok: false, error: formatted.error, hint: formatted.hint });
+  }
+});
+
+/**
+ * POST /api/config/flash-native
+ * Native firmware flash path using Python + mpremote
+ */
+configRoutes.post('/flash-native', async (req, res) => {
+  try {
+    const { files, port } = req.body || {};
+    const result = await flashFirmwareNative({ files, port });
+    res.json(result);
+  } catch (error) {
+    const formatted = formatNativeFlashError(error);
+    res.status(500).json({
+      ok: false,
+      error: formatted.error,
+      hint: formatted.hint,
+      installHint: formatted.installHint,
+    });
   }
 });
 
