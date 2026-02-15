@@ -21,6 +21,7 @@
     "docker:push": "docker tag mbot-studio:latest ${npm_config_registry:-docker.io}/mbot-studio:latest && docker push ${npm_config_registry:-docker.io}/mbot-studio:latest"
   },
   "devDependencies": {
+    "@electron/asar": "^4.0.1",
     "concurrently": "^8.2.0"
   }
 }

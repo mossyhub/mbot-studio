@@ -117,6 +117,8 @@ You should see `"localDebug": true` and model `local/debug-rule-engine`.
 
 Use the **Setup** tab (mLink2-based upload). See [firmware/README.md](firmware/README.md) for details.
 
+For implementation/debugging notes on the mLink upload path, see [docs/mlink-upload-notes.md](docs/mlink-upload-notes.md).
+
 ## Docker Deployment
 
 The app ships as a single container — the Node.js server serves both the API and the built React frontend.

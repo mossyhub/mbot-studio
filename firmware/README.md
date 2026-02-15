@@ -11,6 +11,7 @@ These MicroPython files run directly on the mBot2's CyberPi (ESP32) microcontrol
 | `main.py` | Entry point — connects WiFi/MQTT, runs main loop |
 | `config.py` | WiFi, MQTT, and hardware settings |
 | `mqtt_client.py` | MQTT connection and message handling |
+| `dashboard.py` | CyberPi screen UI (WiFi/IP/MQTT + recent RX/TX) |
 | `motor_controller.py` | Drive motors, DC motors, and servos |
 | `sensor_reader.py` | Ultrasonic, line follower, color sensor |
 | `command_handler.py` | Dispatches commands to the right subsystem |
@@ -64,14 +65,22 @@ This project uses Makeblock's local **mLink2** bridge to upload the firmware fil
 
 > **Important**: Upload ALL files together. The firmware won't work with missing files.
 
+For implementation/debugging notes on the upload path (mLink JSON-RPC + data-channel), see [docs/mlink-upload-notes.md](../docs/mlink-upload-notes.md).
+
 ## Testing the Connection
 
 1. Upload all firmware files to the mBot2
 2. Make sure Mosquitto is running on your computer
 3. Power on the mBot2
 4. Watch the CyberPi display:
-   - "Connecting WiFi..." → "WiFi OK" (with IP address)
-   - "Connecting MQTT..." → "Connected! 🤖 Ready"
+    - "Connecting WiFi..." → "WiFi OK" (with IP address)
+    - "Connecting MQTT..." → "Connected! 🤖 Ready"
+    - Then an **idle dashboard** showing:
+      - WiFi state + IP
+      - MQTT state
+      - Last RX (incoming from server)
+      - Last TX (outgoing to server)
+     - When a program is running (or a command explicitly uses the display), the firmware will temporarily show that screen and then return to the dashboard when idle.
 5. In the web interface, the status bar should show "Connected"
 
 ## Button Controls
@@ -79,7 +88,7 @@ This project uses Makeblock's local **mLink2** bridge to upload the firmware fil
 | Button | Action |
 |--------|--------|
 | **A** (left) | Emergency Stop — immediately stops all motors |
-| **B** (right) | Show Status — displays WiFi/MQTT connection info |
+| **B** (right) | Refresh Dashboard — redraws the WiFi/MQTT + RX/TX screen |
 
 ## LED Indicators
 

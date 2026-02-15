@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS = {
   topicPrefix: 'mbot-studio',
   clientId: 'mbot2-rover',
   serialPort: '',
+  programSlot: 1,
 };
 
 function replaceConfigValue(content, key, value) {
@@ -119,7 +120,8 @@ export default function FirmwareFlasher() {
 
   const filesToFlash = useMemo(() => {
     return firmwareFiles.map((file) => {
-      if (file.name === 'config.py') {
+      const fileName = String(file.name || '');
+      if (fileName === 'mbot_config.py' || fileName.endsWith('/mbot_config.py')) {
         return { ...file, content: applySettingsToConfig(file.content, settings) };
       }
       return file;
@@ -137,7 +139,16 @@ export default function FirmwareFlasher() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         files: filesToFlash,
+        settings: {
+          wifiSsid: settings.wifiSsid,
+          wifiPassword: settings.wifiPassword,
+          mqttBroker: settings.mqttBroker,
+          mqttPort: settings.mqttPort,
+          topicPrefix: settings.topicPrefix,
+          clientId: settings.clientId,
+        },
         serialPort: settings.serialPort?.trim() || undefined,
+        slot: settings.programSlot || 1,
       }),
     });
 
@@ -161,7 +172,7 @@ export default function FirmwareFlasher() {
     }
 
     setProgress((data.uploaded || []).map((name) => `✅ ${name}`));
-    setStatus('✅ mLink upload complete. Robot is rebooting.');
+    setStatus('✅ Upload complete — program is now running on the CyberPi.');
   };
 
   const flashFirmware = async () => {
@@ -177,6 +188,42 @@ export default function FirmwareFlasher() {
       await flashViaMlink();
     } catch (error) {
       setStatus(`❌ Upload failed: ${error.message}`);
+    } finally {
+      setFlashing(false);
+    }
+  };
+
+  const flashTestFirmware = async () => {
+    setFlashing(true);
+    setProgress([]);
+    setStatus('Uploading minimal motor test firmware...');
+
+    try {
+      const res = await fetch('/api/config/mlink/upload-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: {
+            wifiSsid: settings.wifiSsid,
+            wifiPassword: settings.wifiPassword,
+            mqttBroker: settings.mqttBroker,
+            mqttPort: settings.mqttPort,
+            topicPrefix: settings.topicPrefix,
+          },
+          serialPort: settings.serialPort?.trim() || undefined,
+          slot: settings.programSlot || 1,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Test upload failed');
+      }
+
+      setProgress((data.uploaded || []).map((name) => `✅ ${name}`));
+      setStatus('✅ Motor test firmware uploaded! Press Button A on CyberPi = forward, Button B = backward.');
+    } catch (error) {
+      setStatus(`❌ Test upload failed: ${error.message}`);
     } finally {
       setFlashing(false);
     }
@@ -239,6 +286,18 @@ export default function FirmwareFlasher() {
             })}
           </select>
         </label>
+        <label>
+          Program Slot (1-8)
+          <select
+            value={settings.programSlot}
+            onChange={(e) => setSetting('programSlot', Number(e.target.value))}
+            disabled={flashing}
+          >
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+              <option key={n} value={n}>Slot {n}</option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {mlinkSupport.checked && (
@@ -246,6 +305,12 @@ export default function FirmwareFlasher() {
           {mlinkSupport.ok
             ? `✅ mLink detected${mlinkSupport.version ? ` (v${mlinkSupport.version})` : ''}.`
             : `⚠️ mLink not detected. Install and run mLink2, then refresh this page. ${mlinkSupport.error || ''}`}
+        </p>
+      )}
+
+      {!settings.wifiSsid && (
+        <p className="section-desc" style={{ marginTop: 8, color: '#e57373' }}>
+          ⚠️ WiFi SSID is empty — the firmware will use placeholder values and won't connect.
         </p>
       )}
 
@@ -257,6 +322,15 @@ export default function FirmwareFlasher() {
           title="Uploads firmware via the local mLink bridge"
         >
           {flashing ? '⏳ Uploading...' : '⬆️ Upload Firmware via mLink'}
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={flashTestFirmware}
+          disabled={flashing}
+          title="Upload minimal motor test firmware — Button A=forward, B=backward"
+          style={{ marginLeft: 8 }}
+        >
+          🧪 Test Motors Only
         </button>
       </div>
 

@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
@@ -34,16 +35,42 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/robot', robotRoutes);
 app.use('/api/config', configRoutes);
 
-// Serve built frontend in production
-const publicDir = path.join(__dirname, '../public');
-app.use(express.static(publicDir));
+function sendDevUiHint(req, res) {
+  const host = req.headers.host || `localhost:${PORT}`;
+  res
+    .status(200)
+    .type('text/plain')
+    .send(
+      [
+        'mBot Studio backend is running.',
+        '',
+        'Frontend is not being served from this port (no build found).',
+        'Start the web UI dev server and open:',
+        '  http://localhost:5173/',
+        '',
+        `API health: http://${host}/api/health`,
+      ].join('\n'),
+    );
+}
 
-// SPA fallback — serve index.html for non-API routes
-app.get(/^(?!\/api|\/ws).*/, (req, res, next) => {
-  const indexPath = path.join(publicDir, 'index.html');
-  res.sendFile(indexPath, (err) => {
-    if (err) next(); // file not found — dev mode, no build
-  });
+// Serve built frontend in production (when present)
+const publicDir = path.join(__dirname, '../public');
+const indexHtmlPath = path.join(publicDir, 'index.html');
+const hasBuiltFrontend = fs.existsSync(indexHtmlPath);
+if (hasBuiltFrontend) {
+  app.use(express.static(publicDir));
+}
+
+// Root hint for dev mode
+app.get('/', (req, res) => {
+  if (hasBuiltFrontend) return res.sendFile(indexHtmlPath);
+  return sendDevUiHint(req, res);
+});
+
+// SPA fallback — serve index.html for non-API routes (or hint in dev)
+app.get(/^(?!\/api|\/ws).*/, (req, res) => {
+  if (hasBuiltFrontend) return res.sendFile(indexHtmlPath);
+  return sendDevUiHint(req, res);
 });
 
 // Create HTTP server
@@ -59,7 +86,6 @@ mqttService.connect().then(() => {
   console.log('📡 MQTT service ready');
 }).catch(err => {
   console.warn('⚠️  MQTT not available (robot live mode will be limited):', err.message);
-  console.warn('   Install Mosquitto or run: docker run -p 1883:1883 eclipse-mosquitto');
 });
 
 // Start server

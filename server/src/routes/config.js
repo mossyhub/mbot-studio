@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { parseRobotConfig } from '../services/ai-service.js';
 import { calibrationChat } from '../services/calibration-service.js';
 import { MqttService } from '../services/mqtt-service.js';
-import { discoverMlink, listMlinkSerialPorts, probeMlinkServices, uploadViaMlink } from '../services/mlink-bridge.js';
+import { discoverMlink, diagnoseCyberpiPrograms, execCyberpiSnippet, listMlinkSerialPorts, probeMlinkServices, probeProgramNamingApis, probePythonTerminal, probeVirtualFs, uploadViaMlink, virtualFsListDir } from '../services/mlink-bridge.js';
 import { SessionStore } from '../services/session-store.js';
 import { getSessionId, validateMessage } from '../services/validation.js';
 import fs from 'fs';
@@ -15,14 +15,169 @@ const CONFIG_PATH = path.join(DATA_DIR, 'robot-config.json');
 const FIRMWARE_DIR = path.join(__dirname, '../../..', 'firmware');
 const REQUIRED_FIRMWARE_FILES = [
   'main.py',
-  'config.py',
-  'mqtt_client.py',
-  'motor_controller.py',
-  'sensor_reader.py',
-  'command_handler.py',
+  'mbot_dashboard.py',
+  'mbot_config.py',
+  'mbot_mqtt.py',
+  'mbot_motor.py',
+  'mbot_sensor.py',
+  'mbot_commands.py',
 ];
 
 export const configRoutes = Router();
+
+// ---------------------------------------------------------------------------
+// Server-side config substitution — applies user settings to mbot_config.py
+// ---------------------------------------------------------------------------
+
+function replaceConfigValue(content, key, value) {
+  const escaped = String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const regex = new RegExp(`^${key}\\s*=\\s*".*"`, 'm');
+  if (regex.test(content)) {
+    return content.replace(regex, `${key} = "${escaped}"`);
+  }
+  return content;
+}
+
+function applySettingsToFiles(files, settings) {
+  if (!Array.isArray(files)) return files;
+  if (!settings || typeof settings !== 'object') {
+    console.warn('[upload] No settings received from client — config will use placeholder values');
+    return files;
+  }
+
+  console.log('[upload] Applying settings — WIFI_SSID:', JSON.stringify(settings.wifiSsid || ''),
+    'MQTT_BROKER:', JSON.stringify(settings.mqttBroker || ''));
+
+  return files.map((file) => {
+    const name = String(file.name || '');
+    if (name === 'mbot_config.py' || name.endsWith('/mbot_config.py')) {
+      let content = file.content;
+      content = replaceConfigValue(content, 'WIFI_SSID', settings.wifiSsid || 'YOUR_WIFI_NAME');
+      content = replaceConfigValue(content, 'WIFI_PASSWORD', settings.wifiPassword || 'YOUR_WIFI_PASSWORD');
+      content = replaceConfigValue(content, 'MQTT_BROKER', settings.mqttBroker || 'YOUR_COMPUTER_IP');
+      content = content.replace(/^MQTT_PORT\s*=\s*\d+/m,
+        `MQTT_PORT = ${Math.max(1, Number(settings.mqttPort) || 1883)}`);
+      content = replaceConfigValue(content, 'MQTT_TOPIC_PREFIX', settings.topicPrefix || 'mbot-studio');
+      content = replaceConfigValue(content, 'MQTT_CLIENT_ID', settings.clientId || 'mbot2-rover');
+
+      // Log the effective config values for debugging
+      const ssidMatch = content.match(/^WIFI_SSID\s*=\s*"(.*)"/m);
+      const brokerMatch = content.match(/^MQTT_BROKER\s*=\s*"(.*)"/m);
+      console.log('[upload] Config after substitution — WIFI_SSID:', ssidMatch?.[1],
+        'MQTT_BROKER:', brokerMatch?.[1]);
+
+      return { ...file, content };
+    }
+    return file;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Firmware bundler – merges all firmware modules into a single main.py
+// ---------------------------------------------------------------------------
+// The CyberPi's MicroPython runtime cannot reliably import custom modules
+// from /flash/.  Following the pattern used by every known working mBot2
+// project (including mBlock itself), we concatenate all modules into one file
+// before uploading.
+
+/** Module names that are OUR firmware files (used to strip cross-imports). */
+const OUR_MODULES = new Set(
+  REQUIRED_FIRMWARE_FILES.map(f => f.replace(/\.py$/, '')),
+);
+
+/**
+ * Given an array of { name, content } firmware file objects, return a single
+ * { name: 'main.py', content } that inlines everything in dependency order.
+ */
+function bundleFirmwareFiles(files) {
+  // Dependency order – modules listed earlier are pasted first.
+  const MODULE_ORDER = [
+    'mbot_config',     // pure constants, no deps
+    'mbot_dashboard',  // depends on: cyberpi, time
+    'mbot_sensor',     // depends on: mbot2, cyberpi
+    'mbot_motor',      // depends on: mbot2, mbot_config
+    'mbot_mqtt',       // depends on: cyberpi, mbot_config
+    'mbot_commands',   // depends on: mbot_motor, mbot_sensor, mbot_config
+    'main',            // entry point, depends on everything
+  ];
+
+  const byModule = new Map();
+  for (const f of files) {
+    const mod = f.name.replace(/\.py$/, '');
+    byModule.set(mod, f.content);
+  }
+
+  const seenImports = new Set();  // track stdlib imports we've already emitted
+  const sections = [];
+
+  for (const mod of MODULE_ORDER) {
+    let src = byModule.get(mod);
+    if (src == null) continue;
+
+    const cleaned = [];
+    const srcLines = src.split('\n');
+    let i = 0;
+    while (i < srcLines.length) {
+      const rawLine = srcLines[i];
+
+      // Strip cross-imports to our own modules (handles multi-line too)
+      if (/^\s*from\s+(mbot_\w+)\s+import\s/.test(rawLine)) {
+        const imported = rawLine.match(/^\s*from\s+(\w+)/)[1];
+        if (OUR_MODULES.has(imported)) {
+          // If this is a multi-line import (ends with open paren, no close),
+          // skip all continuation lines until closing paren
+          if (/\(\s*$/.test(rawLine) && !/\)/.test(rawLine)) {
+            i++;
+            while (i < srcLines.length && !/\)/.test(srcLines[i])) {
+              i++;
+            }
+            i++; // skip the closing paren line too
+          } else {
+            i++;
+          }
+          continue;  // skip – already inlined
+        }
+      }
+      if (/^\s*import\s+(mbot_\w+)/.test(rawLine)) {
+        const imported = rawLine.match(/^\s*import\s+(\w+)/)[1];
+        if (OUR_MODULES.has(imported)) { i++; continue; }
+      }
+
+      // Deduplicate TOP-LEVEL stdlib imports only (not indented ones inside functions/classes)
+      const isTopLevel = !rawLine.startsWith(' ') && !rawLine.startsWith('\t');
+      if (isTopLevel) {
+        const stdMatch = rawLine.match(/^(import\s+\S+)\s*$/);
+        if (stdMatch) {
+          const key = stdMatch[1].trim();
+          if (seenImports.has(key)) { i++; continue; }
+          seenImports.add(key);
+        }
+        // Also deduplicate "from X import Y" for stdlib
+        const fromMatch = rawLine.match(/^(from\s+\S+\s+import\s+.+)$/);
+        if (fromMatch && !/mbot_/.test(rawLine)) {
+          const key = fromMatch[1].trim();
+          if (seenImports.has(key)) { i++; continue; }
+          seenImports.add(key);
+        }
+      }
+
+      cleaned.push(rawLine);
+      i++;
+    }
+
+    // Strip leading/trailing blank lines and comment banners at top
+    let body = cleaned.join('\n').trim();
+    // Remove the big ====== header comments to save flash space
+    body = body.replace(/^#\s*={5,}[\s\S]*?^#\s*={5,}\s*\n?/m, '').trim();
+    body = body.replace(/^#\s*-{5,}.*$/gm, '');  // also strip ---- separators
+
+    if (body) {
+      sections.push(`# --- ${mod} ---\n${body}`);
+    }
+  }
+
+  return { name: 'main.py', content: sections.join('\n\n') + '\n' };
+}
 
 function buildDefaultRoverAdditions() {
   return [
@@ -121,6 +276,9 @@ configRoutes.get('/firmware', (req, res) => {
         throw new Error(`Missing firmware file: ${name}`);
       }
       const content = fs.readFileSync(filePath, 'utf-8');
+
+      // Keep original filenames (all at /flash/) for maximum compatibility with CyberPi's
+      // MicroPython import behavior.
       return { name, content };
     });
 
@@ -180,6 +338,64 @@ configRoutes.get('/mlink/serialports', async (req, res) => {
 });
 
 /**
+ * GET /api/config/mlink/virtualfs/probe
+ * Diagnostics: try common virtualfs methods against a path (defaults to /flash)
+ */
+configRoutes.get('/mlink/virtualfs/probe', async (req, res) => {
+  try {
+    const port = Number(req.query.port) || Number(process.env.MLINK_PORT) || 52384;
+    const path = req.query.path ? String(req.query.path) : '/flash';
+    const result = await probeVirtualFs({ port, path });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/config/mlink/virtualfs/ls
+ * Best-effort: list a directory via virtualfs (defaults to /flash)
+ */
+configRoutes.get('/mlink/virtualfs/ls', async (req, res) => {
+  try {
+    const port = Number(req.query.port) || Number(process.env.MLINK_PORT) || 52384;
+    const path = req.query.path ? String(req.query.path) : '/flash';
+    const result = await virtualFsListDir({ port, path });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/config/mlink/python-terminal/probe
+ * Diagnostics: probe python-terminal methods to find program/project list + rename capabilities.
+ */
+configRoutes.get('/mlink/python-terminal/probe', async (req, res) => {
+  try {
+    const port = Number(req.query.port) || Number(process.env.MLINK_PORT) || 52384;
+    const result = await probePythonTerminal({ port });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/config/mlink/program-naming/probe
+ * Diagnostics: probe multiple mLink services for any supported program list / naming APIs.
+ */
+configRoutes.get('/mlink/program-naming/probe', async (req, res) => {
+  try {
+    const port = Number(req.query.port) || Number(process.env.MLINK_PORT) || 52384;
+    const result = await probeProgramNamingApis({ port });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
  * GET /api/config/mlink/probe
  * Run a targeted probe against known mLink services and return diagnostics
  */
@@ -194,16 +410,108 @@ configRoutes.get('/mlink/probe', async (req, res) => {
 });
 
 /**
+ * GET /api/config/mlink/device-programs
+ * Diagnostics: query CyberPi /flash contents to learn how the device stores program names
+ */
+configRoutes.get('/mlink/device-programs', async (req, res) => {
+  try {
+    const port = Number(req.query.port) || Number(process.env.MLINK_PORT) || 52384;
+    const serialPort = req.query.serialPort ? String(req.query.serialPort) : null;
+    const result = await diagnoseCyberpiPrograms({ port, serialPort });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/config/mlink/exec
+ * Diagnostics: run a single script snippet over the CyberPi exec channel and return serial output.
+ */
+configRoutes.post('/mlink/exec', async (req, res) => {
+  try {
+    const port = Number(req.body?.port) || Number(process.env.MLINK_PORT) || 52384;
+    const serialPort = req.body?.serialPort ? String(req.body.serialPort) : null;
+    const script = typeof req.body?.script === 'string' ? req.body.script : '';
+    const result = await execCyberpiSnippet({ port, serialPort, script });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/config/mlink/upload-test
+ * Upload minimal motor test firmware (bypasses bundler)
+ */
+configRoutes.post('/mlink/upload-test', async (req, res) => {
+  try {
+    const { port, serialPort, settings, slot } = req.body || {};
+    const testPath = path.join(FIRMWARE_DIR, 'test_motors.py');
+    if (!fs.existsSync(testPath)) {
+      return res.status(404).json({ ok: false, error: 'test_motors.py not found' });
+    }
+
+    let content = fs.readFileSync(testPath, 'utf-8');
+    // Apply WiFi/MQTT settings directly
+    if (settings) {
+      content = content.replace(/WIFI_SSID = ".*"/, `WIFI_SSID = "${settings.wifiSsid || 'YOUR_WIFI_NAME'}"`);
+      content = content.replace(/WIFI_PASSWORD = ".*"/, `WIFI_PASSWORD = "${settings.wifiPassword || 'YOUR_WIFI_PASSWORD'}"`);
+      content = content.replace(/MQTT_BROKER = ".*"/, `MQTT_BROKER = "${settings.mqttBroker || 'YOUR_COMPUTER_IP'}"`);
+      content = content.replace(/MQTT_PORT = \d+/, `MQTT_PORT = ${settings.mqttPort || 1883}`);
+      content = content.replace(/MQTT_TOPIC_PREFIX = ".*"/, `MQTT_TOPIC_PREFIX = "${settings.topicPrefix || 'mbot-studio'}"`);
+    }
+
+    console.log('[upload-test] Uploading minimal motor test firmware (' + content.length + ' bytes)');
+    console.log('[upload-test] Preview:\n' + content.substring(0, 300));
+
+    const targetSlot = Math.max(1, Math.min(8, Math.floor(Number(slot) || 1)));
+    console.log('[upload-test] Target program slot:', targetSlot);
+
+    const result = await uploadViaMlink({
+      files: [{ name: 'main.py', content }],
+      port: Number(port) || Number(process.env.MLINK_PORT) || 52384,
+      serialPort: serialPort || null,
+      slot: targetSlot,
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message, details: error.details || null });
+  }
+});
+
+/**
  * POST /api/config/mlink/upload
  * Upload firmware files through local mLink websocket bridge
  */
 configRoutes.post('/mlink/upload', async (req, res) => {
   try {
-    const { files, port, serialPort } = req.body || {};
+    const { files, port, serialPort, settings, slot } = req.body || {};
+
+    // Apply user settings to mbot_config.py server-side (authoritative substitution).
+    const patchedFiles = applySettingsToFiles(files, settings);
+
+    // Bundle all firmware modules into a single main.py for reliable upload.
+    const bundled = bundleFirmwareFiles(patchedFiles);
+
+    // Verify WIFI_SSID survived bundling
+    const ssidInBundle = bundled.content.match(/WIFI_SSID\s*=\s*"(.*)"/);
+    console.log('[upload] After bundling — WIFI_SSID in final output:', ssidInBundle?.[1] || 'NOT FOUND');
+    if (!ssidInBundle || ssidInBundle[1] === 'YOUR_WIFI_NAME') {
+      console.warn('[upload] WARNING: WIFI_SSID is still placeholder after bundling!');
+    }
+
+    // Dump first 600 chars of bundled content for debugging
+    console.log('[upload] Bundle preview (first 600 chars):\n' + bundled.content.substring(0, 600));
+
+    const targetSlot = Math.max(1, Math.min(8, Math.floor(Number(slot) || 1)));
+    console.log('[upload] Target program slot:', targetSlot);
+
     const result = await uploadViaMlink({
-      files,
+      files: [bundled],
       port: Number(port) || Number(process.env.MLINK_PORT) || 52384,
       serialPort: serialPort || null,
+      slot: targetSlot,
     });
     res.json(result);
   } catch (error) {
