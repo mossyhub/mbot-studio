@@ -52,19 +52,21 @@ class MqttHandler:
                 time.sleep(0.5)
                 try:
                     if cyberpi.wifi.is_connect():
-                        ip = None
+                        time.sleep(1)
+                        ip = "?"
                         try:
                             ip = cyberpi.wifi.get_ip()
                         except:
-                            ip = "unknown"
-                        if ip and ip != "0.0.0.0":
-                            self.wifi_ip = ip
-                            print("WiFi OK:", ip)
-                            cyberpi.display.show_label("WiFi OK\n" + str(ip), 12, "center", index=0)
-                            if self.dashboard:
-                                self.dashboard.set_wifi(True, ip)
-                            time.sleep(1)
-                            return True
+                            pass
+                        if not ip or ip == "0.0.0.0":
+                            ip = "connected"
+                        self.wifi_ip = ip
+                        print("WiFi OK:", ip)
+                        cyberpi.display.show_label("WiFi OK\n" + str(ip), 12, "center", index=0)
+                        if self.dashboard:
+                            self.dashboard.set_wifi(True, ip)
+                        time.sleep(1)
+                        return True
                 except:
                     pass
             print("WiFi timeout")
@@ -120,6 +122,11 @@ class MqttHandler:
             payload = msg.decode() if isinstance(msg, bytes) else msg
             data = json.loads(payload)
             short = topic.replace(MQTT_TOPIC_PREFIX + "/", "")
+            print("RX:", short)
+            try:
+                cyberpi.display.show_label("RX:\n" + short, 10, "center", index=0)
+            except:
+                pass
             if short == "robot/emergency":
                 if self.on_emergency:
                     try:
@@ -131,13 +138,17 @@ class MqttHandler:
                     if self.on_emergency:
                         try:
                             self.on_emergency()
-                        except:
-                            pass
+                        except Exception as e:
+                            print("ESTOP err:", e)
                 elif self.on_command:
                     try:
                         self.on_command(data)
-                    except:
-                        pass
+                    except Exception as e:
+                        print("CMD cb err:", e)
+                        try:
+                            cyberpi.display.show_label("CB ERR:\n" + str(e)[:40], 10, "center", index=0)
+                        except:
+                            pass
             elif short == "robot/program":
                 program = data.get("program", [])
                 if program and self.on_program:

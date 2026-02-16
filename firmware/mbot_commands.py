@@ -37,6 +37,10 @@ class CommandHandler:
         except Exception as e:
             print("Cmd err:", e)
             try:
+                cyberpi.display.show_label("EXEC ERR:\n" + str(e)[:40], 10, "center", index=0)
+            except:
+                pass
+            try:
                 self.motors.stop()
             except:
                 pass
@@ -44,6 +48,11 @@ class CommandHandler:
     def _dispatch(self, cmd):
         t = cmd.get("type", "")
         p = cmd.get("params", cmd)
+        print("CMD:", t)
+        try:
+            cyberpi.display.show_label("CMD:\n" + t, 12, "center", index=0)
+        except:
+            pass
 
         if t == "move_forward":
             self.motors.forward(p.get("speed", 50), p.get("duration", 1))

@@ -32,6 +32,7 @@ class MotorController:
         speed = abs(self._clamp(speed))
         duration = self._dur(duration)
         self.is_moving = True
+        print("FWD s=", speed, "d=", duration)
         try:
             if duration <= 0:
                 mbot2.forward(speed)
@@ -43,8 +44,14 @@ class MotorController:
                     mbot2.forward(speed)
                     time.sleep(duration)
                     mbot2.EM_stop()
+            print("FWD OK")
         except Exception as e:
             print("Fwd err:", e)
+            try:
+                import cyberpi
+                cyberpi.display.show_label("FWD ERR:\n" + str(e)[:40], 10, "center", index=0)
+            except:
+                pass
             try:
                 mbot2.EM_stop()
             except:
@@ -55,6 +62,7 @@ class MotorController:
         speed = abs(self._clamp(speed))
         duration = self._dur(duration)
         self.is_moving = True
+        print("BWD s=", speed, "d=", duration)
         try:
             if duration <= 0:
                 mbot2.backward(speed)
@@ -66,8 +74,14 @@ class MotorController:
                     mbot2.backward(speed)
                     time.sleep(duration)
                     mbot2.EM_stop()
+            print("BWD OK")
         except Exception as e:
             print("Bwd err:", e)
+            try:
+                import cyberpi
+                cyberpi.display.show_label("BWD ERR:\n" + str(e)[:40], 10, "center", index=0)
+            except:
+                pass
             try:
                 mbot2.EM_stop()
             except:
@@ -76,18 +90,32 @@ class MotorController:
 
     def turn_left(self, speed=DEFAULT_SPEED, angle=90):
         self.is_moving = True
+        print("LEFT a=", angle)
         try:
             mbot2.turn(-int(angle))
+            print("LEFT OK")
         except Exception as e:
             print("Left err:", e)
+            try:
+                import cyberpi
+                cyberpi.display.show_label("LEFT ERR:\n" + str(e)[:40], 10, "center", index=0)
+            except:
+                pass
         self.is_moving = False
 
     def turn_right(self, speed=DEFAULT_SPEED, angle=90):
         self.is_moving = True
+        print("RIGHT a=", angle)
         try:
             mbot2.turn(int(angle))
+            print("RIGHT OK")
         except Exception as e:
             print("Right err:", e)
+            try:
+                import cyberpi
+                cyberpi.display.show_label("RIGHT ERR:\n" + str(e)[:40], 10, "center", index=0)
+            except:
+                pass
         self.is_moving = False
 
     def set_speed(self, left, right):
