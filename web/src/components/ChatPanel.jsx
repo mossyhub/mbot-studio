@@ -1,8 +1,31 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import './ChatPanel.css';
 
 export default function ChatPanel({ messages, setMessages, onAIResponse, currentBlocks }) {
   const [input, setInput] = useState('');
+  const [inputHeight, setInputHeight] = useState(100);
+  const dragRef = useRef(null);
+
+  const handleDragStart = useCallback((e) => {
+    e.preventDefault();
+    const startY = e.clientY || e.touches?.[0]?.clientY;
+    const startH = inputHeight;
+    const onMove = (ev) => {
+      const y = ev.clientY || ev.touches?.[0]?.clientY;
+      const newH = Math.max(60, Math.min(400, startH - (y - startY)));
+      setInputHeight(newH);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove);
+    document.addEventListener('touchend', onUp);
+  }, [inputHeight]);
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -139,15 +162,18 @@ export default function ChatPanel({ messages, setMessages, onAIResponse, current
         </div>
       )}
 
+      <div className="chat-drag-handle" onMouseDown={handleDragStart} onTouchStart={handleDragStart} ref={dragRef}>
+        <div className="chat-drag-line" />
+      </div>
       <div className="chat-input-area">
         <textarea
           ref={inputRef}
           className="chat-input"
+          style={{ height: inputHeight + 'px' }}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Tell your robot what to do..."
-          rows={2}
           disabled={loading}
         />
         <button

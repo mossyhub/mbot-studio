@@ -35,6 +35,7 @@ const BLOCK_PALETTE = [
       { type: 'display_text', text: 'Hello!' },
       { type: 'display_image', image: 'happy' },
       { type: 'say', text: 'Hello!' },
+      { type: 'set_led', color: 'green' },
     ],
   },
   {
@@ -137,7 +138,7 @@ const BLOCK_PARAM_SCHEMA = {
     { key: 'button', label: 'Button', type: 'select', options: ['a', 'b'] },
   ],
   while_sensor: [
-    { key: 'sensor', label: 'Sensor', type: 'select', options: ['distance', 'line_left', 'line_right', 'light', 'loudness', 'timer'] },
+    { key: 'sensor', label: 'Sensor', type: 'select', options: ['distance', 'line', 'brightness', 'loudness', 'angle', 'timer'] },
     { key: 'operator', label: 'Operator', type: 'select', options: ['>', '<', '>=', '<=', '==', 'between'] },
     { key: 'value', label: 'Value', type: 'number', min: 0, max: 400, step: 1 },
     { key: 'min', label: 'Min (between)', type: 'number', min: 0, max: 400, step: 1 },
@@ -146,25 +147,28 @@ const BLOCK_PARAM_SCHEMA = {
   move_until: [
     { key: 'direction', label: 'Direction', type: 'select', options: ['forward', 'backward'] },
     { key: 'speed', label: 'Speed', type: 'range', min: 10, max: 100, step: 5 },
-    { key: 'sensor', label: 'Sensor', type: 'select', options: ['distance', 'line_left', 'line_right', 'light', 'loudness'] },
+    { key: 'sensor', label: 'Sensor', type: 'select', options: ['distance', 'line', 'brightness', 'loudness', 'angle'] },
     { key: 'operator', label: 'Operator', type: 'select', options: ['<', '>', '<=', '>=', 'between'] },
     { key: 'value', label: 'Value', type: 'number', min: 0, max: 400, step: 1 },
     { key: 'min', label: 'Min (between)', type: 'number', min: 0, max: 400, step: 1 },
     { key: 'max', label: 'Max (between)', type: 'number', min: 0, max: 400, step: 1 },
   ],
   if_sensor_range: [
-    { key: 'sensor', label: 'Sensor', type: 'select', options: ['distance', 'line_left', 'line_right', 'light', 'loudness'] },
+    { key: 'sensor', label: 'Sensor', type: 'select', options: ['distance', 'line', 'brightness', 'loudness', 'angle'] },
     { key: 'min', label: 'Min', type: 'number', min: 0, max: 400, step: 1 },
     { key: 'max', label: 'Max', type: 'number', min: 0, max: 400, step: 1 },
   ],
   display_value: [
-    { key: 'sensor', label: 'Sensor', type: 'select', options: ['distance', 'line_left', 'line_right', 'light', 'loudness'] },
+    { key: 'sensor', label: 'Sensor', type: 'select', options: ['distance', 'line', 'brightness', 'loudness', 'angle'] },
     { key: 'label', label: 'Label', type: 'text' },
   ],
   set_variable: [
     { key: 'name', label: 'Variable Name', type: 'text' },
-    { key: 'source', label: 'From Sensor', type: 'select', options: ['number', 'distance', 'line_left', 'line_right', 'light', 'loudness', 'timer'] },
+    { key: 'source', label: 'From Sensor', type: 'select', options: ['number', 'distance', 'line', 'brightness', 'loudness', 'angle', 'timer'] },
     { key: 'value', label: 'Value (if number)', type: 'number', min: -999, max: 999, step: 1 },
+  ],
+  set_led: [
+    { key: 'color', label: 'Color', type: 'select', options: ['red', 'green', 'blue', 'yellow', 'purple', 'white', 'off'] },
   ],
   change_variable: [
     { key: 'name', label: 'Variable Name', type: 'text' },
@@ -349,8 +353,16 @@ export default function BlocklyEditor({ blocks, onBlocksChange, robotConfig }) {
                 {cat.category}
               </button>
             ))}
+            {robotConfig?.additions?.length > 0 && (
+              <button
+                className={`palette-cat-btn cat-hardware ${paletteCategory === 'My Robot' ? 'active' : ''}`}
+                onClick={() => setPaletteCategory(paletteCategory === 'My Robot' ? null : 'My Robot')}
+              >
+                My Robot
+              </button>
+            )}
           </div>
-          {paletteCategory && (
+          {paletteCategory && paletteCategory !== 'My Robot' && (
             <div className="palette-blocks">
               {BLOCK_PALETTE.find(c => c.category === paletteCategory)?.blocks.map((tmpl, i) => (
                 <button
@@ -362,6 +374,29 @@ export default function BlocklyEditor({ blocks, onBlocksChange, robotConfig }) {
                   <span className="palette-block-label">{getBlockLabel(tmpl)}</span>
                 </button>
               ))}
+            </div>
+          )}
+          {paletteCategory === 'My Robot' && robotConfig?.additions && (
+            <div className="palette-blocks">
+              {robotConfig.additions.flatMap((hw) => {
+                if (!hw.actions || hw.actions.length === 0) return [];
+                return hw.actions.map((action, idx) => {
+                  const block = hw.type === 'servo'
+                    ? { type: 'servo', port: hw.port, angle: action.angle ?? 90 }
+                    : { type: 'dc_motor', port: hw.port, speed: (action.motorDirection === 'reverse' ? -(action.speed ?? 50) : (action.speed ?? 50)), duration: action.duration ?? 1 };
+                  const label = `${hw.label || hw.port}: ${action.name}`;
+                  return (
+                    <button
+                      key={`${hw.port}_${idx}`}
+                      className="palette-block-btn cat-hardware"
+                      onClick={() => handleAddBlock(block)}
+                    >
+                      <span className="palette-block-icon">{hw.type === 'servo' ? '🦾' : '⚡'}</span>
+                      <span className="palette-block-label">{label}</span>
+                    </button>
+                  );
+                });
+              })}
             </div>
           )}
         </div>
@@ -518,6 +553,7 @@ function getBlockCategory(type) {
     if_button: 'cat-control',
     while_sensor: 'cat-control',
     move_until: 'cat-control',
+    set_led: 'cat-sound',
     dc_motor: 'cat-hardware',
     servo: 'cat-hardware',
     set_variable: 'cat-variable',
@@ -552,6 +588,7 @@ function getBlockIcon(type) {
     if_button: '🔘',
     while_sensor: '🔁',
     move_until: '🎯',
+    set_led: '💡',
     dc_motor: '⚡',
     servo: '🦾',
     set_variable: '📦',
@@ -586,6 +623,7 @@ function getBlockLabel(block) {
     if_button: 'If Button Pressed',
     while_sensor: 'While Sensor...',
     move_until: 'Move Until...',
+    set_led: 'Set LEDs',
     dc_motor: 'DC Motor',
     servo: 'Move Servo',
     set_variable: 'Set Variable',
@@ -620,6 +658,8 @@ function getBlockParams(block) {
       return `closer than ${block.distance || 20}cm`;
     case 'if_color':
       return `${block.color || 'red'}`;
+    case 'set_led':
+      return `${block.color || 'green'}`;
     case 'dc_motor':
       return `Port ${block.port} | Speed: ${block.speed || 50} | ${block.duration || 1}s`;
     case 'servo':

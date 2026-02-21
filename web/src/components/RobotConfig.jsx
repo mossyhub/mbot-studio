@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './RobotConfig.css';
 import CalibrationChat from './CalibrationChat.jsx';
 import FirmwareFlasher from './FirmwareFlasher.jsx';
+import HardwareWizard from './HardwareWizard.jsx';
 
 export default function RobotConfig({ config, onConfigUpdate, robotConnected, onAchievement }) {
   const [robotName, setRobotName] = useState(config?.name || 'My mBot2');
@@ -14,6 +15,7 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
   const [clarificationQuestions, setClarificationQuestions] = useState([]);
   const [assumptions, setAssumptions] = useState([]);
   const [completeness, setCompleteness] = useState([]);
+  const [showWizard, setShowWizard] = useState(false);
 
   useEffect(() => {
     if (config) {
@@ -253,8 +255,27 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
     "Port S2 has a servo that rotates the robot's head left and right to look around.",
   ];
 
+  const usedPorts = additions.map(a => a.port).filter(Boolean);
+  const existingGroups = [...new Set(additions.map(a => a.partOf).filter(Boolean))];
+
+  const handleWizardComplete = (addition) => {
+    setAdditions(prev => [...prev, addition]);
+    setShowWizard(false);
+    setSaveStatus('Hardware added! Click Save Configuration to keep it.');
+    setTimeout(() => setSaveStatus(''), 5000);
+  };
+
   return (
     <div className="robot-config">
+      {showWizard && (
+        <HardwareWizard
+          usedPorts={usedPorts}
+          existingGroups={existingGroups}
+          robotConnected={robotConnected}
+          onComplete={handleWizardComplete}
+          onCancel={() => setShowWizard(false)}
+        />
+      )}
       <div className="config-content">
         {/* Robot Identity */}
         <section className="config-section">
@@ -287,75 +308,21 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           </ol>
         </section>
 
-        {/* Natural Language Hardware Setup */}
+        {/* Hardware List + Add Buttons */}
         <section className="config-section">
-          <h2>🔧 Add Hardware (Talk to AI)</h2>
-          <p className="section-desc">
-            Describe what you've added to your robot in your own words!
-          </p>
-
-          <div className="nl-input-area">
-            <textarea
-              value={nlInput}
-              onChange={(e) => setNlInput(e.target.value)}
-              placeholder='Example: "I connected a claw gripper motor to port M3"'
-              rows={3}
-              disabled={loading}
-            />
-            <button
-              className="btn-primary"
-              onClick={handleNLParse}
-              disabled={!nlInput.trim() || loading}
-            >
-              {loading ? '🤔 Thinking...' : '✨ Add to Robot'}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <h2>🔧 Hardware</h2>
+            <button className="btn-primary btn-small" onClick={() => setShowWizard(true)}>
+              + Add Hardware
             </button>
           </div>
-
-          <div className="example-descriptions">
-            <span className="example-label">Try these:</span>
-            {exampleDescriptions.map((desc, i) => (
-              <button
-                key={i}
-                className="example-btn"
-                onClick={() => setNlInput(desc)}
-              >
-                {desc.slice(0, 50)}...
-              </button>
-            ))}
-          </div>
-
-          {clarificationQuestions.length > 0 && (
-            <div className="clarification-box">
-              <h4>🧠 A few details are still needed:</h4>
-              <ul>
-                {clarificationQuestions.map((q, idx) => (
-                  <li key={`${q.field || 'q'}_${idx}`}>{q.question}</li>
-                ))}
-              </ul>
-              <p className="section-desc">Reply in the box above and click <strong>✨ Add to Robot</strong> again.</p>
-            </div>
-          )}
-
-          {assumptions.length > 0 && (
-            <div className="clarification-box assumptions-box">
-              <h4>📝 Assumptions I made:</h4>
-              <ul>
-                {assumptions.map((item, idx) => (
-                  <li key={`assume_${idx}`}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
-
-        {/* Hardware Additions List */}
-        <section className="config-section">
-          <h2>📋 Hardware List</h2>
+          <p className="section-desc">
+            Your mBot2 comes with drive motors, ultrasonic sensor, line follower, color sensor, and gyroscope. Add extra servos and motors here.
+          </p>
 
           {additions.length === 0 ? (
             <div className="empty-additions">
-              <p>No extra hardware added yet.</p>
-              <p>Your mBot2 comes with: 2 drive motors, ultrasonic sensor, line follower, color sensor, and gyroscope.</p>
+              <p>No extra hardware added yet. Click <strong>+ Add Hardware</strong> to get started.</p>
             </div>
           ) : (
             <div className="additions-list">
@@ -722,18 +689,40 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
             </div>
           )}
 
-          <button className="btn-secondary" onClick={handleAddManual} style={{ marginTop: 8 }}>
-            ➕ Add Manually
-          </button>
+          <details style={{ marginTop: 12 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13, color: '#666' }}>Or describe hardware with AI text...</summary>
+            <div style={{ marginTop: 8 }}>
+              <div className="nl-input-area">
+                <textarea
+                  value={nlInput}
+                  onChange={(e) => setNlInput(e.target.value)}
+                  placeholder='Example: "I connected a claw gripper motor to port M3"'
+                  rows={2}
+                  disabled={loading}
+                />
+                <button className="btn-primary btn-small" onClick={handleNLParse} disabled={!nlInput.trim() || loading}>
+                  {loading ? 'Thinking...' : 'Add'}
+                </button>
+              </div>
+              {clarificationQuestions.length > 0 && (
+                <div className="clarification-box">
+                  <h4>Details needed:</h4>
+                  <ul>{clarificationQuestions.map((q, idx) => <li key={idx}>{q.question}</li>)}</ul>
+                </div>
+              )}
+            </div>
+          </details>
         </section>
 
         {/* Calibration Teaching */}
         <section className="config-section">
-          <h2>🎓 Teach Your Robot</h2>
-          <p className="section-desc">
-            Have a conversation with the AI to teach your robot about how far it moves, how fast it turns, and more!
-          </p>
-          <CalibrationChat robotConnected={robotConnected} onAchievement={onAchievement} />
+          <details>
+            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 16 }}>🎓 Teach Your Robot (Calibration)</summary>
+            <p className="section-desc" style={{ marginTop: 8 }}>
+              Have a conversation with the AI to teach your robot about how far it moves, how fast it turns, and more!
+            </p>
+            <CalibrationChat robotConnected={robotConnected} onAchievement={onAchievement} />
+          </details>
         </section>
 
         {/* Notes */}

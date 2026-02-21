@@ -1,4 +1,4 @@
-# mBot Studio 🤖
+# mBot Studio
 
 **AI-Powered Robot Programming for Kids**
 
@@ -9,7 +9,7 @@ A kid-friendly platform that blends block coding with AI-powered natural languag
 1. **Talk to the AI**: Type what you want the robot to do in plain English — *"Make the robot drive in a square"*, *"Do a happy dance!"*
 2. **See the blocks**: The AI generates colorful code blocks that kids can drag, reorder, and modify
 3. **Send to robot**: Upload the program to your mBot2 over WiFi (MQTT) and watch it go!
-4. **Live control**: Switch to Live Mode for real-time commands — directional pad, voice commands, and more
+4. **Live control**: Switch to Live Mode for real-time commands — directional pad, voice commands, hardware controls
 
 ## Architecture
 
@@ -17,26 +17,28 @@ A kid-friendly platform that blends block coding with AI-powered natural languag
 ┌──────────────────────────────┐
 │    Web Interface (React)     │
 │   Chat + Blocks + Controls   │
+│   + Debug REPL + HW Wizard   │
 └──────────────┬───────────────┘
                │ HTTP / WebSocket
 ┌──────────────┴───────────────┐
 │   Backend Server (Node.js)   │
 │  AI Service + MQTT Bridge    │
+│  Code Generator + Bundler    │
 └──────────────┬───────────────┘
                │ MQTT (WiFi)
 ┌──────────────┴───────────────┐
 │     mBot2 (MicroPython)      │
 │  Motors + Sensors + Display  │
+│  Deferred command execution  │
 └──────────────────────────────┘
 ```
 
 ## Prerequisites
 
-- **Node.js** 18+ — [Download](https://nodejs.org/) *(local dev only)*
-- **Docker** — [Download](https://docs.docker.com/get-docker/) *(for containerized deployment)*
+- **Node.js** 18+ — [Download](https://nodejs.org/)
 - **MQTT Broker** — An external [Mosquitto](https://mosquitto.org/) server on your network
-- **Makeblock mLink2** — required for one-time firmware upload from the Setup tab (runs locally on your computer)
-- **GitHub account** with Copilot subscription (for AI features)
+- **Makeblock mLink2** — required for one-time firmware upload (runs locally on your computer)
+- **GitHub account** with Copilot subscription (for AI features via GitHub Models API)
 - **mBot2** with CyberPi (ESP32) and WiFi capability
 
 ## Quick Start
@@ -48,11 +50,7 @@ cd d:\personal\mbot
 npm install
 ```
 
-This installs dependencies for both the server and web frontend (npm workspaces).
-
 ### 2. Configure Environment
-
-Copy the example environment file and fill in your values:
 
 ```bash
 copy .env.example .env
@@ -61,295 +59,221 @@ copy .env.example .env
 Edit `.env`:
 
 ```env
-# Required: Your GitHub personal access token (with Copilot access)
 GITHUB_TOKEN=ghp_your_token_here
-
-# AI model fallback (server auto-selects best available OpenAI model at startup)
 AI_MODEL=openai/gpt-5-chat
 AI_BASE_URL=https://models.github.ai/inference
-
-# MQTT broker — point to your external Mosquitto server
 MQTT_BROKER_URL=mqtt://your-mqtt-server:1883
-
-# Server port
 PORT=3001
-
-# WiFi for the robot (must match your home WiFi)
-WIFI_SSID=YourWiFiName
-WIFI_PASSWORD=YourWiFiPassword
 ```
 
-### 3. Start the Platform (Local Dev)
+### 3. Start the Platform
 
 ```bash
 npm run dev
 ```
 
-This starts both the backend (port 3001) and frontend (port 5173) concurrently.
+This starts both the backend (port 3001) and frontend (port 5173).
 
 Open **http://localhost:5173** in your browser.
 
-### 3b. Live Debug Mode (no cloud AI required)
-
-If the Program tab keeps replying with "Oops! I had trouble thinking about that...", run in local debug mode:
-
-1) In `.env`, set:
-
-```env
-AI_LOCAL_DEBUG=true
-```
-
-2) Start with Node inspector enabled:
-
-```bash
-npm run dev:debug
-```
-
-3) Verify AI mode:
-
-```bash
-curl http://localhost:3001/api/ai/diagnostics
-```
-
-You should see `"localDebug": true` and model `local/debug-rule-engine`.
-
 ### 4. Upload Firmware to mBot2
 
-Use the **Setup** tab (mLink2-based upload). See [firmware/README.md](firmware/README.md) for details.
+1. Connect mBot2 via USB-C
+2. Ensure mLink2 is running on your computer
+3. Go to **Setup** tab → fill in WiFi + MQTT settings → click **Upload Firmware via mLink**
+4. **Full power cycle**: disconnect USB-C, power off, wait 3 seconds, power back on
 
-For implementation/debugging notes on the mLink upload path, see [docs/mlink-upload-notes.md](docs/mlink-upload-notes.md).
-
-## Docker Deployment
-
-The app ships as a single container — the Node.js server serves both the API and the built React frontend.
-
-### Build & Run Locally
-
-```bash
-# Build the image
-docker build -t mbot-studio .
-
-# Run with your .env file
-docker run -d \
-  --name mbot-studio \
-  -p 3001:3001 \
-  --env-file .env \
-  -e DATA_DIR=/app/data \
-  -v mbot-data:/app/data \
-  --restart unless-stopped \
-  mbot-studio
-```
-
-Open **http://your-server-ip:3001** in your browser.
-
-### Using Docker Compose
-
-```bash
-# Make sure .env is configured, then:
-docker compose up -d
-
-# View logs
-docker compose logs -f
-
-# Stop
-docker compose down
-```
-
-### Push to Docker Hub
-
-```bash
-# Tag for your Docker Hub account
-docker tag mbot-studio:latest yourusername/mbot-studio:latest
-
-# Push
-docker push yourusername/mbot-studio:latest
-```
-
-Then on any machine on your network:
-
-```bash
-docker run -d \
-  --name mbot-studio \
-  -p 3001:3001 \
-  -e GITHUB_TOKEN=ghp_your_token \
-  -e MQTT_BROKER_URL=mqtt://your-mqtt-server:1883 \
-  -e DATA_DIR=/app/data \
-  -v mbot-data:/app/data \
-  --restart unless-stopped \
-  yourusername/mbot-studio:latest
-```
-
-### Environment Variables (Docker)
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `GITHUB_TOKEN` | Yes | — | GitHub PAT with Copilot access |
-| `MQTT_BROKER_URL` | Yes | `mqtt://localhost:1883` | Your external Mosquitto server |
-| `AI_MODEL` | No | `openai/gpt-5-chat` | Fallback model if auto-selection is unavailable |
-| `AI_BASE_URL` | No | `https://models.github.ai/inference` | GitHub Models endpoint |
-| `PORT` | No | `3001` | Server port inside container |
-| `DATA_DIR` | No | `/app/data` | Persistent config directory (mount a volume here) |
-| `MQTT_TOPIC_PREFIX` | No | `mbot-studio` | MQTT topic namespace |
-
-### Network Requirements
-
-The Docker container needs to reach:
-- **Your MQTT broker** — the mBot2 and the container must both be able to reach it
-- **GitHub Models API** (`models.github.ai`) — for AI features
-- The mBot2 connects to the MQTT broker directly (not to this container)
-
-```
-Browser ──► Container:3001 ──► MQTT Broker ◄── mBot2
-                              (your server)
-```
+See [firmware/README.md](firmware/README.md) for the complete firmware reference including verified API documentation.
 
 ## Features
 
-### 🗣️ AI Chat Programming
-Type what you want in plain English. The AI generates block programs:
-- *"Drive forward for 3 seconds then turn right"*
-- *"If something is in front, turn around"*
-- *"Play a melody and flash the lights"*
+### Tabs
 
-### 🧩 Visual Block Editor
-- Colorful blocks organized by category (Movement, Sensors, Sound, Display, Control)
-- Drag to reorder, click to delete
-- Loops and conditionals with nesting
-- Always see and edit what the AI generated
+| Tab | Purpose |
+|-----|---------|
+| **Program** | AI chat + visual block editor + code preview |
+| **Live Control** | D-pad, servo/motor port controls, voice commands, telemetry |
+| **Challenges** | Guided coding challenges for kids |
+| **Achievements** | Badge system and progress tracking |
+| **Setup** | Hardware wizard, firmware upload, AI config, calibration |
+| **Debug** | Remote REPL, motor diagnostic, live robot logs |
 
-### 🎮 Live Control Mode
-- D-pad for real-time directional control
-- Natural language live commands (*"go forward slowly"*)
-- Custom hardware buttons (claw, arm, etc.)
-- Live sensor data display
+### AI Chat Programming
+Type what you want in plain English. The AI generates block programs using the robot's hardware config context — it knows about your custom servos, motors, and their named actions.
 
-### ⚙️ Robot Configuration
-- Describe custom hardware in plain English: *"My Rover claw uses two servos on S1 and S2"*
-- AI parses descriptions into structured config
-- Supports DC motors (M1-M4), servos (S1-S4), and mBuild sensors (P1-P4)
+### Visual Block Editor
+27 block types across 7 categories: Movement, Sensors, Sound & Display, Control, Sensors+, Variables, Hardware. All blocks execute end-to-end on the robot.
 
-### 📝 Code Preview
-- See the generated MicroPython code
-- Copy or download for offline use
-- Learn programming concepts by reading the output
+The block palette includes a dynamic **"My Robot"** category that shows named actions from your hardware config (e.g., "Arm Servo: up", "Claw Motor: open").
+
+### Live Control
+- D-pad for drive motor control (forward, backward, turn left/right, stop)
+- Generic servo S1-S4 angle controls and motor M1-M4 FWD/REV/OFF buttons
+- Natural language live commands via AI
+- Live telemetry dashboard
+
+### Hardware Setup Wizard
+Guided step-by-step wizard for adding servos and motors:
+1. Select port (S1-S4 / M1-M4)
+2. Test it live (servo angle slider, motor direction buttons)
+3. Name positions ("up" at 45°, "down" at 120°)
+4. Label and group into assemblies
+5. Review and save
+
+The wizard output feeds directly into AI program generation, the block palette, and live control.
+
+### Debug Terminal
+Remote MicroPython REPL — execute code directly on the robot:
+- Quick command buttons (motors, sensors, LEDs, battery)
+- Motor diagnostic (tests all 5 motor APIs)
+- Live log streaming from the robot
+- Use `rprint()` for output capture
 
 ## Project Structure
 
 ```
 mbot/
-├── package.json          # Root workspace config
-├── .env.example          # Environment template
-├── Dockerfile            # Multi-stage Docker build
-├── docker-compose.yml    # Compose config (external MQTT)
-├── .dockerignore
-├── .gitignore
+├── package.json              # Root workspace config
+├── .env.example              # Environment template
+├── Dockerfile / compose.yml  # Docker deployment
 │
-├── server/               # Backend (Node.js + Express)
-│   ├── package.json
-│   └── src/
-│       ├── index.js          # Server entry point
-│       ├── services/
-│       │   ├── ai-service.js      # GitHub Models AI integration
-│       │   ├── mqtt-service.js    # MQTT broker connection
-│       │   ├── code-generator.js  # Blocks → MicroPython
-│       │   └── websocket.js       # WebSocket real-time bridge
-│       └── routes/
-│           ├── ai.js         # AI chat & generation endpoints
-│           ├── robot.js      # Robot command & program endpoints
-│           └── config.js     # Robot configuration endpoints
+├── server/                   # Backend (Node.js + Express)
+│   ├── src/
+│   │   ├── index.js              # Server entry + WebSocket setup
+│   │   ├── services/
+│   │   │   ├── ai-service.js         # AI program generation + config parsing
+│   │   │   ├── mqtt-service.js       # MQTT broker bridge + hardware state tracking
+│   │   │   ├── code-generator.js     # Blocks → MicroPython code + firmware bundler
+│   │   │   ├── websocket.js          # WebSocket gateway (commands, REPL, diagnostics)
+│   │   │   ├── mlink-bridge.js       # mLink2 JSON-RPC + F3F4 upload protocol
+│   │   │   ├── telemetry-service.js  # Sensor data enrichment
+│   │   │   ├── calibration-service.js# Speed/distance calibration chat
+│   │   │   └── validation.js         # Input validation
+│   │   └── routes/
+│   │       ├── ai.js             # POST /api/ai/generate, /api/ai/chat
+│   │       ├── robot.js          # POST /api/robot/command, /program, /repl, /diagnostic
+│   │       └── config.js         # GET/POST /api/config, firmware upload, mLink bridge
+│   └── robot-config.json        # Saved hardware configuration
 │
-├── web/                  # Frontend (React + Vite)
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── index.html
+├── web/                      # Frontend (React + Vite)
 │   └── src/
-│       ├── main.jsx
-│       ├── App.jsx           # Main app with tabs
+│       ├── App.jsx               # Tab routing, state management
 │       └── components/
-│           ├── Header.jsx        # Navigation & status
-│           ├── ChatPanel.jsx     # AI chat interface
-│           ├── BlocklyEditor.jsx # Visual block editor
-│           ├── CodePreview.jsx   # Python code display
-│           ├── RobotConfig.jsx   # Hardware configuration
-│           ├── LiveControl.jsx   # Real-time robot control
-│           └── StatusBar.jsx     # Connection status
+│           ├── ChatPanel.jsx         # AI conversation interface
+│           ├── BlocklyEditor.jsx     # Visual block editor + config-aware palette
+│           ├── LiveControl.jsx       # D-pad + servo/motor controls + telemetry
+│           ├── DebugTerminal.jsx     # Remote REPL + diagnostics
+│           ├── HardwareWizard.jsx    # Guided hardware setup wizard
+│           ├── RobotConfig.jsx       # Setup page (wizard + AI config + firmware)
+│           ├── FirmwareFlasher.jsx   # mLink firmware upload UI
+│           ├── CodePreview.jsx       # Python code display
+│           ├── Header.jsx            # Navigation + status
+│           └── StatusBar.jsx         # Connection indicator
 │
-└── firmware/             # mBot2 MicroPython firmware
-    ├── main.py               # Entry point
-    ├── config.py             # WiFi/MQTT/hardware settings
-    ├── mqtt_client.py        # MQTT communication
-    ├── motor_controller.py   # Motor & servo control
-    ├── sensor_reader.py      # Sensor reading
-    └── command_handler.py    # Command dispatch
+├── firmware/                 # mBot2 MicroPython firmware
+│   ├── main.py                   # Entry point + main loop + deferred execution
+│   ├── mbot_config.py            # WiFi/MQTT/hardware constants
+│   ├── mbot_mqtt.py              # MQTT client + subscriptions
+│   ├── mbot_motor.py             # Motor/servo control + estop polling
+│   ├── mbot_sensor.py            # Sensors via mbuild + cyberpi
+│   ├── mbot_commands.py          # Command dispatch (24 types) + variables
+│   ├── mbot_dashboard.py         # CyberPi screen display
+│   └── test_motors.py            # Standalone motor test (recovery firmware)
+│
+└── docs/                     # Technical documentation
+    ├── mlink-upload-notes.md     # mLink2 investigation notes (historical)
+    └── upload-investigation.md   # F3F4 upload protocol specification (authoritative)
 ```
-
-## Getting a GitHub Token
-
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
-2. Click **"Generate new token (classic)"**
-3. Give it a name like "mBot Studio"
-4. Select scopes: `read:user` (and `copilot` if available)
-5. Copy the token into your `.env` file
-
-> **Note**: You need an active GitHub Copilot subscription. The platform uses the GitHub Models API which is available to Copilot subscribers.
 
 ## MQTT Topics
 
 | Topic | Direction | Purpose |
 |-------|-----------|---------|
-| `mbot-studio/robot/command` | Server → Robot | Single live command |
-| `mbot-studio/robot/program` | Server → Robot | Full block program |
-| `mbot-studio/robot/emergency` | Server → Robot | Emergency stop |
+| `mbot-studio/robot/command` | Server → Robot | Single command (deferred to main loop) |
+| `mbot-studio/robot/program` | Server → Robot | Full block program array (deferred) |
+| `mbot-studio/robot/emergency` | Server → Robot | Emergency stop (sets flag only) |
+| `mbot-studio/robot/repl` | Server → Robot | REPL code execution (deferred) |
 | `mbot-studio/robot/config` | Server → Robot | Hardware config update |
-| `mbot-studio/robot/status` | Robot → Server | Connection/run status |
-| `mbot-studio/robot/sensors` | Robot → Server | Sensor readings |
+| `mbot-studio/robot/status` | Robot → Server | Heartbeat + state (ready/running/idle) |
+| `mbot-studio/robot/sensors` | Robot → Server | Periodic sensor readings |
 | `mbot-studio/robot/log` | Robot → Server | Debug log messages |
+| `mbot-studio/robot/repl/result` | Robot → Server | REPL execution results |
 
 ## Supported Block Types
 
 | Category | Blocks |
 |----------|--------|
 | **Movement** | `move_forward`, `move_backward`, `turn_left`, `turn_right`, `stop`, `set_speed` |
-| **Sensors** | `if_obstacle`, `if_line`, `read_distance`, `read_color` |
-| **Sound** | `play_sound`, `play_tone`, `say_text` |
-| **Display** | `show_text`, `show_image`, `set_led` |
-| **Control** | `wait`, `repeat`, `if_then` |
-| **Hardware** | `dc_motor`, `servo_set`, `custom_action` |
+| **Sensors** | `if_obstacle`, `if_line`, `if_color`, `if_sensor_range`, `display_value` |
+| **Sound & Display** | `play_tone`, `play_melody`, `display_text`, `display_image`, `say`, `set_led` |
+| **Control** | `wait`, `repeat`, `repeat_forever`, `if_button`, `while_sensor`, `move_until` |
+| **Variables** | `set_variable`, `change_variable`, `math_operation` |
+| **Hardware** | `dc_motor`, `servo` |
+
+All 27 block types are supported end-to-end: UI → AI → code generator → firmware dispatch.
+
+## Firmware Upload Protocol
+
+The firmware is uploaded via the F3F4 binary protocol through mLink2's `data-channel` serial bridge. See [docs/upload-investigation.md](docs/upload-investigation.md) for the complete protocol specification including frame format, file transfer sub-protocol, and mode switching.
+
+Key points:
+- Files are bundled into a single `main.py` and written to `/flash/_xx_main.py`
+- The server reads firmware files fresh from disk on each upload (no caching)
+- Full power cycle is required after upload for new code to take effect
+- Do NOT write to `/flash/main.py` — it conflicts with CyberPi boot
+
+## Docker Deployment
+
+```bash
+docker build -t mbot-studio .
+docker run -d --name mbot-studio -p 3001:3001 --env-file .env mbot-studio
+```
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GITHUB_TOKEN` | Yes | — | GitHub PAT with Copilot access |
+| `MQTT_BROKER_URL` | Yes | `mqtt://localhost:1883` | Mosquitto server |
+| `AI_MODEL` | No | `openai/gpt-5-chat` | AI model |
+| `PORT` | No | `3001` | Server port |
+| `DATA_DIR` | No | `/app/data` | Config persistence directory |
+| `MQTT_TOPIC_PREFIX` | No | `mbot-studio` | MQTT topic namespace |
+
+## Getting a GitHub Token
+
+1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
+2. Click **"Generate new token (classic)"**
+3. Select scopes: `read:user` (and `copilot` if available)
+4. Copy the token into `.env`
+
+Requires an active GitHub Copilot subscription for the GitHub Models API.
 
 ## Troubleshooting
 
-### "Cannot connect to MQTT"
-- Verify your MQTT broker is running on the network
-- Check `MQTT_BROKER_URL` in `.env` points to the right host and port
-- From the Docker host, test: `mosquitto_pub -h your-mqtt-server -t test -m hello`
-- If running in Docker, make sure the container can reach the broker (not `localhost`)
+### Robot doesn't move (commands received on screen)
+All motor commands must execute from the main loop, not inside MQTT callbacks (ESP32 recursion limit). The firmware uses deferred execution — if this breaks, commands are received but silently fail.
 
-### "AI not responding"  
-- Verify your `GITHUB_TOKEN` is valid and not expired
-- Check you have an active Copilot subscription
-- Test the token: `curl -H "Authorization: Bearer YOUR_TOKEN" https://models.inference.ai.azure.com/models`
-- For offline local debugging, set `AI_LOCAL_DEBUG=true` and use `npm run dev:debug`
-- Check runtime diagnostics: `GET /api/ai/diagnostics`
+### Black screen after firmware flash
+Writing to `/flash/main.py` conflicts with CyberPi boot. Use "Test Motors Only" button to recover, then reflash. The upload must write to `/flash/_xx_main.py` only.
 
-### "Robot not connecting"
-- Ensure the robot and computer are on the same WiFi network
-- Check `firmware/config.py` has the correct WiFi credentials
-- Press button B on CyberPi to see connection status
+### Firmware changes not taking effect
+1. The server reads firmware files fresh from disk (no restart needed)
+2. But the CyberPi requires a **full power cycle** (disconnect USB-C + power off) after flash
+3. Verify the bundle content via the server log: `[upload] Bundle check — has __builtins__: false`
 
-### "Blocks not generating"
-- Check the browser console for errors (F12)
-- Verify the backend is running on port 3001
-- Try refreshing the page
+### MQTT connection drops after diagnostic/command
+Long-running operations (diagnostics, programs) must be deferred to the main loop. Running them inside the MQTT callback blocks `check_msg()` and causes keepalive timeout.
+
+### "maximum recursion depth exceeded"
+Code is running too deep in the call stack. The CyberPi has ~20 frame limit. Use the deferred execution pattern: callback sets a flag, main loop executes.
 
 ## For Parents
 
-This platform is designed to be safe and educational:
 - **No internet content** — AI only generates robot programs
-- **No data collection** — everything runs on your own server/network
-- **Emergency stop** — press the big red button or CyberPi button A anytime
-- **Safe defaults** — motor speeds are capped, obstacle detection is built-in
+- **No data collection** — everything runs on your own network
+- **Emergency stop** — red button in UI or Button A on robot
+- **Safe defaults** — motor speeds capped at 80%, obstacle detection built-in
 - **Learning tool** — kids see real Python code generated from their ideas
 
 ## License
 
-MIT — Built with ❤️ for young makers
+MIT

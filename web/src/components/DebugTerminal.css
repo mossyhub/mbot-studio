@@ -1,0 +1,163 @@
+.debug-terminal {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.debug-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.debug-section {
+  background: var(--card-bg, #f8f9fa);
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-color, #e0e0e0);
+}
+
+.debug-section h3 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.debug-hint {
+  font-size: 11px;
+  color: var(--text-muted, #666);
+  margin: 0 0 8px 0;
+  line-height: 1.4;
+}
+
+.quick-commands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.quick-commands .btn-small {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.debug-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.debug-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #1e1e2e;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-color, #e0e0e0);
+}
+
+.debug-output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.debug-empty {
+  color: #888;
+  padding: 20px 0;
+}
+
+.debug-empty p {
+  margin: 4px 0;
+}
+
+.debug-line {
+  display: flex;
+  gap: 4px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.debug-time {
+  color: #555;
+  font-size: 10px;
+  flex-shrink: 0;
+  min-width: 70px;
+}
+
+.debug-prefix {
+  color: #888;
+  flex-shrink: 0;
+}
+
+.debug-text {
+  flex: 1;
+}
+
+.debug-input { color: #89b4fa; }
+.debug-input .debug-prefix { color: #89b4fa; }
+.debug-result { color: #a6e3a1; }
+.debug-error { color: #f38ba8; }
+.debug-error .debug-prefix { color: #f38ba8; font-weight: bold; }
+.debug-log { color: #cdd6f4; }
+.debug-log .debug-prefix { color: #fab387; }
+.debug-system { color: #7f849c; font-style: italic; }
+.debug-status { color: #94e2d5; }
+
+.debug-input-area {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #181825;
+  border-top: 1px solid #313244;
+}
+
+.debug-prompt {
+  color: #89b4fa;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 13px;
+  padding-top: 6px;
+  flex-shrink: 0;
+}
+
+.debug-input-area .debug-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #cdd6f4;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 13px;
+  resize: none;
+  outline: none;
+  padding: 4px 0;
+  line-height: 1.5;
+}
+
+.debug-input-area .debug-input::placeholder {
+  color: #585b70;
+}
+
+.debug-send-btn {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.debug-clear-btn {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}

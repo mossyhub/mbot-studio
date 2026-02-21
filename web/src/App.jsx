@@ -10,6 +10,7 @@ import Celebrations from './components/Celebrations.jsx';
 import Achievements from './components/Achievements.jsx';
 import Challenges from './components/Challenges.jsx';
 import TemplateGallery from './components/TemplateGallery.jsx';
+import DebugTerminal from './components/DebugTerminal.jsx';
 import { playProgramSent, playSuccess, playError, playStop, playConnect, playDisconnect, playClick, playAchievement, playCelebration, isMuted, setMuted } from './services/sound-service';
 import { checkProgramAchievements, tryEarnBadge, incrementStat, getProgress, setAchievementsProfile } from './services/achievements';
 import './App.css';
@@ -20,6 +21,7 @@ const TABS = {
   CHALLENGES: 'challenges',
   ACHIEVEMENTS: 'achievements',
   CONFIG: 'config',
+  DEBUG: 'debug',
 };
 
 const PROFILES_KEY = 'mbot-studio-profiles';
@@ -455,9 +457,16 @@ export default function App() {
   }, []);
 
   const handleChallengeLoadProgram = useCallback((challenge) => {
-    // Switch to program tab so they can code the challenge
     setActiveTab(TABS.PROGRAM);
     playClick();
+    // Pre-fill the chat with the challenge prompt so AI generates a starting point
+    const prompt = challenge.prompt || challenge.description;
+    if (prompt) {
+      setMessages(prev => [
+        ...prev,
+        { role: 'user', content: `Challenge: ${challenge.title}\n${prompt}` },
+      ]);
+    }
   }, []);
 
   const handleChallengeCelebration = useCallback((badge) => {
@@ -655,6 +664,10 @@ export default function App() {
             robotConnected={robotStatus.connected}
             onAchievement={handleAchievement}
           />
+        )}
+
+        {activeTab === TABS.DEBUG && (
+          <DebugTerminal robotConnected={robotStatus.connected} />
         )}
       </div>
 

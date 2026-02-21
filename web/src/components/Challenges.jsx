@@ -15,6 +15,7 @@ const CHALLENGES = [
     category: 'beginner',
     icon: '🚗',
     stars: 1,
+    prompt: 'Make the robot drive forward for 2 seconds',
   },
   {
     id: 'ch_square',
@@ -24,6 +25,7 @@ const CHALLENGES = [
     category: 'beginner',
     icon: '⬜',
     stars: 2,
+    prompt: 'Drive in a square: repeat 4 times forward 2 seconds then turn right 90 degrees',
   },
   {
     id: 'ch_spiral',
@@ -33,6 +35,7 @@ const CHALLENGES = [
     category: 'beginner',
     icon: '🌀',
     stars: 2,
+    prompt: 'Drive in a spiral: forward 1 second turn right, forward 2 seconds turn right, forward 3 seconds turn right, forward 4 seconds turn right',
   },
   {
     id: 'ch_figure8',
@@ -42,6 +45,7 @@ const CHALLENGES = [
     category: 'beginner',
     icon: '♾️',
     stars: 3,
+    prompt: 'Drive in a figure 8: turn left in a circle, then turn right in a circle',
   },
 
   // === Intermediate: Sensors ===
@@ -53,6 +57,7 @@ const CHALLENGES = [
     category: 'intermediate',
     icon: '🧱',
     stars: 2,
+    prompt: 'Repeat forever: if obstacle closer than 20cm turn right 90 degrees, else drive forward',
   },
   {
     id: 'ch_line_follow',
@@ -62,6 +67,7 @@ const CHALLENGES = [
     category: 'intermediate',
     icon: '➖',
     stars: 3,
+    prompt: 'Follow a black line: repeat forever, if line detected drive forward, else turn right slowly to find the line',
   },
   {
     id: 'ch_guard',
@@ -71,6 +77,7 @@ const CHALLENGES = [
     category: 'intermediate',
     icon: '🛡️',
     stars: 2,
+    prompt: 'Guard robot: repeat forever, if obstacle closer than 30cm play a loud alarm tone and flash red LEDs, else show green LEDs',
   },
   {
     id: 'ch_color_sort',
@@ -80,6 +87,7 @@ const CHALLENGES = [
     category: 'intermediate',
     icon: '🎨',
     stars: 3,
+    prompt: 'Drive forward slowly in a loop. If color sensor sees red, display "RED!" and set LEDs red. If green, display "GREEN!" and set LEDs green. If blue, display "BLUE!" and set LEDs blue.',
   },
 
   // === Creative ===
@@ -91,6 +99,7 @@ const CHALLENGES = [
     category: 'creative',
     icon: '💃',
     stars: 2,
+    prompt: 'Create a fun dance: forward, spin right, backward, spin left, beep, flash LEDs different colors between each move',
   },
   {
     id: 'ch_song',
@@ -100,6 +109,7 @@ const CHALLENGES = [
     category: 'creative',
     icon: '🎵',
     stars: 3,
+    prompt: 'Play Twinkle Twinkle Little Star using play_tone blocks with the right musical notes',
   },
   {
     id: 'ch_emotions',
@@ -109,6 +119,7 @@ const CHALLENGES = [
     category: 'creative',
     icon: '🎭',
     stars: 3,
+    prompt: 'Express 3 emotions: Happy (green LEDs, happy face, spin around, high tone), Sad (blue LEDs, sad face, slow backward, low tone), Excited (rainbow LEDs, fast spins, beeping)',
   },
   {
     id: 'ch_story',
@@ -118,6 +129,69 @@ const CHALLENGES = [
     category: 'creative',
     icon: '📖',
     stars: 3,
+    prompt: 'Tell a story in 4 scenes: Scene 1 display "Once upon a time..." and drive forward. Scene 2 display "A dragon appeared!" and flash red LEDs. Scene 3 display "The hero fought!" and spin. Scene 4 display "The end!" and play a victory melody.',
+  },
+
+  // === Hardware ===
+  {
+    id: 'ch_led_party',
+    title: 'Light Show',
+    description: 'Create a flashing LED light show with at least 3 different colors.',
+    hint: 'Use set_led blocks with wait blocks between color changes. Try red, green, blue, purple!',
+    category: 'creative',
+    icon: '💡',
+    stars: 1,
+    prompt: 'Create a light show that cycles through red, green, blue, and purple LEDs with waits between each',
+  },
+  {
+    id: 'ch_servo_wave',
+    title: 'Robot Wave',
+    description: 'Make the robot wave its arm up and down 3 times using a servo.',
+    hint: 'Use a servo block with different angles in a repeat loop. Try 45° for up and 120° for down.',
+    category: 'beginner',
+    icon: '👋',
+    stars: 2,
+    prompt: 'Make the robot wave by moving servo S1 between 45 degrees (up) and 120 degrees (down) 3 times with waits',
+  },
+  {
+    id: 'ch_claw_grab',
+    title: 'Grab & Go',
+    description: 'Drive forward, grab something with the claw motor, drive backward, then release.',
+    hint: 'Drive forward, run DC motor forward to close claw, drive backward, run DC motor reverse to open.',
+    category: 'intermediate',
+    icon: '🤏',
+    stars: 2,
+    prompt: 'Drive forward for 2 seconds, close the claw by running DC motor M3 forward, drive backward for 2 seconds, then open the claw by running DC motor M3 in reverse',
+  },
+  {
+    id: 'ch_counter',
+    title: 'Lap Counter',
+    description: 'Drive in a circle 5 times, counting and displaying the lap number each time.',
+    hint: 'Use set_variable for counter, repeat 5 times, change_variable by 1 each lap, display_value to show it.',
+    category: 'intermediate',
+    icon: '🔢',
+    stars: 2,
+    prompt: 'Set a variable called lap to 0, then repeat 5 times: add 1 to lap, display the lap number on screen, drive in a small circle, then wait 1 second',
+  },
+  {
+    id: 'ch_distance_display',
+    title: 'Distance Dashboard',
+    description: 'Show the live distance sensor reading on the screen while driving forward slowly.',
+    hint: 'Use a repeat loop with display_value (distance sensor) and slow forward movement.',
+    category: 'beginner',
+    icon: '📏',
+    stars: 1,
+    prompt: 'Drive forward slowly while showing the distance sensor reading on the screen. Stop if something is closer than 10cm.',
+  },
+  {
+    id: 'ch_mood_ring',
+    title: 'Mood Ring Robot',
+    description: 'Change LED color based on how close things are: green (far), yellow (medium), red (close).',
+    hint: 'Use if_sensor_range blocks with distance sensor to set LEDs to different colors based on distance.',
+    category: 'advanced',
+    icon: '💎',
+    stars: 3,
+    prompt: 'Make the robot a mood ring: in a forever loop, if distance is greater than 50 set LEDs green, if between 20 and 50 set yellow, if less than 20 set red',
   },
 
   // === Advanced ===
@@ -129,6 +203,7 @@ const CHALLENGES = [
     category: 'advanced',
     icon: '🏁',
     stars: 3,
+    prompt: 'Navigate a maze: repeat forever, if obstacle closer than 15cm turn right 90 degrees, else drive forward',
   },
   {
     id: 'ch_timer',
@@ -138,6 +213,7 @@ const CHALLENGES = [
     category: 'advanced',
     icon: '⏱️',
     stars: 3,
+    prompt: 'Drive forward at full speed for 3 seconds then stop and display "Done!" on screen',
   },
   {
     id: 'ch_clap',
@@ -147,6 +223,7 @@ const CHALLENGES = [
     category: 'advanced',
     icon: '👏',
     stars: 3,
+    prompt: 'Repeat forever: wait until loudness is greater than 50, drive forward for 2 seconds, then stop and wait until loudness is greater than 50 again',
   },
   {
     id: 'ch_explorer',
@@ -156,6 +233,7 @@ const CHALLENGES = [
     category: 'advanced',
     icon: '🗺️',
     stars: 3,
+    prompt: 'Explore the room: repeat forever, drive forward until obstacle is closer than 15cm, then turn right a random angle between 90 and 180 degrees',
   },
 ];
 

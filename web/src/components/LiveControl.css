@@ -9,27 +9,67 @@
   overflow-y: auto;
 }
 
+.live-hw-panel {
+  width: 260px;
+  flex-shrink: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.live-hw-panel .panel-header {
+  padding: 8px 12px;
+}
+
+.live-hw-panel .panel-header h2 {
+  font-size: 13px;
+}
+
+.hw-port-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 12px 8px;
+}
+
+.hw-port-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hw-port-label {
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 24px;
+  flex-shrink: 0;
+}
+
+.hw-port-row .btn-small {
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
 .live-log-panel {
-  width: 360px;
+  width: 320px;
   flex-shrink: 0;
 }
 
 /* === Command Area === */
 .live-command-area {
-  padding: 16px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--color-border);
 }
 
 .live-command-area h3 {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--color-text);
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .live-subtext {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--color-text-light);
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .live-input-row {
@@ -51,89 +91,95 @@
 
 /* === Direction Pad === */
 .direction-pad {
-  padding: 16px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--color-border);
 }
 
 .direction-pad h3 {
-  font-size: 14px;
-  margin-bottom: 12px;
+  font-size: 13px;
+  margin-bottom: 6px;
 }
 
 .dpad {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  max-width: 220px;
+  gap: 3px;
+  max-width: 180px;
   margin: 0 auto;
 }
 
 .dpad-row {
   display: flex;
-  gap: 4px;
+  gap: 3px;
 }
 
 .dpad-btn {
-  width: 64px;
-  height: 64px;
-  border-radius: 12px;
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
   background: var(--color-primary);
   color: white;
-  font-size: 24px;
+  font-size: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: none;
-  box-shadow: 0 3px 0 var(--color-primary-dark);
+  box-shadow: 0 2px 0 var(--color-primary-dark);
   transition: all 0.1s;
 }
 
 .dpad-btn:active {
-  transform: translateY(3px);
+  transform: translateY(2px);
   box-shadow: none;
 }
 
 .dpad-stop {
   background: var(--color-danger);
-  box-shadow: 0 3px 0 #b91c1c;
+  box-shadow: 0 2px 0 #b91c1c;
   border-radius: 50%;
 }
 
 .dpad-spacer {
-  width: 64px;
-  height: 64px;
+  width: 52px;
+  height: 52px;
 }
 
-/* === Custom Hardware Controls === */
+/* === Hardware Port Controls === */
 .custom-controls {
-  padding: 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--color-border);
 }
 
 .custom-controls h3 {
-  font-size: 14px;
-  margin-bottom: 12px;
+  font-size: 13px;
+  margin-bottom: 4px;
 }
 
 .custom-buttons {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 3px;
 }
 
 .custom-control-group {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
 }
 
 .custom-label {
-  font-size: 14px;
-  font-weight: 600;
-  min-width: 120px;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 28px;
+  flex-shrink: 0;
+}
+
+.custom-control-group .btn-small {
+  padding: 2px 6px;
+  font-size: 11px;
 }
 
 /* === Sensor Display === */

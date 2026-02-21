@@ -206,6 +206,12 @@ export default function Header({
         >
           ⚙️ Setup
         </button>
+        <button
+          className={`tab ${activeTab === 'debug' ? 'tab-active' : ''}`}
+          onClick={() => onTabChange('debug')}
+        >
+          🔧 Debug
+        </button>
       </nav>
 
       <div className="header-right">

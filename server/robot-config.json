@@ -4,73 +4,70 @@
     {
       "port": "S1",
       "type": "servo",
-      "label": "Left Claw Servo",
-      "description": "Left half of the Rover claw gripper. Works together with S2.",
-      "partOf": "Rover Claw",
-      "purpose": "Moves the left side of the claw to open and close the gripper.",
-      "orientation": "horizontal",
+      "label": "Arm Servo",
+      "partOf": "Robot Arm",
+      "purpose": "Straight out and On the ground and All the way up the Arm Servo",
+      "orientation": "vertical",
       "feedbackType": "position",
       "states": [
-        "open",
-        "closed"
+        "straight out",
+        "on the ground",
+        "all the way up"
       ],
-      "homeState": "open",
+      "homeState": "straight out",
       "stallBehavior": "safe",
       "actions": [
         {
-          "name": "open",
-          "targetState": "open",
-          "angle": 30,
-          "description": "Set left claw servo to open position."
+          "name": "straight out",
+          "targetState": "straight out",
+          "angle": 90
         },
         {
-          "name": "close",
-          "targetState": "closed",
-          "angle": 95,
-          "description": "Set left claw servo to closed position."
+          "name": "on the ground",
+          "targetState": "on the ground",
+          "angle": 53
+        },
+        {
+          "name": "all the way up",
+          "targetState": "all the way up",
+          "angle": 140
         }
-      ],
-      "settings": {
-        "defaultOpenAngle": 30,
-        "defaultClosedAngle": 95
-      }
+      ]
     },
     {
-      "port": "S2",
-      "type": "servo",
-      "label": "Right Claw Servo",
-      "description": "Right half of the Rover claw gripper. Works together with S1.",
-      "partOf": "Rover Claw",
-      "purpose": "Moves the right side of the claw to open and close the gripper.",
-      "orientation": "horizontal",
-      "feedbackType": "position",
+      "port": "M1",
+      "type": "dc_motor",
+      "label": "Claw Motor",
+      "partOf": "Robot Arm",
+      "purpose": "Closed and Opened the Claw Motor",
+      "motorStyle": "gripper",
+      "feedbackType": "none",
       "states": [
-        "open",
-        "closed"
+        "closed",
+        "opened"
       ],
-      "homeState": "open",
+      "homeState": "opened",
       "stallBehavior": "safe",
       "actions": [
         {
-          "name": "open",
-          "targetState": "open",
-          "angle": 150,
-          "description": "Set right claw servo to open position."
+          "name": "closed",
+          "targetState": "closed",
+          "motorDirection": "forward",
+          "speed": 70,
+          "duration": 4.6
         },
         {
-          "name": "close",
-          "targetState": "closed",
-          "angle": 85,
-          "description": "Set right claw servo to closed position."
+          "name": "opened",
+          "targetState": "opened",
+          "motorDirection": "reverse",
+          "speed": 70,
+          "duration": 4.6
         }
-      ],
-      "settings": {
-        "defaultOpenAngle": 150,
-        "defaultClosedAngle": 85
-      }
+      ]
     }
   ],
+  "turnMultiplier": 2.06,
   "notes": "Default profile for mBot2 Rover two-servo claw.",
   "createdAt": "2026-02-13T05:42:36.178Z",
-  "updatedAt": "2026-02-13T05:42:52.751Z"
+  "updatedAt": "2026-02-21T22:03:59.311Z"
 }

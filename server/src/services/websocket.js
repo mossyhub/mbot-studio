@@ -1,5 +1,20 @@
 import { MqttService } from './mqtt-service.js';
 import { TelemetryService } from './telemetry-service.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CONFIG_PATH = path.join(__dirname, '../..', 'robot-config.json');
+
+function getTurnMultiplier() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    return cfg.turnMultiplier || 1;
+  } catch {
+    return 1;
+  }
+}
 
 const wsClients = new Set();
 
@@ -75,14 +90,22 @@ function handleWebSocketMessage(ws, msg) {
   const mqtt = MqttService.getInstance();
 
   switch (msg.type) {
-    case 'command':
-      // Forward command to robot via MQTT
-      if (mqtt.sendCommand(msg.command)) {
-        ws.send(JSON.stringify({ type: 'ack', command: msg.command.type }));
+    case 'command': {
+      // Apply turn multiplier if this is a turn command
+      let cmd = msg.command;
+      if ((cmd.type === 'turn_left' || cmd.type === 'turn_right') && cmd.angle) {
+        const mult = getTurnMultiplier();
+        if (mult !== 1) {
+          cmd = { ...cmd, angle: Math.round(cmd.angle * mult) };
+        }
+      }
+      if (mqtt.sendCommand(cmd)) {
+        ws.send(JSON.stringify({ type: 'ack', command: cmd.type }));
       } else {
         ws.send(JSON.stringify({ type: 'error', message: 'Robot not connected' }));
       }
       break;
+    }
 
     case 'emergency_stop':
       mqtt.emergencyStop();
@@ -91,6 +114,20 @@ function handleWebSocketMessage(ws, msg) {
 
     case 'request_sensors':
       mqtt.requestSensors();
+      break;
+
+    case 'repl':
+      // Forward REPL code to robot via MQTT
+      if (msg.code) {
+        const replId = msg.id || `repl_${Date.now()}`;
+        mqtt.sendRepl(msg.code, replId);
+        ws.send(JSON.stringify({ type: 'repl_ack', id: replId }));
+      }
+      break;
+
+    case 'diagnostic':
+      mqtt.sendDiagnostic();
+      ws.send(JSON.stringify({ type: 'ack', command: 'run_diagnostic' }));
       break;
 
     case 'ping':

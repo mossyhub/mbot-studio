@@ -96,6 +96,7 @@ class MqttHandler:
                 MQTT_TOPIC_PREFIX + "/robot/command",
                 MQTT_TOPIC_PREFIX + "/robot/program",
                 MQTT_TOPIC_PREFIX + "/robot/emergency",
+                MQTT_TOPIC_PREFIX + "/robot/repl",
             ]
             for topic in topics:
                 if USING_UMQTT:
@@ -149,6 +150,14 @@ class MqttHandler:
                             cyberpi.display.show_label("CB ERR:\n" + str(e)[:40], 10, "center", index=0)
                         except:
                             pass
+            elif short == "robot/repl":
+                # Forward to on_command with type=repl_exec
+                if self.on_command:
+                    try:
+                        data["type"] = "repl_exec"
+                        self.on_command(data)
+                    except Exception as e:
+                        print("REPL cb err:", e)
             elif short == "robot/program":
                 program = data.get("program", [])
                 if program and self.on_program:

@@ -1,5 +1,6 @@
 import mbot2
 import cyberpi
+import mbuild
 
 
 class SensorReader:
@@ -13,8 +14,7 @@ class SensorReader:
         except:
             data["distance"] = -1
         try:
-            data["line_left"] = mbot2.line_follower.get_line(1)
-            data["line_right"] = mbot2.line_follower.get_line(2)
+            data["line_status"] = mbuild.dual_rgb_sensor.get_line_sta()
         except:
             pass
         try:
@@ -25,11 +25,19 @@ class SensorReader:
             data["loudness"] = cyberpi.get_loudness()
         except:
             pass
+        try:
+            data["brightness"] = cyberpi.get_brightness()
+        except:
+            pass
+        try:
+            data["yaw"] = cyberpi.get_yaw()
+        except:
+            pass
         return data
 
     def get_distance(self):
         try:
-            d = mbot2.ultrasonic2.get_distance()
+            d = mbuild.ultrasonic2.get()
             return round(d, 1) if d else 999
         except:
             return -1
@@ -38,9 +46,74 @@ class SensorReader:
         d = self.get_distance()
         return 0 < d < threshold
 
-    def is_line(self, sensor="left", color="black"):
+    def get_line_status(self):
         try:
-            v = mbot2.line_follower.get_line(1 if sensor == "left" else 2)
+            return mbuild.dual_rgb_sensor.get_line_sta()
         except:
-            v = -1
-        return v < 50 if color == "black" else v > 50
+            return -1
+
+    def is_line(self, sensor="left"):
+        try:
+            return mbuild.dual_rgb_sensor.is_line()
+        except:
+            return False
+
+    def is_background(self):
+        try:
+            return mbuild.dual_rgb_sensor.is_background()
+        except:
+            return False
+
+    def get_line_offset(self):
+        try:
+            return mbuild.dual_rgb_sensor.get_offset_track()
+        except:
+            return 0
+
+    def get_color(self, port="L1"):
+        try:
+            return mbuild.quad_rgb_sensor.get_color(port)
+        except:
+            try:
+                return mbuild.dual_rgb_sensor.get_color()
+            except:
+                return "unknown"
+
+    def is_color(self, color, port="L1"):
+        try:
+            return mbuild.quad_rgb_sensor.is_color(color, port)
+        except:
+            try:
+                return mbuild.dual_rgb_sensor.is_color(color)
+            except:
+                return False
+
+    def get_brightness(self):
+        try:
+            return cyberpi.get_brightness()
+        except:
+            return 0
+
+    def get_loudness(self):
+        try:
+            return cyberpi.get_loudness()
+        except:
+            return 0
+
+    def get_yaw(self):
+        try:
+            return cyberpi.get_yaw()
+        except:
+            return 0
+
+    def get_pitch(self):
+        try:
+            return cyberpi.get_pitch()
+        except:
+            return 0
+
+    def get_roll(self):
+        try:
+            return cyberpi.get_roll()
+        except:
+            return 0

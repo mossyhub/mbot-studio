@@ -1,5 +1,7 @@
 # mLink upload (how it works + what we learned)
 
+> **Historical document.** This covers the early investigation phase. The initial approach described here (script packets) was found to be broken. The **authoritative working solution** is the F3F4 binary protocol documented in [upload-investigation.md](upload-investigation.md). Read that document for the current implementation.
+
 This document is a “paper trail” of how the CyberPi firmware upload flow in this repo was made reliable using **mLink2**.
 
 ## Scope / goal

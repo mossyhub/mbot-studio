@@ -415,113 +415,45 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
           </div>
         </div>
 
-        {/* Custom Hardware Quick Controls */}
-        {robotConfig?.additions?.length > 0 && (
-          <div className="custom-controls">
-            <h3>Custom Hardware</h3>
-            <div className="custom-buttons">
-              {robotConfig.additions.map((hw, i) => {
-                if (hw.actions && hw.actions.length > 0) {
-                  return (
-                    <div key={i} className="custom-control-group">
-                      <span className="custom-label">{hw.type === 'servo' ? '🦾' : '⚡'} {hw.label || `${hw.type} ${hw.port}`}</span>
-                      {hw.actions.map((action, idx) => {
-                        if (!action?.name) return null;
-
-                        const command = hw.type === 'servo'
-                          ? { type: 'servo', port: hw.port, angle: action.angle ?? 90 }
-                          : {
-                              type: 'dc_motor',
-                              port: hw.port,
-                              speed: (action.motorDirection || 'forward') === 'reverse' ? -(action.speed ?? 50) : (action.speed ?? 50),
-                              duration: action.duration ?? 0.5,
-                            };
-
-                        return (
-                          <button
-                            key={`${hw.port}_action_${idx}`}
-                            className="btn-small btn-primary"
-                            onClick={() => enqueueDirectCommand(command)}
-                            title={action.description || action.name}
-                          >
-                            {action.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                }
-
-                if (hw.type === 'dc_motor') {
-                  return (
-                    <div key={i} className="custom-control-group">
-                      <span className="custom-label">⚡ {hw.label || `Motor ${hw.port}`}</span>
-                      <button
-                        className="btn-small btn-success"
-                        onClick={() => enqueueDirectCommand({ type: 'dc_motor', port: hw.port, speed: 70, duration: 1 })}
-                      >
-                        ▶️ On
-                      </button>
-                      <button
-                        className="btn-small btn-secondary"
-                        onClick={() => enqueueDirectCommand({ type: 'dc_motor', port: hw.port, speed: -70, duration: 1 })}
-                      >
-                        ◀️ Reverse
-                      </button>
-                      <button
-                        className="btn-small btn-danger"
-                        onClick={() => enqueueDirectCommand({ type: 'dc_motor', port: hw.port, speed: 0, duration: 0 })}
-                      >
-                        ⏹️ Off
-                      </button>
-                    </div>
-                  );
-                }
-                if (hw.type === 'servo') {
-                  return (
-                    <div key={i} className="custom-control-group">
-                      <span className="custom-label">🦾 {hw.label || `Servo ${hw.port}`}</span>
-                      <button
-                        className="btn-small btn-secondary"
-                        onClick={() => enqueueDirectCommand({ type: 'servo', port: hw.port, angle: 0 })}
-                      >
-                        0°
-                      </button>
-                      <button
-                        className="btn-small btn-secondary"
-                        onClick={() => enqueueDirectCommand({ type: 'servo', port: hw.port, angle: 45 })}
-                      >
-                        45°
-                      </button>
-                      <button
-                        className="btn-small btn-primary"
-                        onClick={() => enqueueDirectCommand({ type: 'servo', port: hw.port, angle: 90 })}
-                      >
-                        90°
-                      </button>
-                      <button
-                        className="btn-small btn-secondary"
-                        onClick={() => enqueueDirectCommand({ type: 'servo', port: hw.port, angle: 135 })}
-                      >
-                        135°
-                      </button>
-                      <button
-                        className="btn-small btn-secondary"
-                        onClick={() => enqueueDirectCommand({ type: 'servo', port: hw.port, angle: 180 })}
-                      >
-                        180°
-                      </button>
-                    </div>
-                  );
-                }
-                return null;
-              })}
-            </div>
-          </div>
-        )}
-
         {/* Live Telemetry Dashboard */}
         <TelemetryPanel wsRef={wsRef} robotConnected={robotConnected} />
+      </div>
+
+      {/* Middle: Hardware Ports */}
+      <div className="live-hw-panel panel">
+        <div className="panel-header">
+          <h2>Servo Ports</h2>
+        </div>
+        <div className="hw-port-list">
+          {['S1', 'S2', 'S3', 'S4'].map((port) => (
+            <div key={port} className="hw-port-row">
+              <span className="hw-port-label">{port}</span>
+              {[0, 45, 90, 135, 180].map((angle) => (
+                <button
+                  key={`${port}_${angle}`}
+                  className="btn-small btn-secondary"
+                  onClick={() => enqueueDirectCommand({ type: 'servo', port, angle })}
+                  disabled={!robotConnected}
+                >
+                  {angle}°
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div className="panel-header" style={{ marginTop: 8 }}>
+          <h2>Motor Ports</h2>
+        </div>
+        <div className="hw-port-list">
+          {['M1', 'M2', 'M3', 'M4'].map((port) => (
+            <div key={port} className="hw-port-row">
+              <span className="hw-port-label">{port}</span>
+              <button className="btn-small btn-success" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: 50, duration: 1 })} disabled={!robotConnected}>FWD</button>
+              <button className="btn-small btn-secondary" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: -50, duration: 1 })} disabled={!robotConnected}>REV</button>
+              <button className="btn-small btn-danger" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: 0, duration: 0 })} disabled={!robotConnected}>OFF</button>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Right: Activity Log */}

@@ -486,10 +486,17 @@ configRoutes.post('/mlink/upload-test', async (req, res) => {
  */
 configRoutes.post('/mlink/upload', async (req, res) => {
   try {
-    const { files, port, serialPort, settings, slot } = req.body || {};
+    const { port, serialPort, settings, slot } = req.body || {};
+
+    // Always read firmware files fresh from disk to ensure latest code is uploaded
+    const freshFiles = REQUIRED_FIRMWARE_FILES.map((name) => {
+      const filePath = path.join(FIRMWARE_DIR, name);
+      return { name, content: fs.readFileSync(filePath, 'utf-8') };
+    });
+    console.log('[upload] Read', freshFiles.length, 'firmware files fresh from disk');
 
     // Apply user settings to mbot_config.py server-side (authoritative substitution).
-    const patchedFiles = applySettingsToFiles(files, settings);
+    const patchedFiles = applySettingsToFiles(freshFiles, settings);
 
     // Bundle all firmware modules into a single main.py for reliable upload.
     const bundled = bundleFirmwareFiles(patchedFiles);
@@ -504,8 +511,21 @@ configRoutes.post('/mlink/upload', async (req, res) => {
     // Dump first 600 chars of bundled content for debugging
     console.log('[upload] Bundle preview (first 600 chars):\n' + bundled.content.substring(0, 600));
 
+    // Verify key functions are present in bundle
+    const hasOldRepl = bundled.content.includes('__builtins__');
+    const hasNewRepl = bundled.content.includes('_repl_output');
+    const hasRprint = bundled.content.includes('def rprint');
+    const hasExecCode = bundled.content.includes('exec(code)');
+    console.log('[upload] Bundle check — has __builtins__:', hasOldRepl, '| has _repl_output:', hasNewRepl, '| has rprint:', hasRprint, '| has exec(code):', hasExecCode);
+    console.log('[upload] Bundle total size:', bundled.content.length, 'chars');
+
     const targetSlot = Math.max(1, Math.min(8, Math.floor(Number(slot) || 1)));
     console.log('[upload] Target program slot:', targetSlot);
+
+    // Save bundle to disk for debugging
+    const debugBundlePath = path.join(FIRMWARE_DIR, '_bundled_debug.py');
+    fs.writeFileSync(debugBundlePath, bundled.content);
+    console.log('[upload] Saved debug bundle to', debugBundlePath);
 
     const result = await uploadViaMlink({
       files: [bundled],

@@ -68,20 +68,20 @@ function generateBlockCode(block, level) {
       return `${pad}mbot2.backward(${block.speed || 50}, ${block.duration || 1})\n`;
 
     case 'turn_left':
-      return `${pad}mbot2.turn_left(${block.speed || 50}, ${block.angle || 90})\n`;
+      return `${pad}mbot2.turn(-${block.angle || 90})\n`;
 
     case 'turn_right':
-      return `${pad}mbot2.turn_right(${block.speed || 50}, ${block.angle || 90})\n`;
+      return `${pad}mbot2.turn(${block.angle || 90})\n`;
 
     case 'stop':
-      return `${pad}mbot2.motor_stop("all")\n`;
+      return `${pad}mbot2.EM_stop()\n`;
 
     case 'set_speed':
-      return `${pad}mbot2.drive_speed(${block.left || 0}, ${block.right || 0})\n`;
+      return `${pad}mbot2.forward(${Math.abs(block.left || 0)})\n`;
 
     // === Sensors ===
     case 'if_obstacle': {
-      let code = `${pad}if mbot2.ultrasonic2.get_distance() < ${block.distance || 20}:\n`;
+      let code = `${pad}if mbuild.ultrasonic2.get() < ${block.distance || 20}:\n`;
       if (block.then && block.then.length > 0) {
         code += generateBlocksCode(block.then, level + 1);
       } else {
@@ -95,20 +95,7 @@ function generateBlockCode(block, level) {
     }
 
     case 'if_line': {
-      const sensor = block.sensor || 'left';
-      const isBlack = (block.color || 'black') === 'black';
-      let sensorCode;
-      if (sensor === 'both') {
-        sensorCode = isBlack
-          ? 'mbot2.line_follower.is_all_black()'
-          : 'mbot2.line_follower.is_all_white()';
-      } else {
-        const sensorIdx = sensor === 'left' ? 1 : 2;
-        sensorCode = isBlack
-          ? `mbot2.line_follower.get_line(${sensorIdx}) < 50`
-          : `mbot2.line_follower.get_line(${sensorIdx}) > 50`;
-      }
-      let code = `${pad}if ${sensorCode}:\n`;
+      let code = `${pad}if mbuild.dual_rgb_sensor.is_line():\n`;
       if (block.then && block.then.length > 0) {
         code += generateBlocksCode(block.then, level + 1);
       } else {
@@ -122,7 +109,7 @@ function generateBlockCode(block, level) {
     }
 
     case 'if_color': {
-      let code = `${pad}if mbot2.color_sensor.get_color() == "${block.color || 'red'}":\n`;
+      let code = `${pad}if mbuild.quad_rgb_sensor.is_color("${block.color || 'red'}"):\n`;
       if (block.then && block.then.length > 0) {
         code += generateBlocksCode(block.then, level + 1);
       } else {
@@ -144,10 +131,10 @@ function generateBlockCode(block, level) {
 
     case 'play_melody': {
       const melodies = {
-        happy: 'cyberpi.audio.play_melody("birthday")',
-        sad: 'cyberpi.audio.play_tone(200, 1)',
-        excited: 'cyberpi.audio.play_melody("power_up")',
-        alert: 'cyberpi.audio.play_melody("alert")',
+        happy: 'cyberpi.audio.play("birthday")',
+        sad: 'cyberpi.audio.play("ba")',
+        excited: 'cyberpi.audio.play("power_up")',
+        alert: 'cyberpi.audio.play("alert")',
       };
       return `${pad}${melodies[block.melody] || melodies.happy}\n`;
     }
@@ -238,10 +225,11 @@ function generateBlockCode(block, level) {
         condition = `not (${expr} ${op} ${block.value ?? 20})`;
       }
       const driveSpd = dir === 'backward' ? -spd : spd;
-      let code = `${pad}mbot2.drive_speed(${driveSpd}, ${driveSpd})\n`;
+      let code = `${pad}mbot2.forward(${Math.abs(driveSpd)})\n`;
+      if (driveSpd < 0) code = `${pad}mbot2.backward(${Math.abs(driveSpd)})\n`;
       code += `${pad}while ${condition}:\n`;
       code += `${indent(level + 1)}time.sleep(0.05)\n`;
-      code += `${pad}mbot2.motor_stop("all")\n`;
+      code += `${pad}mbot2.EM_stop()\n`;
       return code;
     }
 
@@ -294,18 +282,29 @@ function generateBlockCode(block, level) {
       return `${pad}${result} = ${aExpr} ${op} ${bExpr}\n`;
     }
 
-    // === Custom Hardware ===
+    // === Custom Hardware (uses starter_shield — verified working APIs) ===
     case 'dc_motor': {
       const port = block.port || 'M3';
+      const pn = port === 'M1' ? 1 : port === 'M2' ? 2 : port === 'M3' ? 3 : 4;
       const speed = block.speed || 50;
       const duration = block.duration || 1;
-      return `${pad}mbot2.dc_motor_set("${port}", ${speed})\n${pad}time.sleep(${duration})\n${pad}mbot2.dc_motor_set("${port}", 0)\n`;
+      return `${pad}mbot2.starter_shield.dc_motor_set_power(${pn}, ${speed})\n${pad}time.sleep(${duration})\n${pad}mbot2.starter_shield.dc_motor_set_power(${pn}, 0)\n`;
     }
 
     case 'servo': {
       const port = block.port || 'S1';
+      const pn = port === 'S1' ? 1 : port === 'S2' ? 2 : port === 'S3' ? 3 : 4;
       const angle = block.angle || 90;
-      return `${pad}mbot2.servo_set("${port}", ${angle})\n`;
+      return `${pad}mbot2.starter_shield.servo_set_angle(${pn}, ${angle})\n`;
+    }
+
+    // === LEDs ===
+    case 'set_led': {
+      const color = block.color || 'green';
+      if (color === 'off') {
+        return `${pad}cyberpi.led.off()\n`;
+      }
+      return `${pad}cyberpi.led.show("${color} ${color} ${color} ${color} ${color}")\n`;
     }
 
     default:
@@ -314,15 +313,21 @@ function generateBlockCode(block, level) {
 }
 
 /**
- * Map sensor short-names to MicroPython expressions
+ * Map sensor short-names to MicroPython expressions (using correct mbuild/cyberpi APIs)
  */
 function sensorExpression(sensor) {
   const sensors = {
-    distance: 'mbot2.ultrasonic2.get_distance()',
-    line_left: 'mbot2.line_follower.get_line(1)',
-    line_right: 'mbot2.line_follower.get_line(2)',
-    light: 'cyberpi.get_lightness()',
+    distance: 'mbuild.ultrasonic2.get()',
+    line: 'mbuild.dual_rgb_sensor.get_line_sta()',
+    line_left: 'mbuild.dual_rgb_sensor.get_line_sta()',
+    line_right: 'mbuild.dual_rgb_sensor.get_line_sta()',
+    light: 'cyberpi.get_brightness()',
+    brightness: 'cyberpi.get_brightness()',
     loudness: 'cyberpi.get_loudness()',
+    angle: 'cyberpi.get_yaw()',
+    yaw: 'cyberpi.get_yaw()',
+    pitch: 'cyberpi.get_pitch()',
+    roll: 'cyberpi.get_roll()',
     timer: 'cyberpi.timer.get()',
   };
   return sensors[sensor] || sensors.distance;

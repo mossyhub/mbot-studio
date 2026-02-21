@@ -76,6 +76,9 @@ aiRoutes.post('/generate', async (req, res) => {
       { role: 'assistant', content: JSON.stringify(result) },
     ]);
 
+    // Home actions are prepended in robot.js when the program is sent to the robot.
+    // Do NOT add them here — it would cause double homing.
+
     // If we got a program, update assumed states for any actions that have targetState
     if (result.program) {
       const mqtt = MqttService.getInstance();

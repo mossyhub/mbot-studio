@@ -598,9 +598,8 @@ async function uploadFilesToCyberpiFlash({ session, channelId, files, dataTail, 
     const contentText = String(file?.content ?? '');
     const dataBytes = Array.from(Buffer.from(contentText, 'utf8'));
 
-    // For the main program file, use the _xx_ prefix (firmware >=44.01.006 convention).
-    // This tells the CyberPi firmware to register it as user program slot 1.
-    // All other files are written to /flash/ directly.
+    // Use the _xx_ prefix for main.py (Makeblock slot convention for CyberPi).
+    // Do NOT write to /flash/main.py — it conflicts with CyberPi's boot sequence.
     const stem = fileName.replace(/\.py$/, '');
     const isMainEntry = fileName === 'main.py';
     const flashPath = isMainEntry ? `/flash/_xx_${stem}.py` : `/flash/${fileName}`;
@@ -662,6 +661,7 @@ async function uploadFilesToCyberpiFlash({ session, channelId, files, dataTail, 
       diagnostics.push({ step: 'upload_aborted', reason: `File transfer failed for ${fileName}` });
       return diagnostics;
     }
+
   }
 
   // ── Step 3: Switch to offline mode again (triggers program execution) ──

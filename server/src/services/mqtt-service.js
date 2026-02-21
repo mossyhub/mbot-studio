@@ -46,6 +46,7 @@ export class MqttService {
         this.client.subscribe(`${this.topicPrefix}/robot/status`);
         this.client.subscribe(`${this.topicPrefix}/robot/sensors`);
         this.client.subscribe(`${this.topicPrefix}/robot/log`);
+        this.client.subscribe(`${this.topicPrefix}/robot/repl/result`);
 
         resolve();
       });
@@ -55,7 +56,7 @@ export class MqttService {
         const payload = message.toString();
 
         // Track robot presence — any message from the robot means it's alive
-        if (shortTopic === 'robot/status' || shortTopic === 'robot/sensors' || shortTopic === 'robot/log') {
+        if (shortTopic === 'robot/status' || shortTopic === 'robot/sensors' || shortTopic === 'robot/log' || shortTopic === 'robot/repl/result') {
           this.robotLastSeen = Date.now();
           // Parse robot state from status messages
           if (shortTopic === 'robot/status') {
@@ -138,6 +139,24 @@ export class MqttService {
     const topic = `${this.topicPrefix}/robot/config`;
     this.client.publish(topic, JSON.stringify(config));
     return true;
+  }
+
+  /**
+   * Send code to the robot's REPL for execution
+   */
+  sendRepl(code, id = null) {
+    if (!this.connected) return false;
+    const payload = JSON.stringify({ code, id: id || `repl_${Date.now()}` });
+    this.client.publish(`${this.topicPrefix}/robot/repl`, payload);
+    console.log(`🔧 REPL sent (${code.length} chars)`);
+    return true;
+  }
+
+  /**
+   * Send a diagnostic command to the robot
+   */
+  sendDiagnostic() {
+    return this.sendCommand({ type: 'run_diagnostic' });
   }
 
   /**

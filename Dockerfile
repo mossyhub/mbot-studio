@@ -37,6 +37,12 @@ RUN npm ci --omit=dev
 # Copy server source
 COPY server/src/ ./src/
 
+# Copy firmware files (needed for mLink upload from Setup tab)
+COPY firmware/ ./firmware/
+
+# Copy default robot config
+COPY server/robot-config.json ./robot-config.json
+
 # Copy built frontend from stage 1
 COPY --from=frontend-build /build/web/dist ./public/
 

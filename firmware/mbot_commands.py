@@ -13,6 +13,7 @@ class CommandHandler:
         self.mqtt = mqtt_client
         self.running_program = False
         self.stop_requested = False
+        self._variables = {}
 
     def log(self, message):
         print(message)
@@ -31,7 +32,6 @@ class CommandHandler:
                 command = json.loads(command)
             except:
                 return
-        cmd_type = command.get("type", "")
         try:
             self._dispatch(command)
         except Exception as e:
@@ -45,15 +45,76 @@ class CommandHandler:
             except:
                 pass
 
+    # --- Variable/sensor helpers ---
+
+    def _resolve(self, val):
+        """Resolve a value: if string, look up in variables; else return as number."""
+        if isinstance(val, str):
+            return self._variables.get(val, 0)
+        try:
+            return float(val)
+        except:
+            return 0
+
+    def _sensor_read(self, name):
+        """Centralized sensor reading by short name."""
+        if name == "distance":
+            return self.sensors.get_distance()
+        elif name == "line_left" or name == "line":
+            return self.sensors.get_line_status()
+        elif name == "line_offset":
+            return self.sensors.get_line_offset()
+        elif name == "brightness" or name == "light":
+            return self.sensors.get_brightness()
+        elif name == "loudness":
+            return self.sensors.get_loudness()
+        elif name == "yaw" or name == "angle":
+            return self.sensors.get_yaw()
+        elif name == "pitch":
+            return self.sensors.get_pitch()
+        elif name == "roll":
+            return self.sensors.get_roll()
+        elif name == "timer":
+            try:
+                return cyberpi.timer.get()
+            except:
+                return 0
+        return 0
+
+    def _compare(self, a, op, b):
+        """Compare two values with an operator string."""
+        try:
+            a, b = float(a), float(b)
+        except:
+            return False
+        if op == ">":
+            return a > b
+        elif op == "<":
+            return a < b
+        elif op == ">=":
+            return a >= b
+        elif op == "<=":
+            return a <= b
+        elif op == "==":
+            return abs(a - b) < 0.5
+        elif op == "!=":
+            return abs(a - b) >= 0.5
+        return False
+
+    def _run_blocks(self, blocks):
+        """Execute a list of blocks, checking stop flag."""
+        for block in blocks:
+            if self.stop_requested:
+                break
+            self._dispatch(block)
+
+    # --- Main dispatch ---
+
     def _dispatch(self, cmd):
         t = cmd.get("type", "")
         p = cmd.get("params", cmd)
-        print("CMD:", t)
-        try:
-            cyberpi.display.show_label("CMD:\n" + t, 12, "center", index=0)
-        except:
-            pass
 
+        # --- Movement ---
         if t == "move_forward":
             self.motors.forward(p.get("speed", 50), p.get("duration", 1))
         elif t == "move_backward":
@@ -66,44 +127,140 @@ class CommandHandler:
             self.motors.stop()
         elif t == "set_speed":
             self.motors.set_speed(p.get("left", 0), p.get("right", 0))
+
+        # --- Sensors ---
         elif t == "read_sensors":
             data = self.sensors.read_all()
             if self.mqtt:
                 self.mqtt.publish_sensors(data)
+        elif t == "if_obstacle":
+            blocks = p.get("then", []) if self.sensors.is_obstacle(p.get("distance", 20)) else p.get("else", [])
+            self._run_blocks(blocks)
+        elif t == "if_line":
+            detected = self.sensors.is_line()
+            blocks = p.get("then", []) if detected else p.get("else", [])
+            self._run_blocks(blocks)
+        elif t == "if_color":
+            target = p.get("color", "red")
+            detected = self.sensors.is_color(target)
+            blocks = p.get("then", []) if detected else p.get("else", [])
+            self._run_blocks(blocks)
+        elif t == "if_sensor_range":
+            sensor_name = p.get("sensor", "distance")
+            mn = float(p.get("min", 10))
+            mx = float(p.get("max", 30))
+            sv = self._sensor_read(sensor_name)
+            blocks = p.get("then", []) if (mn <= sv <= mx) else p.get("else", [])
+            self._run_blocks(blocks)
+        elif t == "while_sensor":
+            sensor_name = p.get("sensor", "distance")
+            op = p.get("operator", ">")
+            val = p.get("value", 20)
+            mn = p.get("min", 10)
+            mx = p.get("max", 30)
+            while not self.stop_requested:
+                sv = self._sensor_read(sensor_name)
+                if op == "between":
+                    if not (float(mn) <= sv <= float(mx)):
+                        break
+                elif not self._compare(sv, op, val):
+                    break
+                self._run_blocks(p.get("do", []))
+                time.sleep(0.05)
+        elif t == "move_until":
+            direction = p.get("direction", "forward")
+            speed = abs(int(p.get("speed", 50)))
+            sensor_name = p.get("sensor", "distance")
+            op = p.get("operator", "<")
+            val = p.get("value", 20)
+            mn = p.get("min", 10)
+            mx = p.get("max", 30)
+            if direction == "backward":
+                self.motors._drive_continuous(-speed, -speed)
+            else:
+                self.motors._drive_continuous(speed, speed)
+            while not self.stop_requested:
+                sv = self._sensor_read(sensor_name)
+                if op == "between":
+                    if float(mn) <= sv <= float(mx):
+                        break
+                elif self._compare(sv, op, val):
+                    break
+                time.sleep(0.05)
+            self.motors.stop()
+        elif t == "display_value":
+            sensor_name = p.get("sensor", "distance")
+            label = p.get("label", sensor_name)
+            sv = self._sensor_read(sensor_name)
+            cyberpi.display.show_label(str(label) + ": " + str(sv), 16, "center", index=0)
+
+        # --- Sound & Display ---
         elif t == "play_tone":
             cyberpi.audio.play_tone(p.get("frequency", 440), p.get("duration", 0.5))
+        elif t == "play_melody":
+            melody = p.get("melody", "happy")
+            melody_map = {"happy": "birthday", "sad": "ba", "excited": "power_up", "alert": "alert"}
+            try:
+                cyberpi.audio.play(melody_map.get(melody, melody))
+            except:
+                pass
         elif t == "display_text" or t == "say":
             cyberpi.display.show_label(p.get("text", ""), p.get("size", 14), "center", index=0)
         elif t == "display_image":
             cyberpi.display.show_label(p.get("image", "?"), 32, "center", index=0)
+        elif t == "set_led":
+            color = p.get("color", "green")
+            if color == "off":
+                cyberpi.led.off()
+            else:
+                c = color + " " + color + " " + color + " " + color + " " + color
+                cyberpi.led.show(c)
+
+        # --- Control Flow ---
         elif t == "wait":
             time.sleep(p.get("duration", 1))
         elif t == "repeat":
             for _ in range(p.get("times", 1)):
                 if self.stop_requested:
                     break
-                for block in p.get("do", []):
-                    if self.stop_requested:
-                        break
-                    self._dispatch(block)
+                self._run_blocks(p.get("do", []))
         elif t == "repeat_forever":
             while not self.stop_requested:
-                for block in p.get("do", []):
-                    if self.stop_requested:
-                        break
-                    self._dispatch(block)
-        elif t == "if_obstacle":
-            blocks = p.get("then", []) if self.sensors.is_obstacle(p.get("distance", 20)) else p.get("else", [])
-            for block in blocks:
-                if self.stop_requested:
-                    break
-                self._dispatch(block)
+                self._run_blocks(p.get("do", []))
         elif t == "if_button":
             if cyberpi.controller.is_press(p.get("button", "a")):
-                for block in p.get("then", []):
-                    if self.stop_requested:
-                        break
-                    self._dispatch(block)
+                self._run_blocks(p.get("then", []))
+
+        # --- Variables & Math ---
+        elif t == "set_variable":
+            name = p.get("name", "my_var")
+            source = p.get("source", None)
+            if source and source != "number":
+                self._variables[name] = self._sensor_read(source)
+            else:
+                self._variables[name] = self._resolve(p.get("value", 0))
+        elif t == "change_variable":
+            name = p.get("name", "my_var")
+            by = self._resolve(p.get("by", 1))
+            self._variables[name] = self._variables.get(name, 0) + by
+        elif t == "math_operation":
+            result_name = p.get("result", "result")
+            a = self._resolve(p.get("a", 0))
+            b = self._resolve(p.get("b", 0))
+            op = p.get("operator", "+")
+            if op == "+":
+                r = a + b
+            elif op == "-":
+                r = a - b
+            elif op == "*":
+                r = a * b
+            elif op == "/":
+                r = a / b if b != 0 else 0
+            else:
+                r = 0
+            self._variables[result_name] = r
+
+        # --- Hardware ---
         elif t == "dc_motor":
             self.motors.dc_motor_run(p.get("port", "M3"), p.get("speed", 50), p.get("duration", 1))
         elif t == "servo":
@@ -115,6 +272,7 @@ class CommandHandler:
     def run_program(self, program):
         self.running_program = True
         self.stop_requested = False
+        self._variables = {}
         try:
             for i, block in enumerate(program):
                 if self.stop_requested:

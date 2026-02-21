@@ -53,8 +53,43 @@ robotRoutes.post('/program', (req, res) => {
     });
   }
 
-  const sent = mqtt.sendProgram(programValidation.value);
-  res.json({ sent, blockCount: programValidation.value.length });
+  // Prepend home actions for hardware with homeState
+  let finalProgram = programValidation.value;
+  try {
+    const robotConfig = loadConfig();
+    if (robotConfig?.additions?.length) {
+      const homeBlocks = [];
+      for (const hw of robotConfig.additions) {
+        if (!hw.homeState || !hw.actions) continue;
+        const homeAction = hw.actions.find(a => a.targetState === hw.homeState);
+        if (!homeAction) continue;
+        if (hw.type === 'servo') {
+          homeBlocks.push({ type: 'servo', port: hw.port, angle: homeAction.angle ?? 90 });
+        } else if (hw.type === 'dc_motor') {
+          const dir = homeAction.motorDirection || 'forward';
+          const spd = homeAction.speed || 50;
+          homeBlocks.push({ type: 'dc_motor', port: hw.port, speed: dir === 'reverse' ? -spd : spd, duration: homeAction.duration || 1 });
+        }
+      }
+      if (homeBlocks.length > 0) {
+        finalProgram = [...homeBlocks, ...finalProgram];
+      }
+    }
+
+    // Apply turn multiplier from config (converts body degrees → encoder degrees)
+    const turnMult = robotConfig?.turnMultiplier || 1;
+    if (turnMult !== 1) {
+      finalProgram = finalProgram.map(block => {
+        if ((block.type === 'turn_left' || block.type === 'turn_right') && block.angle) {
+          return { ...block, angle: Math.round(block.angle * turnMult) };
+        }
+        return block;
+      });
+    }
+  } catch { /* ignore config errors */ }
+
+  const sent = mqtt.sendProgram(finalProgram);
+  res.json({ sent, blockCount: finalProgram.length });
 });
 
 /**
@@ -177,6 +212,42 @@ robotRoutes.post('/test-action', (req, res) => {
   }
 
   res.json({ sent, command, newState: action.targetState || null });
+});
+
+/**
+ * POST /api/robot/repl
+ * Send code to the robot's remote REPL for execution
+ */
+robotRoutes.post('/repl', (req, res) => {
+  const { code, id } = req.body;
+  const mqtt = MqttService.getInstance();
+
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ error: 'Missing "code" field' });
+  }
+
+  if (!mqtt.isConnected()) {
+    return res.status(503).json({ error: 'Robot not connected' });
+  }
+
+  const replId = id || `repl_${Date.now()}`;
+  const sent = mqtt.sendRepl(code, replId);
+  res.json({ sent, id: replId });
+});
+
+/**
+ * POST /api/robot/diagnostic
+ * Run motor diagnostic on the robot
+ */
+robotRoutes.post('/diagnostic', (req, res) => {
+  const mqtt = MqttService.getInstance();
+
+  if (!mqtt.isConnected()) {
+    return res.status(503).json({ error: 'Robot not connected' });
+  }
+
+  const sent = mqtt.sendDiagnostic();
+  res.json({ sent, message: 'Diagnostic started. Watch robot/log for results.' });
 });
 
 /**
