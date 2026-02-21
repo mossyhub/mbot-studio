@@ -1,7 +1,7 @@
 # =============================================================================
 # mBot Studio — Multi-stage Docker Build
 # =============================================================================
-# Stage 1: Build the React frontend
+# Stage 1: Build the React frontend using npm workspaces
 # Stage 2: Production Node.js server serving frontend + API
 # =============================================================================
 
@@ -10,9 +10,15 @@ FROM node:20-alpine AS frontend-build
 
 WORKDIR /build
 
-# Copy web package files and install
-COPY web/package.json web/package-lock.json* ./web/
-RUN cd web && npm ci
+# Copy root workspace config + lockfile
+COPY package.json package-lock.json ./
+
+# Copy both workspace package.json files
+COPY web/package.json ./web/
+COPY server/package.json ./server/
+
+# Install all workspace dependencies
+RUN npm ci
 
 # Copy web source and build
 COPY web/ ./web/
@@ -30,9 +36,12 @@ WORKDIR /app
 # Install dumb-init for proper signal handling
 RUN apk add --no-cache dumb-init
 
-# Copy server package files and install production deps only
-COPY server/package.json server/package-lock.json* ./
-RUN npm ci --omit=dev
+# Copy root workspace config + lockfile, then server package
+COPY package.json package-lock.json ./
+COPY server/package.json ./server/
+
+# Install production deps only (workspace-aware)
+RUN npm ci --omit=dev --workspace=server 2>/dev/null || npm ci --omit=dev
 
 # Copy server source
 COPY server/src/ ./src/
