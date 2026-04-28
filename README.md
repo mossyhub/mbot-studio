@@ -2,202 +2,237 @@
 
 **AI-Powered Robot Programming for Kids**
 
-A kid-friendly platform that blends block coding with AI-powered natural language programming for the Makeblock mBot2 rover. Designed for children ages 6-12.
+A kid-friendly platform that blends visual block coding with AI-powered natural language programming for the [Makeblock mBot2](https://www.makeblock.com/pages/mbot2) rover. Children ages 6–12 describe what they want the robot to do in plain English, and the AI generates colorful code blocks they can see, edit, and run.
+
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Node](https://img.shields.io/badge/node-20%2B-green)
+![Docker](https://img.shields.io/badge/docker-ready-blue)
 
 ## How It Works
 
-1. **Talk to the AI**: Type what you want the robot to do in plain English — *"Make the robot drive in a square"*, *"Do a happy dance!"*
-2. **See the blocks**: The AI generates colorful code blocks that kids can drag, reorder, and modify
-3. **Send to robot**: Upload the program to your mBot2 over WiFi (MQTT) and watch it go!
-4. **Live control**: Switch to Live Mode for real-time commands — directional pad, voice commands, hardware controls
-
-## Architecture
+1. **Talk to the AI** — Type what you want: *"Make the robot drive in a square"*, *"Do a happy dance!"*
+2. **See the blocks** — The AI generates visual code blocks kids can drag, reorder, and modify
+3. **Run it** — Upload the program to the mBot2 over WiFi and watch it go!
+4. **Live control** — Switch to real-time commands with a D-pad, voice input, and hardware controls
 
 ```
 ┌──────────────────────────────┐
 │    Web Interface (React)     │
 │   Chat + Blocks + Controls   │
-│   + Debug REPL + HW Wizard   │
 └──────────────┬───────────────┘
                │ HTTP / WebSocket
 ┌──────────────┴───────────────┐
 │   Backend Server (Node.js)   │
 │  AI Service + MQTT Bridge    │
-│  Code Generator + Bundler    │
 └──────────────┬───────────────┘
                │ MQTT (WiFi)
 ┌──────────────┴───────────────┐
 │     mBot2 (MicroPython)      │
 │  Motors + Sensors + Display  │
-│  Deferred command execution  │
 └──────────────────────────────┘
 ```
 
-## Prerequisites
+## Features
 
-- **Node.js** 18+ — [Download](https://nodejs.org/)
-- **MQTT Broker** — An external [Mosquitto](https://mosquitto.org/) server on your network
-- **Makeblock mLink2** — required for one-time firmware upload (runs locally on your computer)
-- **GitHub account** with Copilot subscription (for AI features via GitHub Models API)
-- **mBot2** with CyberPi (ESP32) and WiFi capability
+- **AI Chat Programming** — Natural language → block programs using your robot's hardware config
+- **Visual Block Editor** — 27 block types across 7 categories (movement, sensors, sound, control, variables, hardware)
+- **Live Control** — D-pad, servo/motor controls, voice commands, real-time telemetry
+- **Hardware Wizard** — Guided setup for servos and motors with live testing and named positions
+- **Debug Terminal** — Remote MicroPython REPL, motor diagnostics, live log streaming
+- **Challenges & Achievements** — Guided coding challenges and a badge system for kids
+- **Custom Hardware** — Config-aware AI that knows about your robot's arms, claws, and accessories
+- **One-Click Firmware Upload** — Flash custom firmware to the mBot2 via USB through mLink2
+
+## Requirements
+
+- **mBot2** with CyberPi (ESP32) — [Makeblock store](https://www.makeblock.com/pages/mbot2)
+- **MQTT broker** — [Mosquitto](https://mosquitto.org/) running on your network
+- **AI provider** (one of):
+  - [Azure OpenAI](https://azure.microsoft.com/en-us/products/ai-services/openai-service) (recommended)
+  - [GitHub Models](https://github.com/marketplace/models) via GitHub Copilot subscription
+- **Makeblock mLink2** — For one-time firmware upload (USB, runs locally)
 
 ## Quick Start
 
-### 1. Clone & Install
+### Option A: Docker (recommended)
 
 ```bash
-cd d:\personal\mbot
+# Pull the image
+docker pull ghcr.io/mossyhub/mbot-studio:latest
+
+# Create your config
+curl -o .env https://raw.githubusercontent.com/mossyhub/mbot-studio/master/.env.example
+# Edit .env with your settings (see Configuration below)
+
+# Run
+docker run -d \
+  --name mbot-studio \
+  --restart unless-stopped \
+  -p 3001:3001 \
+  --env-file .env \
+  -v mbot-data:/app/data \
+  ghcr.io/mossyhub/mbot-studio:latest
+```
+
+Open **http://your-server:3001** in a browser.
+
+### Option B: Docker Compose
+
+```bash
+git clone https://github.com/mossyhub/mbot-studio.git
+cd mbot-studio
+cp .env.example .env
+# Edit .env with your settings
+
+docker compose up -d
+```
+
+### Option C: Run from source
+
+```bash
+git clone https://github.com/mossyhub/mbot-studio.git
+cd mbot-studio
 npm install
+cp .env.example .env
+# Edit .env with your settings
+
+npm run dev    # Development (hot reload on :5173 + API on :3001)
+# or
+npm run build  # Build frontend
+npm start      # Production (serves everything on :3001)
 ```
 
-### 2. Configure Environment
+## Configuration
 
-```bash
-copy .env.example .env
+Copy `.env.example` to `.env` and configure:
+
+### AI Provider (choose one)
+
+**Azure OpenAI** (recommended):
+```env
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your_api_key
+AZURE_OPENAI_DEPLOYMENT=your_deployment_name
 ```
 
-Edit `.env`:
-
+**GitHub Models** (alternative):
 ```env
 GITHUB_TOKEN=ghp_your_token_here
-AI_MODEL=openai/gpt-5-chat
-AI_BASE_URL=https://models.github.ai/inference
-MQTT_BROKER_URL=mqtt://your-mqtt-server:1883
-PORT=3001
 ```
 
-### 3. Start the Platform
+### Required Settings
 
-```bash
-npm run dev
+```env
+# MQTT broker on your network (where the mBot2 connects)
+MQTT_BROKER_URL=mqtt://192.168.1.100:1883
+
+# WiFi credentials (embedded in firmware for the mBot2 to connect)
+WIFI_SSID=YourWiFiName
+WIFI_PASSWORD=YourWiFiPassword
 ```
 
-This starts both the backend (port 3001) and frontend (port 5173).
+### Optional Settings
 
-Open **http://localhost:5173** in your browser.
+```env
+PORT=3001                    # Server port (default: 3001)
+AI_LOCAL_DEBUG=false          # Use offline mock AI for testing without API keys
+ENABLE_REPL=true             # Enable Debug Terminal REPL (default: true)
+```
 
-### 4. Upload Firmware to mBot2
+## First-Time Robot Setup
 
-1. Connect mBot2 via USB-C
-2. Ensure mLink2 is running on your computer
-3. Go to **Setup** tab → fill in WiFi + MQTT settings → click **Upload Firmware via mLink**
-4. **Full power cycle**: disconnect USB-C, power off, wait 3 seconds, power back on
+1. **Install mLink2** on a computer with USB — [download from Makeblock](https://www.mblock.cc/en/download)
+2. **Connect mBot2** via USB-C cable
+3. Open mBot Studio → **Setup** tab → enter WiFi & MQTT settings → **Upload Firmware via mLink**
+4. **Full power cycle**: disconnect USB, power off, wait 3 seconds, power on
+5. The robot will connect to your WiFi/MQTT automatically — the status bar turns green
 
-See [firmware/README.md](firmware/README.md) for the complete firmware reference including verified API documentation.
+After firmware is uploaded once, the robot connects wirelessly. No USB needed again unless re-flashing.
 
-## Features
+See [firmware/README.md](firmware/README.md) for the complete firmware reference.
 
-### Tabs
+## Tabs
 
-| Tab | Purpose |
-|-----|---------|
-| **Program** | AI chat + visual block editor + code preview |
-| **Live Control** | D-pad, servo/motor port controls, voice commands, telemetry |
-| **Challenges** | Guided coding challenges for kids |
+| Tab | What it does |
+|-----|-------------|
+| **Program** | AI chat + visual block editor + Python code preview |
+| **Live Control** | D-pad driving, servo/motor controls, voice commands, telemetry |
+| **Challenges** | Guided coding challenges for learning |
 | **Achievements** | Badge system and progress tracking |
 | **Setup** | Hardware wizard, firmware upload, AI config, calibration |
-| **Debug** | Remote REPL, motor diagnostic, live robot logs |
-
-### AI Chat Programming
-Type what you want in plain English. The AI generates block programs using the robot's hardware config context — it knows about your custom servos, motors, and their named actions.
-
-### Visual Block Editor
-27 block types across 7 categories: Movement, Sensors, Sound & Display, Control, Sensors+, Variables, Hardware. All blocks execute end-to-end on the robot.
-
-The block palette includes a dynamic **"My Robot"** category that shows named actions from your hardware config (e.g., "Arm Servo: up", "Claw Motor: open").
-
-### Live Control
-- D-pad for drive motor control (forward, backward, turn left/right, stop)
-- Generic servo S1-S4 angle controls and motor M1-M4 FWD/REV/OFF buttons
-- Natural language live commands via AI
-- Live telemetry dashboard
-
-### Hardware Setup Wizard
-Guided step-by-step wizard for adding servos and motors:
-1. Select port (S1-S4 / M1-M4)
-2. Test it live (servo angle slider, motor direction buttons)
-3. Name positions ("up" at 45°, "down" at 120°)
-4. Label and group into assemblies
-5. Review and save
-
-The wizard output feeds directly into AI program generation, the block palette, and live control.
-
-### Debug Terminal
-Remote MicroPython REPL — execute code directly on the robot:
-- Quick command buttons (motors, sensors, LEDs, battery)
-- Motor diagnostic (tests all 5 motor APIs)
-- Live log streaming from the robot
-- Use `rprint()` for output capture
+| **Debug** | Remote REPL, motor diagnostics, live robot logs |
 
 ## Project Structure
 
 ```
-mbot/
-├── package.json              # Root workspace config
-├── .env.example              # Environment template
-├── Dockerfile / compose.yml  # Docker deployment
-│
-├── server/                   # Backend (Node.js + Express)
-│   ├── src/
-│   │   ├── index.js              # Server entry + WebSocket setup
-│   │   ├── services/
-│   │   │   ├── ai-service.js         # AI program generation + config parsing
-│   │   │   ├── mqtt-service.js       # MQTT broker bridge + hardware state tracking
-│   │   │   ├── code-generator.js     # Blocks → MicroPython code + firmware bundler
-│   │   │   ├── websocket.js          # WebSocket gateway (commands, REPL, diagnostics)
-│   │   │   ├── mlink-bridge.js       # mLink2 JSON-RPC + F3F4 upload protocol
-│   │   │   ├── telemetry-service.js  # Sensor data enrichment
-│   │   │   ├── calibration-service.js# Speed/distance calibration chat
-│   │   │   └── validation.js         # Input validation
-│   │   └── routes/
-│   │       ├── ai.js             # POST /api/ai/generate, /api/ai/chat
-│   │       ├── robot.js          # POST /api/robot/command, /program, /repl, /diagnostic
-│   │       └── config.js         # GET/POST /api/config, firmware upload, mLink bridge
-│   └── robot-config.json        # Saved hardware configuration
-│
-├── web/                      # Frontend (React + Vite)
+mbot-studio/
+├── server/                   # Node.js + Express backend
 │   └── src/
-│       ├── App.jsx               # Tab routing, state management
-│       └── components/
-│           ├── ChatPanel.jsx         # AI conversation interface
-│           ├── BlocklyEditor.jsx     # Visual block editor + config-aware palette
-│           ├── LiveControl.jsx       # D-pad + servo/motor controls + telemetry
-│           ├── DebugTerminal.jsx     # Remote REPL + diagnostics
-│           ├── HardwareWizard.jsx    # Guided hardware setup wizard
-│           ├── RobotConfig.jsx       # Setup page (wizard + AI config + firmware)
-│           ├── FirmwareFlasher.jsx   # mLink firmware upload UI
-│           ├── CodePreview.jsx       # Python code display
-│           ├── Header.jsx            # Navigation + status
-│           └── StatusBar.jsx         # Connection indicator
-│
-├── firmware/                 # mBot2 MicroPython firmware
-│   ├── main.py                   # Entry point + main loop + deferred execution
-│   ├── mbot_config.py            # WiFi/MQTT/hardware constants
-│   ├── mbot_mqtt.py              # MQTT client + subscriptions
-│   ├── mbot_motor.py             # Motor/servo control + estop polling
-│   ├── mbot_sensor.py            # Sensors via mbuild + cyberpi
-│   ├── mbot_commands.py          # Command dispatch (24 types) + variables
-│   ├── mbot_dashboard.py         # CyberPi screen display
-│   └── test_motors.py            # Standalone motor test (recovery firmware)
-│
-└── docs/                     # Technical documentation
-    ├── mlink-upload-notes.md     # mLink2 investigation notes (historical)
-    └── upload-investigation.md   # F3F4 upload protocol specification (authoritative)
+│       ├── services/
+│       │   ├── ai-service.js         # AI generation (Azure OpenAI / GitHub Models)
+│       │   ├── mqtt-service.js       # MQTT bridge + hardware state tracking
+│       │   ├── code-generator.js     # Blocks → MicroPython compiler
+│       │   ├── websocket.js          # WebSocket gateway
+│       │   └── mlink-bridge.js       # mLink2 firmware upload protocol
+│       └── routes/                   # REST API endpoints
+├── web/                      # React + Vite frontend
+│   └── src/components/               # UI components
+├── firmware/                 # MicroPython firmware for mBot2
+│   ├── main.py                       # Entry point + event loop
+│   ├── mbot_commands.py              # Command dispatch (24 block types)
+│   ├── mbot_motor.py                 # Motor/servo control
+│   ├── mbot_sensor.py                # Sensor abstraction
+│   └── mbot_mqtt.py                  # MQTT client
+├── Dockerfile                # Multi-stage Docker build
+├── docker-compose.yml        # Docker Compose config
+└── .env.example              # Environment template
 ```
+
+## API Endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/api/ai/generate` | Generate block program from natural language |
+| POST | `/api/ai/chat` | Chat with AI assistant |
+| GET | `/api/ai/models` | List available AI models |
+| POST | `/api/robot/command` | Send single command to robot |
+| POST | `/api/robot/program` | Send full program to robot |
+| GET | `/api/config` | Get robot hardware config |
+| POST | `/api/config` | Save robot hardware config |
+| WS | `/ws` | Live control, telemetry, REPL, diagnostics |
 
 ## MQTT Topics
 
 | Topic | Direction | Purpose |
 |-------|-----------|---------|
-| `mbot-studio/robot/command` | Server → Robot | Single command (deferred to main loop) |
-| `mbot-studio/robot/program` | Server → Robot | Full block program array (deferred) |
-| `mbot-studio/robot/emergency` | Server → Robot | Emergency stop (sets flag only) |
-| `mbot-studio/robot/repl` | Server → Robot | REPL code execution (deferred) |
-| `mbot-studio/robot/config` | Server → Robot | Hardware config update |
-| `mbot-studio/robot/status` | Robot → Server | Heartbeat + state (ready/running/idle) |
-| `mbot-studio/robot/sensors` | Robot → Server | Periodic sensor readings |
-| `mbot-studio/robot/log` | Robot → Server | Debug log messages |
-| `mbot-studio/robot/repl/result` | Robot → Server | REPL execution results |
+| `mbot-studio/robot/command` | Server → Robot | Single command |
+| `mbot-studio/robot/program` | Server → Robot | Full block program |
+| `mbot-studio/robot/emergency` | Server → Robot | Emergency stop |
+| `mbot-studio/robot/repl` | Server → Robot | REPL code execution |
+| `mbot-studio/robot/status` | Robot → Server | Heartbeat + state |
+| `mbot-studio/robot/sensors` | Robot → Server | Sensor telemetry |
+| `mbot-studio/robot/log` | Robot → Server | Debug messages |
+
+## Development
+
+```bash
+npm run dev       # Start dev server (hot reload)
+npm run build     # Build frontend for production
+npm start         # Run production server
+```
+
+The dev server runs the backend on `:3001` and Vite frontend on `:5173` with hot module replacement.
+
+## Security Notes
+
+- **No authentication** — designed for local network / home use only
+- API keys live in `.env` (gitignored) and are never exposed to the frontend
+- The REPL endpoint executes arbitrary Python on the robot — disable with `ENABLE_REPL=false`
+- Firmware upload via mLink is localhost-only (127.0.0.1:52384)
+
+## License
+
+MIT
 
 ## Supported Block Types
 
