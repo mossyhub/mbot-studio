@@ -8,3 +8,5 @@ __pycache__/
 *.pyc
 .claude/
 firmware/_bundled_debug.py
+ai-model-compat.json
+codereview.md
