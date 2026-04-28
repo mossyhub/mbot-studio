@@ -92,7 +92,7 @@ mqttService.connect().then(() => {
 const HOST = process.env.HOST || '0.0.0.0';
 
 async function startServer() {
-  await initializeModelSelection();
+  initializeModelSelection();
 
   server.listen(PORT, HOST, () => {
     console.log(`\n🤖 mBot Studio Server running on http://${HOST}:${PORT}`);

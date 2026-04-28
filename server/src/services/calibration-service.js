@@ -1,21 +1,36 @@
-import OpenAI from 'openai';
-
-const INFERENCE_URL = 'https://models.github.ai/inference';
+import OpenAI, { AzureOpenAI } from 'openai';
 
 let client = null;
 
+function isAzureOpenAI() {
+  return !!(process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_DEPLOYMENT);
+}
+
+function getApiKey() {
+  return process.env.AI_API_KEY || process.env.GITHUB_TOKEN || '';
+}
+
 function getClient() {
   if (!client) {
-    client = new OpenAI({
-      baseURL: process.env.AI_BASE_URL || INFERENCE_URL,
-      apiKey: process.env.GITHUB_TOKEN,
-    });
+    if (isAzureOpenAI()) {
+      client = new AzureOpenAI({
+        endpoint: process.env.AZURE_OPENAI_ENDPOINT,
+        apiKey: process.env.AZURE_OPENAI_API_KEY,
+        apiVersion: '2024-10-21',
+      });
+    } else {
+      client = new OpenAI({
+        baseURL: process.env.AI_BASE_URL || 'https://api.openai.com/v1',
+        apiKey: getApiKey(),
+      });
+    }
   }
   return client;
 }
 
 function getCurrentModel() {
-  return process.env.AI_MODEL || 'openai/gpt-4o';
+  if (isAzureOpenAI()) return process.env.AZURE_OPENAI_DEPLOYMENT;
+  return process.env.AI_MODEL || 'gpt-4o';
 }
 
 /**

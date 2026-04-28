@@ -48,8 +48,9 @@ A kid-friendly platform that blends visual block coding with AI-powered natural 
 - **mBot2** with CyberPi (ESP32) — [Makeblock store](https://www.makeblock.com/pages/mbot2)
 - **MQTT broker** — [Mosquitto](https://mosquitto.org/) running on your network
 - **AI provider** (one of):
-  - [Azure OpenAI](https://azure.microsoft.com/en-us/products/ai-services/openai-service) (recommended)
-  - [GitHub Models](https://github.com/marketplace/models) via GitHub Copilot subscription
+  - [OpenAI API](https://platform.openai.com/) (recommended)
+  - [Azure OpenAI](https://azure.microsoft.com/en-us/products/ai-services/openai-service)
+  - Any OpenAI-compatible endpoint
 - **Makeblock mLink2** — For one-time firmware upload (USB, runs locally)
 
 ## Quick Start
@@ -108,16 +109,24 @@ Copy `.env.example` to `.env` and configure:
 
 ### AI Provider (choose one)
 
-**Azure OpenAI** (recommended):
+**OpenAI** (recommended):
+```env
+AI_API_KEY=sk-your_openai_api_key
+AI_MODEL=gpt-4o                    # Optional (default: gpt-4o)
+```
+
+**Azure OpenAI**:
 ```env
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your_api_key
 AZURE_OPENAI_DEPLOYMENT=your_deployment_name
 ```
 
-**GitHub Models** (alternative):
+**Any OpenAI-compatible endpoint**:
 ```env
-GITHUB_TOKEN=ghp_your_token_here
+AI_API_KEY=your_api_key
+AI_BASE_URL=https://your-endpoint/v1
+AI_MODEL=your-model-name
 ```
 
 ### Required Settings
@@ -169,7 +178,7 @@ mbot-studio/
 ├── server/                   # Node.js + Express backend
 │   └── src/
 │       ├── services/
-│       │   ├── ai-service.js         # AI generation (Azure OpenAI / GitHub Models)
+│       │   ├── ai-service.js         # AI generation + prompt caching (OpenAI / Azure)
 │       │   ├── mqtt-service.js       # MQTT bridge + hardware state tracking
 │       │   ├── code-generator.js     # Blocks → MicroPython compiler
 │       │   ├── websocket.js          # WebSocket gateway
@@ -194,7 +203,7 @@ mbot-studio/
 |--------|----------|---------|
 | POST | `/api/ai/generate` | Generate block program from natural language |
 | POST | `/api/ai/chat` | Chat with AI assistant |
-| GET | `/api/ai/models` | List available AI models |
+| GET | `/api/ai/model` | Get currently active AI model |
 | POST | `/api/robot/command` | Send single command to robot |
 | POST | `/api/robot/program` | Send full program to robot |
 | GET | `/api/config` | Get robot hardware config |
@@ -266,21 +275,15 @@ docker run -d --name mbot-studio -p 3001:3001 --env-file .env mbot-studio
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GITHUB_TOKEN` | Yes | — | GitHub PAT with Copilot access |
+| `AI_API_KEY` | Yes* | — | OpenAI API key (or compatible provider) |
 | `MQTT_BROKER_URL` | Yes | `mqtt://localhost:1883` | Mosquitto server |
-| `AI_MODEL` | No | `openai/gpt-5-chat` | AI model |
+| `AI_MODEL` | No | `gpt-4o` | AI model name |
+| `AI_BASE_URL` | No | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
 | `PORT` | No | `3001` | Server port |
 | `DATA_DIR` | No | `/app/data` | Config persistence directory |
 | `MQTT_TOPIC_PREFIX` | No | `mbot-studio` | MQTT topic namespace |
 
-## Getting a GitHub Token
-
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
-2. Click **"Generate new token (classic)"**
-3. Select scopes: `read:user` (and `copilot` if available)
-4. Copy the token into `.env`
-
-Requires an active GitHub Copilot subscription for the GitHub Models API.
+\* Not required if using Azure OpenAI (set `AZURE_OPENAI_*` vars instead) or `AI_LOCAL_DEBUG=true`.
 
 ## Troubleshooting
 

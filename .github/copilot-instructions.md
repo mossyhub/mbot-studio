@@ -23,7 +23,7 @@ Web (React/Vite)  ──HTTP/WS──▶  Server (Node.js/Express)  ──MQTT�
 
 1. User types a natural-language request in the chat panel.
 2. Frontend sends `POST /api/ai/generate` with the message + current blocks.
-3. Server calls GitHub Models API (OpenAI-compatible) → gets JSON block program.
+3. Server calls OpenAI-compatible API → gets JSON block program.
 4. Server converts blocks to MicroPython via `code-generator.js`.
 5. Frontend displays blocks in the visual editor; user clicks Run.
 6. `POST /api/robot/program` → server sends blocks via MQTT to robot.
@@ -45,6 +45,7 @@ Web (React/Vite)  ──HTTP/WS──▶  Server (Node.js/Express)  ──MQTT�
 - Express routes in `server/src/routes/`, services in `server/src/services/`.
 - Singleton pattern for `MqttService` and `TelemetryService` (`getInstance()`).
 - AI model compatibility is adaptive: tracks unsupported params per model, prunes before retry.
+- Supports OpenAI, Azure OpenAI, or any OpenAI-compatible endpoint (via `AI_BASE_URL`).
 - Config lives in `robot-config.json` at project root (or `DATA_DIR` in Docker).
 - `.env` is loaded from project root via `dotenv.config({ path: '../../.env' })`.
 - Validation helpers in `validation.js` — always validate at route boundaries.
@@ -107,7 +108,7 @@ DC motors and servos on the starter_shield are stateless — the server tracks a
 
 ## Security notes
 
-- `GITHUB_TOKEN` is the only secret; lives in `.env`, never committed.
+- `AI_API_KEY` is the only secret; lives in `.env`, never committed.
 - No authentication on HTTP/WS endpoints (local-network-only design for home use).
 - REPL endpoint executes arbitrary Python on the robot — by design for the debug terminal.
 - Firmware upload via mLink is localhost-only (127.0.0.1:52384).

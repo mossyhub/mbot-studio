@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { generateProgram, chatWithAI, fetchAvailableModels, getAiDiagnostics, getModel } from '../services/ai-service.js';
+import { generateProgram, chatWithAI, getAiDiagnostics, getModel } from '../services/ai-service.js';
 import { blocksToMicroPython } from '../services/code-generator.js';
 import { loadConfig } from './config.js';
 import { MqttService } from '../services/mqtt-service.js';
@@ -11,19 +11,6 @@ export const aiRoutes = Router();
 const conversations = new SessionStore({
   maxMessagesPerSession: 20,
   maxSessions: 200,
-});
-
-/**
- * GET /api/ai/models
- * List available AI models from GitHub Models API
- */
-aiRoutes.get('/models', async (req, res) => {
-  try {
-    const models = await fetchAvailableModels();
-    res.json({ models, current: getModel() });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 });
 
 /**

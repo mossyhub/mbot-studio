@@ -24,10 +24,10 @@ description: "Node.js Express backend conventions: ES modules, route/service str
 - `SessionStore` is instantiated per-route file (not singleton).
 
 ## AI service
-- Uses OpenAI-compatible client against GitHub Models API.
+- Uses OpenAI-compatible client. Supports direct OpenAI, Azure OpenAI, or any compatible endpoint (`AI_BASE_URL`).
 - Adaptive parameter pruning: records unsupported params per model, removes them on retry.
 - Local debug mode (`AI_LOCAL_DEBUG=true`) returns deterministic programs without API calls.
-- Model auto-selection on startup from GitHub catalog; cached 10 min.
+- Model set via `AI_MODEL` env var (default: `gpt-4o`). No catalog auto-discovery.
 
 ## MQTT
 - All topics under `mbot-studio/robot/*` prefix.

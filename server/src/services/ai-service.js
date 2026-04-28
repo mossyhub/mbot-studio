@@ -4,13 +4,10 @@ import { fileURLToPath } from 'url';
 import OpenAI, { AzureOpenAI } from 'openai';
 import { formatCalibrationForPrompt } from './calibration-service.js';
 
-// Uses GitHub Models API (included with GitHub Copilot subscription)
-// Inference: https://models.github.ai/inference  (OpenAI-compatible)
-// Catalog:   https://models.github.ai/catalog/models
-// Client is lazy-initialized so dotenv has time to load first
+// OpenAI-compatible API client.
+// Supports: direct OpenAI, Azure OpenAI, or any compatible endpoint (via AI_BASE_URL).
+// Client is lazy-initialized so dotenv has time to load first.
 
-const INFERENCE_URL = 'https://models.github.ai/inference';
-const CATALOG_URL = 'https://models.github.ai/catalog/models';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../..');
 const MODEL_COMPAT_PATH = path.join(DATA_DIR, 'ai-model-compat.json');
@@ -18,7 +15,6 @@ const MODEL_COMPAT_PATH = path.join(DATA_DIR, 'ai-model-compat.json');
 let client = null;
 let lastAiError = null;
 let compatibilityLoaded = false;
-let modelCatalogById = new Map();
 let modelCompatibility = {
   version: 1,
   updatedAt: null,
@@ -49,8 +45,8 @@ function getFriendlyAiFailure(error, fallbackText) {
   const msg = String(error?.message || '');
   const status = error?.status || error?.response?.status;
 
-  if (!process.env.GITHUB_TOKEN && !isAzureOpenAI()) {
-    return `${fallbackText} (Missing GITHUB_TOKEN. For local testing, set AI_LOCAL_DEBUG=true in .env.)`;
+  if (!getApiKey() && !isAzureOpenAI()) {
+    return `${fallbackText} (Missing AI_API_KEY in .env. For local testing, set AI_LOCAL_DEBUG=true.)`;
   }
 
   if (isAzureOpenAI() && !process.env.AZURE_OPENAI_API_KEY) {
@@ -58,7 +54,7 @@ function getFriendlyAiFailure(error, fallbackText) {
   }
 
   if (status === 401 || msg.toLowerCase().includes('unauthorized')) {
-    return `${fallbackText} (GITHUB_TOKEN was rejected. Check token validity and Copilot access.)`;
+    return `${fallbackText} (API key was rejected — check AI_API_KEY in .env.)`;
   }
 
   if (status === 429) {
@@ -149,15 +145,10 @@ function recordUnsupportedParam(modelId, paramName, error) {
 function getHeuristicUnsupportedParams(modelId) {
   const heuristics = new Set();
   const normalizedId = String(modelId || '').toLowerCase();
-  const meta = modelCatalogById.get(modelId);
-  const capabilities = Array.isArray(meta?.capabilities)
-    ? meta.capabilities.map(c => String(c || '').toLowerCase())
-    : [];
 
+  // Reasoning-family models (o1, o3, gpt-5, etc.) often reject temperature
   const looksReasoningFamily = /(^|\/)o\d|gpt-5/.test(normalizedId);
-  const hasReasoningCapability = capabilities.includes('reasoning');
-
-  if (looksReasoningFamily || hasReasoningCapability) {
+  if (looksReasoningFamily) {
     heuristics.add('temperature');
   }
 
@@ -324,6 +315,11 @@ function isAzureOpenAI() {
   return !!(process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_DEPLOYMENT);
 }
 
+/** Resolve the API key from env — supports AI_API_KEY or legacy GITHUB_TOKEN. */
+function getApiKey() {
+  return process.env.AI_API_KEY || process.env.GITHUB_TOKEN || '';
+}
+
 function getClient() {
   if (!client) {
     if (isAzureOpenAI()) {
@@ -334,20 +330,17 @@ function getClient() {
       });
     } else {
       client = new OpenAI({
-        baseURL: process.env.AI_BASE_URL || INFERENCE_URL,
-        apiKey: process.env.GITHUB_TOKEN,
+        baseURL: process.env.AI_BASE_URL || 'https://api.openai.com/v1',
+        apiKey: getApiKey(),
       });
     }
   }
   return client;
 }
 
-// Active model chosen automatically at server startup
-// For Azure OpenAI, this is the deployment name
-// For GitHub Models, model IDs use publisher/name format, e.g. 'openai/gpt-4o'
 let currentModel = isAzureOpenAI()
   ? process.env.AZURE_OPENAI_DEPLOYMENT
-  : (process.env.AI_MODEL || 'openai/gpt-4o');
+  : (process.env.AI_MODEL || 'gpt-4o');
 
 function getCurrentModel() {
   return currentModel;
@@ -364,10 +357,10 @@ export function getAiDiagnostics() {
 
   return {
     localDebug: isLocalDebugEnabled(),
-    provider: isAzureOpenAI() ? 'azure' : 'github',
+    provider: isAzureOpenAI() ? 'azure' : 'openai',
     model: modelId,
-    baseURL: isAzureOpenAI() ? process.env.AZURE_OPENAI_ENDPOINT : (process.env.AI_BASE_URL || INFERENCE_URL),
-    hasGithubToken: !!process.env.GITHUB_TOKEN,
+    baseURL: isAzureOpenAI() ? process.env.AZURE_OPENAI_ENDPOINT : (process.env.AI_BASE_URL || 'https://api.openai.com/v1'),
+    hasApiKey: !!getApiKey(),
     heuristicUnsupportedParams: getHeuristicUnsupportedParams(modelId),
     cachedUnsupportedParams: modelEntry.unsupportedParams || [],
     compatibilityCachePath: MODEL_COMPAT_PATH,
@@ -375,52 +368,7 @@ export function getAiDiagnostics() {
   };
 }
 
-function scoreOpenAiModel(model) {
-  const id = String(model?.id || '').toLowerCase();
-  const tier = String(model?.tier || '').toLowerCase();
-
-  let score = 0;
-
-  // Prefer newest major family first
-  if (id.includes('gpt-5-chat')) score += 1120;
-  else if (id.includes('gpt-5')) score += 1000;
-  else if (id.includes('gpt-4.1')) score += 900;
-  else if (id.includes('gpt-4o')) score += 800;
-  else if (id.includes('gpt-4')) score += 700;
-
-  // Prefer full-size models over cheaper variants
-  if (id.includes('mini')) score -= 250;
-  if (id.includes('nano')) score -= 300;
-
-  // Prefer stable over preview where possible
-  if (id.includes('preview') && !id.includes('gpt-5-chat')) score -= 100;
-
-  // Prefer higher rate-limit tier when available
-  if (tier === 'high') score += 30;
-  else if (tier === 'custom') score += 15;
-
-  return score;
-}
-
-function pickBestOpenAiModel(models = []) {
-  const openAiModels = models.filter((m) => {
-    const publisher = String(m?.publisher || '').toLowerCase();
-    const id = String(m?.id || '').toLowerCase();
-    return publisher === 'openai' || id.startsWith('openai/');
-  });
-
-  if (openAiModels.length === 0) return null;
-
-  return openAiModels
-    .slice()
-    .sort((a, b) => {
-      const diff = scoreOpenAiModel(b) - scoreOpenAiModel(a);
-      if (diff !== 0) return diff;
-      return String(a.id).localeCompare(String(b.id));
-    })[0];
-}
-
-export async function initializeModelSelection() {
+export function initializeModelSelection() {
   if (isLocalDebugEnabled()) {
     currentModel = 'local/debug-rule-engine';
     console.log('🧪 AI local debug mode enabled (AI_LOCAL_DEBUG=true)');
@@ -433,167 +381,229 @@ export async function initializeModelSelection() {
     return currentModel;
   }
 
-  try {
-    const models = await fetchAvailableModels();
-    const selected = pickBestOpenAiModel(models);
-
-    if (selected?.id) {
-      currentModel = selected.id;
-      console.log(`🧠 AI model auto-selected: ${selected.id}`);
-      return currentModel;
-    }
-
-    console.warn(`⚠️  No OpenAI model found in catalog. Using fallback: ${currentModel}`);
-    return currentModel;
-  } catch (error) {
-    console.warn(`⚠️  AI model auto-selection failed. Using fallback: ${currentModel}. ${error.message}`);
-    return currentModel;
-  }
-}
-
-/**
- * Fetch available chat-completion models from the GitHub Models API
- * Caches the result for 10 minutes to avoid excessive requests
- */
-let modelsCache = null;
-let modelsCacheTime = 0;
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
-
-export async function fetchAvailableModels() {
-  if (isLocalDebugEnabled()) {
-    return [{
-      id: 'local/debug-rule-engine',
-      name: 'Local Debug Rule Engine',
-      publisher: 'Local',
-      summary: 'Offline deterministic fallback for local development',
-      tier: 'local',
-    }];
-  }
-
-  if (isAzureOpenAI()) {
-    const deployment = process.env.AZURE_OPENAI_DEPLOYMENT;
-    return [{
-      id: deployment,
-      name: `Azure OpenAI: ${deployment}`,
-      publisher: 'Azure',
-      summary: `Deployed at ${process.env.AZURE_OPENAI_ENDPOINT}`,
-      tier: 'azure',
-    }];
-  }
-
-  const now = Date.now();
-  if (modelsCache && (now - modelsCacheTime) < CACHE_TTL) {
-    return modelsCache;
-  }
-
-  try {
-    const res = await fetch(CATALOG_URL, {
-      headers: {
-        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
-        'Accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    });
-
-    if (!res.ok) {
-      throw new Error(`Models catalog API returned ${res.status}`);
-    }
-
-    const allModels = await res.json();
-
-    // Filter out embedding models and shape the response
-    modelsCache = allModels
-      .filter(m => m.rate_limit_tier !== 'embeddings')
-      .map(m => ({
-        id: m.id,                      // e.g. 'openai/gpt-4o'
-        name: m.name,                  // e.g. 'OpenAI GPT-4o'
-        publisher: m.publisher,
-        summary: m.summary || '',
-        tier: m.rate_limit_tier || '',  // low, high, custom
-        capabilities: Array.isArray(m.capabilities) ? m.capabilities : [],
-        tags: Array.isArray(m.tags) ? m.tags : [],
-        limits: m.limits || null,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    modelCatalogById = new Map(modelsCache.map(m => [m.id, m]));
-
-    modelsCacheTime = now;
-    return modelsCache;
-  } catch (error) {
-    console.error('Failed to fetch models:', error.message);
-    // Return a minimal fallback list
-    const fallbackModels = [
-      { id: 'openai/gpt-4o', name: 'OpenAI GPT-4o', publisher: 'OpenAI', summary: '', tier: 'high' },
-      { id: 'openai/gpt-4o-mini', name: 'OpenAI GPT-4o mini', publisher: 'OpenAI', summary: '', tier: 'low' },
-    ];
-    modelCatalogById = new Map(fallbackModels.map(m => [m.id, m]));
-    return fallbackModels;
-  }
+  currentModel = process.env.AI_MODEL || 'gpt-4o';
+  const baseURL = process.env.AI_BASE_URL || 'https://api.openai.com/v1';
+  console.log(`🧠 AI model: ${currentModel} at ${baseURL}`);
+  return currentModel;
 }
 
 /**
  * System prompt that teaches the AI about mBot2 programming
- * and how to generate structured block programs
+ * and how to generate structured block programs.
+ *
+ * This prompt is domain-specific: it encodes physical robot geometry,
+ * spatial constraints, and task-decomposition patterns so the AI can
+ * reason about the physical world when generating programs.
+ *
+ * PROMPT CACHING STRATEGY:
+ * OpenAI automatically caches identical message prefixes ≥1024 tokens.
+ * We maximise cache hits by keeping the system prompt config-stable
+ * (it only changes when robot-config.json changes) and moving the
+ * per-request dynamic state (hardware positions) into a separate
+ * context message that comes AFTER the cached system prefix.
+ *
+ * Message layout:
+ *   [0] system   — config-stable, cacheable (identity + robot + blocks + constraints)
+ *   [1] user     — dynamic hardware state context (small, ~100 tokens)
+ *   [2..n-1]     — conversation history
+ *   [n] user     — the child's current request
  */
-function buildSystemPrompt(robotConfig, hardwareStates) {
-  const configDescription = robotConfig
-    ? formatRobotConfig(robotConfig, hardwareStates)
-    : 'Standard mBot2 with two drive motors, ultrasonic sensor, line follower, and color sensor.';
 
-  return `You are a friendly robot programming assistant for a child's mBot2. Convert their ideas into JSON block programs.
+// ── System prompt cache ────────────────────────────────────────────
+// The system prompt only depends on robotConfig (which rarely changes).
+// We cache the built prompt keyed by a cheap hash of the config object,
+// so we don't rebuild string-heavy sections on every request.
+let _cachedSystemPrompt = null;
+let _cachedConfigHash = null;
 
-## Robot Config
-${configDescription}
-${formatCalibrationForPrompt(robotConfig?.calibrations)}
-## Block Types (ONLY use these exact type names)
-
-### Driving (wheels/treads — for moving, turning, spinning the whole robot)
-- {"type": "move_forward", "speed": 50, "duration": 2} — drive forward
-- {"type": "move_backward", "speed": 50, "duration": 2} — drive backward
-- {"type": "turn_left", "speed": 50, "angle": 90} — turn robot left by angle
-- {"type": "turn_right", "speed": 50, "angle": 90} — turn robot right by angle
-- {"type": "stop"} — stop driving
-
-"spin around" = turn_right with angle 360. "turn left" = turn_left. These control the WHEELS, not custom hardware.
-
-### Sound & Display
-- {"type": "play_tone", "frequency": 440, "duration": 0.5}
-- {"type": "display_text", "text": "Hello!", "size": 16}
-- {"type": "set_led", "color": "red"} — colors: red|green|blue|yellow|purple|white|off
-
-### Control
-- {"type": "wait", "duration": 1}
-- {"type": "repeat", "times": 3, "do": [...]}
-- {"type": "if_obstacle", "distance": 20, "then": [...], "else": [...]}
-- {"type": "move_until", "direction": "forward", "speed": 50, "sensor": "distance", "operator": "<", "value": 15}
-
-### Custom Hardware (servos & motors from config — NOT for driving!)
-- {"type": "servo", "port": "S1", "angle": 90} — move a servo to exact angle
-- {"type": "dc_motor", "port": "M1", "speed": 50, "duration": 1} — run a DC motor
-
-ONLY use servo/dc_motor for custom hardware defined in the config (arm, claw, etc). NEVER use them for driving or turning — use move_forward/turn_left/turn_right instead.
-
-## Custom Hardware Rules (CRITICAL)
-ALWAYS use the EXACT angles, speeds, and durations from the robot config actions. NEVER guess angles like 0° or 180°. When the child says "lower the arm" or "open the claw", find the matching action name in the config and use its exact parameters.
-
-## Response Format
-Programs: {"program": [...blocks...], "explanation": "friendly description"}
-Questions: {"chat": "your message"}
-Speed 30-70 for safety. Keep programs simple.`;
+function configHash(robotConfig) {
+  // JSON.stringify is deterministic for our config structure
+  return JSON.stringify({
+    name: robotConfig?.name,
+    additions: robotConfig?.additions,
+    constraints: robotConfig?.constraints,
+    taskPatterns: robotConfig?.taskPatterns,
+    calibrations: robotConfig?.calibrations,
+    physicalDescription: robotConfig?.physicalDescription,
+  });
 }
 
-function formatRobotConfig(config, hardwareStates) {
-  let desc = `Robot Name: ${config.name || 'My mBot2'}\n`;
-  desc += `Base: mBot2 with CyberPi (2 encoder drive motors, ultrasonic sensor, line follower, color sensor, gyroscope)\n`;
+function getCachedSystemPrompt(robotConfig) {
+  const hash = configHash(robotConfig);
+  if (_cachedSystemPrompt && _cachedConfigHash === hash) {
+    return _cachedSystemPrompt;
+  }
+  _cachedSystemPrompt = buildSystemPrompt(robotConfig);
+  _cachedConfigHash = hash;
+  return _cachedSystemPrompt;
+}
 
-  if (config.additions && config.additions.length > 0) {
-    desc += '\nCustom Hardware Additions:\n';
+/**
+ * Build the system prompt WITHOUT hardware states.
+ * Hardware states are injected as a separate context message to keep
+ * the system prompt identical across requests (enabling prompt caching).
+ */
+function buildSystemPrompt(robotConfig) {
+  const sections = [];
 
-    // Group by assembly/partOf for semantic clarity
+  // ── Identity & tone ──────────────────────────────────────────────
+  sections.push(
+    `You are a friendly, encouraging robot programming assistant helping a young child (ages 6–12) program their mBot2 robot. Convert their natural-language ideas into JSON block programs.
+Use simple words, short sentences, and the occasional emoji. If something is unclear, ask — don't guess.`
+  );
+
+  // ── Physical robot description (without runtime state) ──────────
+  sections.push(formatPhysicalDescription(robotConfig, null));
+
+  // ── Block reference ─────────────────────────────────────────────
+  sections.push(formatBlockReference(robotConfig));
+
+  // ── Physical constraints ────────────────────────────────────────
+  if (robotConfig?.constraints?.length) {
+    sections.push(
+      `## Physical Constraints (IMPORTANT — follow these!)\n` +
+      robotConfig.constraints.map(c => `- ${c}`).join('\n')
+    );
+  }
+
+  // ── Common task patterns ────────────────────────────────────────
+  if (robotConfig?.taskPatterns?.length) {
+    sections.push(
+      `## Common Task Patterns\nWhen the child asks for one of these, follow the sequence:\n` +
+      robotConfig.taskPatterns
+        .map(p => `- **"${p.trigger}"** → ${p.sequence}`)
+        .join('\n')
+    );
+  }
+
+  // ── Calibration data ────────────────────────────────────────────
+  const calText = formatCalibrationForPrompt(robotConfig?.calibrations);
+  if (calText) sections.push(calText);
+
+  // ── Response format ─────────────────────────────────────────────
+  sections.push(
+    `## Response Format
+- To generate a program: {"program": [...blocks...], "explanation": "friendly one-sentence description"}
+- To chat / ask a question: {"chat": "your friendly message"}
+- Speed 30–70 for driving safety. Keep programs short and simple.
+- ALWAYS respond with valid JSON — nothing outside the JSON object.`
+  );
+
+  return sections.join('\n\n');
+}
+
+/**
+ * Build a short context message with current hardware positions.
+ * This changes per-request, so it lives outside the cached system prompt.
+ * Returns null if there are no hardware additions.
+ */
+function buildHardwareStateContext(robotConfig, hardwareStates) {
+  if (!robotConfig?.additions?.length || !hardwareStates) return null;
+
+  const lines = ['Current hardware positions:'];
+  for (const a of robotConfig.additions) {
+    const state = hardwareStates[a.port];
+    const position = state?.assumedState && state.assumedState !== 'unknown'
+      ? `"${state.assumedState}"`
+      : 'unknown';
+    lines.push(`- ${a.label || a.port} (${a.port}): ${position}`);
+  }
+  return lines.join('\n');
+}
+
+// ── Conversation compression ──────────────────────────────────────
+// Keep recent messages verbatim (the AI needs exact context for follow-ups).
+// Older messages are summarised into a single compact block so we don't
+// blow the context window on long sessions.
+const RECENT_KEEP = 6;   // keep last 6 messages verbatim (3 turns)
+const MAX_HISTORY = 20;  // absolute cap from SessionStore
+
+/**
+ * Compress conversation history for efficient token usage.
+ *
+ * - If ≤ RECENT_KEEP messages: return as-is
+ * - If > RECENT_KEEP: summarise the older messages into a compact
+ *   "[Earlier conversation]" block + keep recent verbatim
+ *
+ * This is a local summarisation (no extra AI call) that extracts the
+ * key information: what programs were built, what the child asked for.
+ */
+function compressHistory(history) {
+  if (!history || history.length === 0) return [];
+
+  const capped = history.slice(-MAX_HISTORY);
+
+  if (capped.length <= RECENT_KEEP) {
+    return capped;
+  }
+
+  const older = capped.slice(0, capped.length - RECENT_KEEP);
+  const recent = capped.slice(-RECENT_KEEP);
+
+  // Extract a brief summary of older messages
+  const summaryLines = [];
+  for (const msg of older) {
+    if (msg.role === 'user') {
+      // Keep the child's request text, truncated
+      const text = String(msg.content || '').slice(0, 120);
+      summaryLines.push(`Child: ${text}`);
+    } else if (msg.role === 'assistant') {
+      // Extract just the explanation or chat text from the AI response
+      try {
+        const parsed = JSON.parse(msg.content);
+        if (parsed.explanation) {
+          summaryLines.push(`AI: Made a program — ${parsed.explanation}`);
+        } else if (parsed.chat) {
+          summaryLines.push(`AI: ${String(parsed.chat).slice(0, 80)}`);
+        }
+      } catch {
+        summaryLines.push(`AI: (responded)`);
+      }
+    }
+  }
+
+  const summaryMsg = {
+    role: 'user',
+    content: `[Earlier in this conversation — summary of ${older.length} messages]\n${summaryLines.join('\n')}\n[End of summary — recent messages follow]`,
+  };
+
+  return [summaryMsg, ...recent];
+}
+
+/**
+ * Describe the robot as a physical object the AI can reason about.
+ * Includes spatial relationships, sensor locations, and hardware attachments.
+ */
+function formatPhysicalDescription(robotConfig, hardwareStates) {
+  const name = robotConfig?.name || 'My mBot2';
+  let desc = `## Your Robot: "${name}"\n`;
+
+  // High-level physical description (user-authored or default)
+  if (robotConfig?.physicalDescription) {
+    desc += robotConfig.physicalDescription + '\n';
+  } else {
+    desc += 'A small two-wheeled rover robot (mBot2) about the size of a lunchbox.\n';
+  }
+
+  // Base platform capabilities
+  desc += `\n### Base Platform\n`;
+  desc += `- **Drive**: Two motorized wheels (differential drive) — can drive forward/backward and spin in place\n`;
+  desc += `- **Front sensor**: Ultrasonic distance sensor (10–400 cm range) — detects obstacles ahead\n`;
+  desc += `- **Bottom sensor**: Dual RGB line follower — detects lines on the ground\n`;
+  desc += `- **Color sensor**: Quad RGB — identifies colors of nearby objects\n`;
+  desc += `- **Gyroscope**: Measures rotation (yaw/pitch/roll)\n`;
+  desc += `- **Display**: Small screen on top for showing text and icons\n`;
+  desc += `- **Speaker**: Can play tones and melodies\n`;
+  desc += `- **LEDs**: 5 programmable colored lights\n`;
+
+  // Custom hardware additions with spatial context
+  if (robotConfig?.additions?.length) {
+    desc += `\n### Custom Hardware Attached to This Robot\n`;
+
+    // Group by assembly
     const grouped = {};
     const ungrouped = [];
-    for (const a of config.additions) {
+    for (const a of robotConfig.additions) {
       if (a.partOf) {
         if (!grouped[a.partOf]) grouped[a.partOf] = [];
         grouped[a.partOf].push(a);
@@ -602,84 +612,163 @@ function formatRobotConfig(config, hardwareStates) {
       }
     }
 
-    const formatHardware = (a, indent) => {
-      let s = `${indent}- Port ${a.port}: ${a.label || a.type} (${a.type})`;
-      if (a.purpose) s += ` — PURPOSE: ${a.purpose}`;
-      s += '\n';
-
-      // Feedback and state info
-      const feedback = a.feedbackType || 'none';
-      s += `${indent}  Feedback: ${feedback}`;
-      if (feedback === 'none') s += ' (STATELESS — no position sensor)';
-      s += '\n';
-
-      if (a.states && a.states.length > 0) {
-        s += `${indent}  Possible states: ${a.states.join(', ')}\n`;
-      }
-      if (a.homeState) {
-        s += `${indent}  Home/reset state: "${a.homeState}"\n`;
-      }
-      if (a.stallBehavior) {
-        s += `${indent}  Stall behavior: ${a.stallBehavior}`;
-        if (a.stallBehavior === 'danger') s += ' ⚠️ DO NOT exceed action durations!';
-        else if (a.stallBehavior === 'caution') s += ' — be careful at limits';
-        s += '\n';
-      }
-
-      // Current assumed state from runtime tracking
-      const state = hardwareStates?.[a.port];
-      if (state) {
-        s += `${indent}  🔵 CURRENT ASSUMED STATE: "${state.assumedState}" (confidence: ${state.confidence}, set at: ${new Date(state.timestamp).toLocaleTimeString()})\n`;
-      } else if (feedback === 'none') {
-        s += `${indent}  🔵 CURRENT ASSUMED STATE: "unknown" (not yet tracked)\n`;
-      }
-
-      if (a.description) s += `${indent}  Notes: ${a.description}\n`;
-
-      if (a.actions && a.actions.length > 0) {
-        s += `${indent}  Actions:\n`;
-        for (const act of a.actions) {
-          if (!act.name) continue;
-          s += `${indent}    "${act.name}"`;
-          if (act.targetState) s += ` → sets state to "${act.targetState}"`;
-          s += ': ';
-          // Show motor or servo parameters
-          if (act.angle !== undefined) {
-            s += `servo angle ${act.angle}°`;
-          } else if (act.motorDirection || act.speed || act.duration) {
-            const dir = act.motorDirection || 'forward';
-            const spd = act.speed || 50;
-            const dur = act.duration || 1;
-            s += `motor ${dir} at speed ${spd} for ${dur}s`;
-          } else {
-            s += act.description || 'no description';
-          }
-          s += '\n';
-        }
-      }
-
-      return s;
-    };
-
-    // Describe grouped assemblies
     for (const [assembly, parts] of Object.entries(grouped)) {
-      desc += `\n🧩 Assembly: "${assembly}"\n`;
+      desc += `\n**${assembly}** (${parts.length} part${parts.length > 1 ? 's' : ''}):\n`;
       for (const a of parts) {
-        desc += formatHardware(a, '  ');
+        desc += formatHardwareAddition(a, hardwareStates);
       }
     }
 
-    // Describe ungrouped hardware
     for (const a of ungrouped) {
-      desc += formatHardware(a, '');
+      desc += formatHardwareAddition(a, hardwareStates);
     }
-  }
 
-  if (config.notes) {
-    desc += `\nAdditional Notes: ${config.notes}\n`;
+    desc += `\n⚠️ CRITICAL RULE: When the child names an action (like "lower the arm" or "open the claw"), `;
+    desc += `find the matching action name below and use its EXACT parameters. `;
+    desc += `NEVER guess angles, speeds, or durations — always use the values from the config.\n`;
   }
 
   return desc;
+}
+
+/**
+ * Format a single hardware addition with rich physical context.
+ */
+function formatHardwareAddition(addition, hardwareStates) {
+  const a = addition;
+  let s = '';
+
+  // Component header with physical context
+  const typeLabel = a.type === 'servo' ? 'Servo' : a.type === 'dc_motor' ? 'DC Motor' : a.type;
+  s += `- **${a.label || a.port}** (${typeLabel} on port ${a.port})`;
+  if (a.orientation) s += ` — moves ${a.orientation}ly`;
+  s += '\n';
+
+  // States with physical meaning
+  if (a.states?.length) {
+    s += `  Possible positions: ${a.states.join(', ')}\n`;
+  }
+  if (a.homeState) {
+    s += `  Home position (start-up default): "${a.homeState}"\n`;
+  }
+
+  // Feedback info
+  if (a.type === 'dc_motor') {
+    s += `  ⚠️ No position sensor — robot can't tell where this is, so track state carefully\n`;
+  }
+
+  // Stall behavior
+  if (a.stallBehavior === 'danger') {
+    s += `  🛑 DANGER: Running past limits can damage this mechanism!\n`;
+  } else if (a.stallBehavior === 'caution') {
+    s += `  ⚡ Motor will stall harmlessly at its limits\n`;
+  }
+
+  // Current assumed state
+  const state = hardwareStates?.[a.port];
+  if (state?.assumedState && state.assumedState !== 'unknown') {
+    s += `  📍 Currently: "${state.assumedState}"\n`;
+  } else {
+    s += `  📍 Currently: unknown (not yet moved)\n`;
+  }
+
+  // Actions — the actual parameters the AI must use
+  if (a.actions?.length) {
+    s += `  Actions:\n`;
+    for (const act of a.actions) {
+      if (!act.name) continue;
+      s += `    "${act.name}"`;
+      if (act.angle !== undefined) {
+        s += ` → servo(port="${a.port}", angle=${act.angle})`;
+      } else if (act.motorDirection || act.speed !== undefined) {
+        const dir = act.motorDirection || 'forward';
+        const speed = dir === 'reverse' ? -(act.speed || 50) : (act.speed || 50);
+        s += ` → dc_motor(port="${a.port}", speed=${speed}, duration=${act.duration || 1})`;
+      }
+      s += '\n';
+    }
+  }
+
+  return s;
+}
+
+/**
+ * Format the block type reference section.
+ * Only lists blocks that this robot can actually use.
+ */
+function formatBlockReference(robotConfig) {
+  let ref = `## Block Types (ONLY use these exact type names)\n`;
+
+  ref += `\n### Driving (move the whole robot — wheels only)\n`;
+  ref += `- {"type": "move_forward", "speed": 50, "duration": 2}\n`;
+  ref += `- {"type": "move_backward", "speed": 50, "duration": 2}\n`;
+  ref += `- {"type": "turn_left", "speed": 50, "angle": 90}\n`;
+  ref += `- {"type": "turn_right", "speed": 50, "angle": 90}\n`;
+  ref += `- {"type": "stop"}\n`;
+  ref += `"spin" or "spin around" = turn_right with angle 360. These control the WHEELS.\n`;
+
+  ref += `\n### Sound & Display\n`;
+  ref += `- {"type": "play_tone", "frequency": 440, "duration": 0.5}\n`;
+  ref += `- {"type": "display_text", "text": "Hello!", "size": 16}\n`;
+  ref += `- {"type": "set_led", "color": "red"} — colors: red|green|blue|yellow|purple|white|off\n`;
+
+  ref += `\n### Control Flow\n`;
+  ref += `- {"type": "wait", "duration": 1}\n`;
+  ref += `- {"type": "repeat", "times": 3, "do": [...]}\n`;
+  ref += `- {"type": "if_obstacle", "distance": 20, "then": [...], "else": [...]}\n`;
+  ref += `- {"type": "move_until", "direction": "forward", "speed": 50, "sensor": "distance", "operator": "<", "value": 15}\n`;
+
+  // Only include custom hardware blocks if there are additions
+  if (robotConfig?.additions?.length) {
+    ref += `\n### Custom Hardware (servos & motors from config — NOT for driving!)\n`;
+    ref += `- {"type": "servo", "port": "S1", "angle": 90} — move a servo to exact angle\n`;
+    ref += `- {"type": "dc_motor", "port": "M1", "speed": 50, "duration": 1} — run a DC motor\n`;
+    ref += `  For dc_motor: positive speed = forward, negative speed = reverse\n`;
+    ref += `\nONLY use servo/dc_motor for the custom hardware listed above. NEVER use them for driving.\n`;
+  }
+
+  return ref;
+}
+
+/**
+ * @deprecated Replaced by formatPhysicalDescription + formatHardwareAddition.
+ * Kept only for parseRobotConfig's existing-config injection.
+ */
+function formatRobotConfig(config, hardwareStates) {
+  return formatPhysicalDescription(config, hardwareStates);
+}
+
+/**
+ * Assemble the message array for an AI request.
+ *
+ * Layout (optimised for OpenAI prompt caching):
+ *   [0]   system  — config-stable prompt (cached by OpenAI after first call)
+ *   [1]   user    — hardware state context (small, per-request)
+ *   [2…n] history — compressed conversation history
+ *   [n+1] user    — the child's current message
+ */
+function assembleMessages({ robotConfig, hardwareStates, conversationHistory, userContent, systemSuffix }) {
+  const systemPrompt = getCachedSystemPrompt(robotConfig)
+    + (systemSuffix ? `\n\n${systemSuffix}` : '');
+
+  const messages = [{ role: 'system', content: systemPrompt }];
+
+  // Hardware state as a lightweight context injection (outside cached system prompt)
+  const stateCtx = buildHardwareStateContext(robotConfig, hardwareStates);
+  if (stateCtx) {
+    messages.push({ role: 'user', content: stateCtx });
+    messages.push({ role: 'assistant', content: '{"chat":"Got it — I know where everything is."}' });
+  }
+
+  // Compressed conversation history
+  if (conversationHistory?.length) {
+    messages.push(...compressHistory(conversationHistory));
+  }
+
+  // Current user message
+  messages.push({ role: 'user', content: userContent });
+
+  return messages;
 }
 
 /**
@@ -689,8 +778,6 @@ export async function generateProgram(userMessage, robotConfig, conversationHist
   if (isLocalDebugEnabled()) {
     return makeLocalDebugProgram(userMessage, currentBlocks);
   }
-
-  const systemPrompt = buildSystemPrompt(robotConfig, hardwareStates);
 
   // Build the user message, including current program context if available
   let enrichedMessage = userMessage;
@@ -708,11 +795,12 @@ IMPORTANT: Build upon the existing blocks. Do NOT start from scratch unless they
 Return the COMPLETE updated program (existing blocks + modifications) in your response.`;
   }
 
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...conversationHistory.slice(-10), // Keep last 10 messages for context
-    { role: 'user', content: enrichedMessage },
-  ];
+  const messages = assembleMessages({
+    robotConfig,
+    hardwareStates,
+    conversationHistory,
+    userContent: enrichedMessage,
+  });
 
   try {
     const response = await createCompletionWithAdaptiveParams({
@@ -723,6 +811,12 @@ Return the COMPLETE updated program (existing blocks + modifications) in your re
 
     const content = response.choices[0].message.content;
     const parsed = parseJsonFromContent(content);
+
+    // Log cache hit info when available
+    const cached = response.usage?.prompt_tokens_details?.cached_tokens;
+    if (cached > 0) {
+      console.log(`💾 Prompt cache hit: ${cached}/${response.usage.prompt_tokens} tokens cached`);
+    }
 
     return {
       success: true,
@@ -753,16 +847,16 @@ export async function chatWithAI(userMessage, robotConfig, conversationHistory =
     };
   }
 
-  const systemPrompt = buildSystemPrompt(robotConfig, hardwareStates) + `\n\nThe user is chatting, not necessarily requesting a program. 
+  const messages = assembleMessages({
+    robotConfig,
+    hardwareStates,
+    conversationHistory,
+    userContent: userMessage,
+    systemSuffix: `The user is chatting, not necessarily requesting a program. 
 Be friendly, encouraging, and helpful. Explain robot concepts simply for an 8-year-old.
 If they seem to want a program, generate one using the JSON format above.
-Otherwise, respond with: {"chat": "your friendly message"}`;
-
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...conversationHistory.slice(-10),
-    { role: 'user', content: userMessage },
-  ];
+Otherwise, respond with: {"chat": "your friendly message"}`,
+  });
 
   try {
     const response = await createCompletionWithAdaptiveParams({
@@ -935,6 +1029,17 @@ The mBot2 has these available ports for additions:
 
 Return JSON in this format:
 {
+  "physicalDescription": "A one-paragraph description of the complete robot as a physical object. Describe what it looks like, where things are mounted, and what it can do. Write it so someone who has never seen the robot can picture it.",
+  "constraints": [
+    "Physical rules the AI must follow when generating programs, e.g. 'lower the arm before picking up objects'"
+  ],
+  "taskPatterns": [
+    {
+      "trigger": "natural language trigger phrase like 'pick up'",
+      "sequence": "Step-by-step physical action sequence",
+      "blocks": "Which block types to use in order"
+    }
+  ],
   "additions": [
     {
       "port": "M3",
@@ -976,6 +1081,22 @@ Return JSON in this format:
     {"field": "port", "question": "Which port is it connected to?"}
   ]
 }
+
+PHYSICAL DESCRIPTION GUIDE:
+- Describe the robot from a child's perspective — what does it look like?
+- Mention where hardware is mounted (on top, in front, on the side)
+- Describe what the robot can do with its attachments
+- Keep it to 2-3 sentences
+
+CONSTRAINTS GUIDE:
+- Think about what could go wrong physically (e.g., driving with arm down drags objects)
+- Think about order-of-operations (e.g., must lower arm before grabbing)
+- Think about stateless hardware (e.g., gripper has no sensor, so open first if unsure)
+
+TASK PATTERNS GUIDE:
+- Think about common things a child would ask this robot to do
+- Break each into a physical action sequence
+- Map to the block types the robot supports
 
 FIELD GUIDE:
 - "partOf": What assembly or mechanism is this hardware part of? (e.g., "Robot Arm", "Claw Assembly", "Head", "Launcher")
@@ -1029,7 +1150,7 @@ Types can be: dc_motor, servo, ultrasonic, color_sensor, light_sensor, custom`,
     const response = await createCompletionWithAdaptiveParams({
       messages,
       temperature: 0.3,
-      maxCompletionTokens: 500,
+      maxCompletionTokens: 800,
     });
 
     const parsed = parseJsonFromContent(response.choices[0].message.content);
@@ -1067,6 +1188,9 @@ Types can be: dc_motor, servo, ultrasonic, color_sensor, light_sensor, custom`,
 
     return {
       additions: scored.additions,
+      physicalDescription: parsed.physicalDescription || null,
+      constraints: Array.isArray(parsed.constraints) ? parsed.constraints : [],
+      taskPatterns: Array.isArray(parsed.taskPatterns) ? parsed.taskPatterns : [],
       understood: parsed.understood || 'I updated your robot setup with the details you shared.',
       assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : [],
       needsClarification: scored.needsClarification || !!parsed.needsClarification,

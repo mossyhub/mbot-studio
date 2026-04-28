@@ -1,5 +1,29 @@
 {
   "name": "My mBot2 Rover",
+  "physicalDescription": "A small two-wheeled rover robot about the size of a lunchbox. It has an ultrasonic distance sensor on the front that looks like two eyes. On top, there is a robot arm that can move up and down, with a motorized gripper claw at the end that opens and closes to grab small objects like ping pong balls or toy blocks.",
+  "constraints": [
+    "Lower the arm to the ground before trying to pick up objects — the gripper can't reach things when the arm is raised",
+    "Raise the arm after grabbing something before driving, or the object will drag on the ground",
+    "The gripper has no position sensor — if you're not sure whether it's open or closed, open it first",
+    "Don't drive too fast (speed > 60) when carrying an object — it might fall out of the gripper"
+  ],
+  "taskPatterns": [
+    {
+      "trigger": "pick up",
+      "sequence": "Lower arm to ground → wait briefly → close gripper → wait → raise arm",
+      "blocks": "servo S1 to ground angle → wait 0.5s → dc_motor M1 close → wait → servo S1 to straight out angle"
+    },
+    {
+      "trigger": "put down",
+      "sequence": "Lower arm to ground → wait briefly → open gripper → wait → raise arm",
+      "blocks": "servo S1 to ground angle → wait 0.5s → dc_motor M1 open → wait → servo S1 to straight out angle"
+    },
+    {
+      "trigger": "drive to something and pick it up",
+      "sequence": "Open gripper first → drive forward slowly → stop → pick up sequence",
+      "blocks": "dc_motor M1 open → move_forward slow → stop → pick up pattern"
+    }
+  ],
   "additions": [
     {
       "port": "S1",

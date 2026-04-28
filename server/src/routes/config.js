@@ -551,7 +551,7 @@ configRoutes.post('/mlink/upload', async (req, res) => {
  * POST /api/config
  * Save robot configuration
  */
-const ALLOWED_CONFIG_KEYS = new Set(['name', 'additions', 'notes', 'turnMultiplier', 'calibrations']);
+const ALLOWED_CONFIG_KEYS = new Set(['name', 'additions', 'notes', 'turnMultiplier', 'calibrations', 'physicalDescription', 'constraints', 'taskPatterns']);
 
 configRoutes.post('/', (req, res) => {
   try {

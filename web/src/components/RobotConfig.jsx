@@ -16,12 +16,18 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
   const [assumptions, setAssumptions] = useState([]);
   const [completeness, setCompleteness] = useState([]);
   const [showWizard, setShowWizard] = useState(false);
+  const [physicalDescription, setPhysicalDescription] = useState(config?.physicalDescription || '');
+  const [constraints, setConstraints] = useState(config?.constraints || []);
+  const [taskPatterns, setTaskPatterns] = useState(config?.taskPatterns || []);
 
   useEffect(() => {
     if (config) {
       setRobotName(config.name || 'My mBot2');
       setAdditions(config.additions || []);
       setNotes(config.notes || '');
+      setPhysicalDescription(config.physicalDescription || '');
+      setConstraints(config.constraints || []);
+      setTaskPatterns(config.taskPatterns || []);
       setClarificationQuestions([]);
       setAssumptions([]);
       setCompleteness([]);
@@ -46,6 +52,9 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
         setCompleteness(data.completeness || []);
         setClarificationQuestions(data.questions || []);
         setAssumptions(data.assumptions || []);
+        if (data.physicalDescription) setPhysicalDescription(data.physicalDescription);
+        if (data.constraints?.length) setConstraints(data.constraints);
+        if (data.taskPatterns?.length) setTaskPatterns(data.taskPatterns);
         setNlInput('');
 
         if (data.needsClarification) {
@@ -120,6 +129,9 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
       name: robotName,
       additions,
       notes,
+      physicalDescription: physicalDescription || undefined,
+      constraints: constraints.length ? constraints : undefined,
+      taskPatterns: taskPatterns.length ? taskPatterns : undefined,
     };
 
     try {
@@ -287,6 +299,17 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
               value={robotName}
               onChange={(e) => setRobotName(e.target.value)}
               placeholder="Give your robot a name!"
+            />
+          </div>
+          <div className="config-field">
+            <label>Describe Your Robot</label>
+            <p className="field-hint">Tell the AI what your robot looks like. Where are things attached? What can it do? This helps the AI understand your robot's physical shape.</p>
+            <textarea
+              className="config-notes"
+              value={physicalDescription}
+              onChange={(e) => setPhysicalDescription(e.target.value)}
+              placeholder="Example: A small wheeled rover with a robot arm on top. The arm moves up and down, and has a gripper claw at the end that opens and closes to pick up small objects like ping pong balls."
+              rows={3}
             />
           </div>
         </section>
@@ -736,6 +759,24 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
             rows={3}
           />
         </section>
+
+        {/* Physical Constraints */}
+        {constraints.length > 0 && (
+          <section className="config-section">
+            <h2>⚠️ Physical Rules</h2>
+            <p className="section-desc">
+              The AI follows these rules when generating programs. They were auto-detected from your robot description, or you can edit them.
+            </p>
+            <ul className="constraints-list">
+              {constraints.map((c, i) => (
+                <li key={i} className="constraint-item">
+                  <span>{c}</span>
+                  <button className="btn-remove-small" onClick={() => setConstraints(constraints.filter((_, j) => j !== i))}>×</button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {/* Save Button */}
         <div className="config-save-area">
