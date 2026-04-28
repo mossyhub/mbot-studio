@@ -160,7 +160,10 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
 
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      if (wsRef.current) wsRef.current.close();
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      }
       if (missionPlayTimer.current) clearInterval(missionPlayTimer.current);
     };
   }, [addLog, recordMissionEvent]);

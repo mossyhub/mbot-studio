@@ -207,7 +207,9 @@ class CommandHandler:
         elif t == "display_text" or t == "say":
             cyberpi.display.show_label(p.get("text", ""), p.get("size", 14), "center", index=0)
         elif t == "display_image":
-            cyberpi.display.show_label(p.get("image", "?"), 32, "center", index=0)
+            image_map = {"happy": "\xf0\x9f\x98\x8a", "sad": "\xf0\x9f\x98\xa2", "heart": "\xe2\x9d\xa4\xef\xb8\x8f", "star": "\xe2\xad\x90", "arrow_up": "\xe2\xac\x86\xef\xb8\x8f", "arrow_down": "\xe2\xac\x87\xef\xb8\x8f"}
+            img = p.get("image", "happy")
+            cyberpi.display.show_label(image_map.get(img, img), 32, "center", index=0)
         elif t == "set_led":
             color = p.get("color", "green")
             if color == "off":

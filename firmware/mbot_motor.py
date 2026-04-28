@@ -73,21 +73,52 @@ class MotorController:
 
     def turn_left(self, speed=DEFAULT_SPEED, angle=90):
         self.is_moving = True
-        self._log("LEFT a=" + str(angle))
+        speed = abs(self._clamp(speed)) or DEFAULT_SPEED
+        angle = abs(int(angle))
+        self._log("LEFT a=" + str(angle) + " s=" + str(speed))
         try:
-            mbot2.turn(-int(angle))
+            self._turn(-1, speed, angle)
         except Exception as e:
             self._log("Left err: " + str(e))
+            self.stop()
         self.is_moving = False
 
     def turn_right(self, speed=DEFAULT_SPEED, angle=90):
         self.is_moving = True
-        self._log("RIGHT a=" + str(angle))
+        speed = abs(self._clamp(speed)) or DEFAULT_SPEED
+        angle = abs(int(angle))
+        self._log("RIGHT a=" + str(angle) + " s=" + str(speed))
         try:
-            mbot2.turn(int(angle))
+            self._turn(1, speed, angle)
         except Exception as e:
             self._log("Right err: " + str(e))
+            self.stop()
         self.is_moving = False
+
+    def _turn(self, direction, speed, angle):
+        """Polled turn using differential drive. direction: 1=right, -1=left.
+        Estimates duration from angle (calibrated: ~90 degrees per second at speed 50)."""
+        degrees_per_sec = speed * 1.8  # rough calibration factor
+        duration = angle / max(degrees_per_sec, 1)
+        duration = min(duration, 30)  # safety cap at 30 seconds
+        left = speed * direction
+        right = -speed * direction
+        avg = (left + right) // 2
+        try:
+            if avg >= 0:
+                mbot2.forward(abs(avg)) if avg != 0 else None
+            else:
+                mbot2.backward(abs(avg))
+        except:
+            # Fallback to blocking turn if differential drive fails
+            mbot2.turn(angle * direction)
+            return
+        end = time.time() + duration
+        while time.time() < end:
+            if self._estop_check and self._estop_check():
+                break
+            time.sleep(0.05)
+        self.stop()
 
     def set_speed(self, left, right):
         left = self._clamp(left)

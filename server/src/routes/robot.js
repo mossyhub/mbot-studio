@@ -165,6 +165,14 @@ robotRoutes.post('/hardware-state/reset', (req, res) => {
  */
 robotRoutes.post('/hardware-state/home', (req, res) => {
   const { port, homeState, homeAction } = req.body;
+
+  if (!port || typeof port !== 'string') {
+    return res.status(400).json({ error: 'port is required and must be a string' });
+  }
+  if (!homeState || typeof homeState !== 'string') {
+    return res.status(400).json({ error: 'homeState is required and must be a string' });
+  }
+
   const mqtt = MqttService.getInstance();
 
   // If a home action command was provided, send it to the robot
@@ -183,6 +191,17 @@ robotRoutes.post('/hardware-state/home', (req, res) => {
  */
 robotRoutes.post('/test-action', (req, res) => {
   const { port, action, type } = req.body;
+
+  if (!port || typeof port !== 'string') {
+    return res.status(400).json({ error: 'port is required and must be a string' });
+  }
+  if (!action || typeof action !== 'object') {
+    return res.status(400).json({ error: 'action is required and must be an object' });
+  }
+  if (!type || (type !== 'servo' && type !== 'dc_motor')) {
+    return res.status(400).json({ error: 'type must be "servo" or "dc_motor"' });
+  }
+
   const mqtt = MqttService.getInstance();
 
   if (!mqtt.isConnected()) {

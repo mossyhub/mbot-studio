@@ -429,6 +429,9 @@ configRoutes.get('/mlink/device-programs', async (req, res) => {
  * Diagnostics: run a single script snippet over the CyberPi exec channel and return serial output.
  */
 configRoutes.post('/mlink/exec', async (req, res) => {
+  if (process.env.ENABLE_REPL === 'false') {
+    return res.status(403).json({ ok: false, error: 'REPL is disabled. Set ENABLE_REPL=true in .env to enable.' });
+  }
   try {
     const port = Number(req.body?.port) || Number(process.env.MLINK_PORT) || 52384;
     const serialPort = req.body?.serialPort ? String(req.body.serialPort) : null;
@@ -453,13 +456,14 @@ configRoutes.post('/mlink/upload-test', async (req, res) => {
     }
 
     let content = fs.readFileSync(testPath, 'utf-8');
-    // Apply WiFi/MQTT settings directly
+    // Apply WiFi/MQTT settings directly (use replaceConfigValue for proper escaping)
     if (settings) {
-      content = content.replace(/WIFI_SSID = ".*"/, `WIFI_SSID = "${settings.wifiSsid || 'YOUR_WIFI_NAME'}"`);
-      content = content.replace(/WIFI_PASSWORD = ".*"/, `WIFI_PASSWORD = "${settings.wifiPassword || 'YOUR_WIFI_PASSWORD'}"`);
-      content = content.replace(/MQTT_BROKER = ".*"/, `MQTT_BROKER = "${settings.mqttBroker || 'YOUR_COMPUTER_IP'}"`);
-      content = content.replace(/MQTT_PORT = \d+/, `MQTT_PORT = ${settings.mqttPort || 1883}`);
-      content = content.replace(/MQTT_TOPIC_PREFIX = ".*"/, `MQTT_TOPIC_PREFIX = "${settings.topicPrefix || 'mbot-studio'}"`);
+      content = replaceConfigValue(content, 'WIFI_SSID', settings.wifiSsid || 'YOUR_WIFI_NAME');
+      content = replaceConfigValue(content, 'WIFI_PASSWORD', settings.wifiPassword || 'YOUR_WIFI_PASSWORD');
+      content = replaceConfigValue(content, 'MQTT_BROKER', settings.mqttBroker || 'YOUR_COMPUTER_IP');
+      content = content.replace(/^MQTT_PORT\s*=\s*\d+/m,
+        `MQTT_PORT = ${Math.max(1, Number(settings.mqttPort) || 1883)}`);
+      content = replaceConfigValue(content, 'MQTT_TOPIC_PREFIX', settings.topicPrefix || 'mbot-studio');
     }
 
     console.log('[upload-test] Uploading minimal motor test firmware (' + content.length + ' bytes)');
@@ -547,11 +551,20 @@ configRoutes.post('/mlink/upload', async (req, res) => {
  * POST /api/config
  * Save robot configuration
  */
+const ALLOWED_CONFIG_KEYS = new Set(['name', 'additions', 'notes', 'turnMultiplier', 'calibrations']);
+
 configRoutes.post('/', (req, res) => {
   try {
+    const existing = loadConfig();
+    const update = {};
+    for (const key of Object.keys(req.body)) {
+      if (ALLOWED_CONFIG_KEYS.has(key)) {
+        update[key] = req.body[key];
+      }
+    }
     const config = {
-      ...loadConfig(),
-      ...req.body,
+      ...existing,
+      ...update,
       updatedAt: new Date().toISOString(),
     };
 
@@ -596,6 +609,16 @@ configRoutes.post('/addition', (req, res) => {
   try {
     const config = loadConfig();
     const addition = req.body;
+
+    if (!addition || typeof addition !== 'object') {
+      return res.status(400).json({ error: 'Addition must be an object' });
+    }
+    if (!addition.port || typeof addition.port !== 'string') {
+      return res.status(400).json({ error: 'port is required and must be a string' });
+    }
+    if (!addition.type || !['servo', 'dc_motor', 'sensor'].includes(addition.type)) {
+      return res.status(400).json({ error: 'type must be "servo", "dc_motor", or "sensor"' });
+    }
 
     // Check if port is already used
     const existingIdx = config.additions.findIndex(a => a.port === addition.port);

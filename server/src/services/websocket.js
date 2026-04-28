@@ -1,5 +1,6 @@
 import { MqttService } from './mqtt-service.js';
 import { TelemetryService } from './telemetry-service.js';
+import { validateCommand } from './validation.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -91,8 +92,14 @@ function handleWebSocketMessage(ws, msg) {
 
   switch (msg.type) {
     case 'command': {
+      // Validate command structure
+      const cmdValidation = validateCommand(msg.command);
+      if (!cmdValidation.ok) {
+        ws.send(JSON.stringify({ type: 'error', message: cmdValidation.error }));
+        break;
+      }
       // Apply turn multiplier if this is a turn command
-      let cmd = msg.command;
+      let cmd = cmdValidation.value;
       if ((cmd.type === 'turn_left' || cmd.type === 'turn_right') && cmd.angle) {
         const mult = getTurnMultiplier();
         if (mult !== 1) {
@@ -117,7 +124,11 @@ function handleWebSocketMessage(ws, msg) {
       break;
 
     case 'repl':
-      // Forward REPL code to robot via MQTT
+      // Forward REPL code to robot via MQTT (guarded by ENABLE_REPL env var)
+      if (process.env.ENABLE_REPL === 'false') {
+        ws.send(JSON.stringify({ type: 'error', message: 'REPL is disabled. Set ENABLE_REPL=true in .env to enable.' }));
+        break;
+      }
       if (msg.code) {
         const replId = msg.id || `repl_${Date.now()}`;
         mqtt.sendRepl(msg.code, replId);
