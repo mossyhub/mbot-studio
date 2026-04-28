@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import OpenAI from 'openai';
+import OpenAI, { AzureOpenAI } from 'openai';
 import { formatCalibrationForPrompt } from './calibration-service.js';
 
 // Uses GitHub Models API (included with GitHub Copilot subscription)
@@ -49,8 +49,12 @@ function getFriendlyAiFailure(error, fallbackText) {
   const msg = String(error?.message || '');
   const status = error?.status || error?.response?.status;
 
-  if (!process.env.GITHUB_TOKEN) {
+  if (!process.env.GITHUB_TOKEN && !isAzureOpenAI()) {
     return `${fallbackText} (Missing GITHUB_TOKEN. For local testing, set AI_LOCAL_DEBUG=true in .env.)`;
+  }
+
+  if (isAzureOpenAI() && !process.env.AZURE_OPENAI_API_KEY) {
+    return `${fallbackText} (Missing AZURE_OPENAI_API_KEY in .env.)`;
   }
 
   if (status === 401 || msg.toLowerCase().includes('unauthorized')) {
@@ -316,19 +320,34 @@ function makeLocalDebugProgram(userMessage, currentBlocks = null) {
   };
 }
 
+function isAzureOpenAI() {
+  return !!(process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_DEPLOYMENT);
+}
+
 function getClient() {
   if (!client) {
-    client = new OpenAI({
-      baseURL: process.env.AI_BASE_URL || INFERENCE_URL,
-      apiKey: process.env.GITHUB_TOKEN,
-    });
+    if (isAzureOpenAI()) {
+      client = new AzureOpenAI({
+        endpoint: process.env.AZURE_OPENAI_ENDPOINT,
+        apiKey: process.env.AZURE_OPENAI_API_KEY,
+        apiVersion: '2024-10-21',
+      });
+    } else {
+      client = new OpenAI({
+        baseURL: process.env.AI_BASE_URL || INFERENCE_URL,
+        apiKey: process.env.GITHUB_TOKEN,
+      });
+    }
   }
   return client;
 }
 
 // Active model chosen automatically at server startup
-// Model IDs use publisher/name format, e.g. 'openai/gpt-4o'
-let currentModel = process.env.AI_MODEL || 'openai/gpt-4o';
+// For Azure OpenAI, this is the deployment name
+// For GitHub Models, model IDs use publisher/name format, e.g. 'openai/gpt-4o'
+let currentModel = isAzureOpenAI()
+  ? process.env.AZURE_OPENAI_DEPLOYMENT
+  : (process.env.AI_MODEL || 'openai/gpt-4o');
 
 function getCurrentModel() {
   return currentModel;
@@ -345,8 +364,9 @@ export function getAiDiagnostics() {
 
   return {
     localDebug: isLocalDebugEnabled(),
+    provider: isAzureOpenAI() ? 'azure' : 'github',
     model: modelId,
-    baseURL: process.env.AI_BASE_URL || INFERENCE_URL,
+    baseURL: isAzureOpenAI() ? process.env.AZURE_OPENAI_ENDPOINT : (process.env.AI_BASE_URL || INFERENCE_URL),
     hasGithubToken: !!process.env.GITHUB_TOKEN,
     heuristicUnsupportedParams: getHeuristicUnsupportedParams(modelId),
     cachedUnsupportedParams: modelEntry.unsupportedParams || [],
@@ -407,6 +427,12 @@ export async function initializeModelSelection() {
     return currentModel;
   }
 
+  if (isAzureOpenAI()) {
+    currentModel = process.env.AZURE_OPENAI_DEPLOYMENT;
+    console.log(`🧠 Using Azure OpenAI deployment: ${currentModel} at ${process.env.AZURE_OPENAI_ENDPOINT}`);
+    return currentModel;
+  }
+
   try {
     const models = await fetchAvailableModels();
     const selected = pickBestOpenAiModel(models);
@@ -441,6 +467,17 @@ export async function fetchAvailableModels() {
       publisher: 'Local',
       summary: 'Offline deterministic fallback for local development',
       tier: 'local',
+    }];
+  }
+
+  if (isAzureOpenAI()) {
+    const deployment = process.env.AZURE_OPENAI_DEPLOYMENT;
+    return [{
+      id: deployment,
+      name: `Azure OpenAI: ${deployment}`,
+      publisher: 'Azure',
+      summary: `Deployed at ${process.env.AZURE_OPENAI_ENDPOINT}`,
+      tier: 'azure',
     }];
   }
 
