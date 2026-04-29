@@ -205,11 +205,16 @@ class CommandHandler:
         # --- Sound & Display ---
         elif t == "play_tone":
             cyberpi.audio.play_tone(p.get("frequency", 440), p.get("duration", 0.5))
+        elif t == "play_sound":
+            try:
+                cyberpi.audio.play(p.get("sound", "laugh"))
+            except:
+                pass
         elif t == "play_melody":
-            melody = p.get("melody", "happy")
+            melody = p.get("melody", "birthday")
             melody_map = {"happy": "birthday", "sad": "ba", "excited": "power_up", "alert": "alert"}
             try:
-                cyberpi.audio.play(melody_map.get(melody, melody))
+                cyberpi.audio.play_melody(melody_map.get(melody, melody))
             except:
                 pass
         elif t == "display_text" or t == "say":
@@ -225,6 +230,17 @@ class CommandHandler:
             else:
                 c = color + " " + color + " " + color + " " + color + " " + color
                 cyberpi.led.show(c)
+        elif t == "led_effect":
+            effect = p.get("effect", "rainbow")
+            try:
+                if effect == "rainbow":
+                    cyberpi.led.play("rainbow")
+                elif effect.startswith("breathe_"):
+                    cyberpi.led.play("breathing", effect[8:])
+                elif effect == "marquee":
+                    cyberpi.led.play("marquee")
+            except:
+                pass
 
         # --- Control Flow ---
         elif t == "wait":

@@ -720,9 +720,18 @@ function formatBlockReference(robotConfig) {
   ref += `"spin" or "spin around" = turn_right with angle 360. These control the WHEELS.\n`;
 
   ref += `\n### Sound & Display\n`;
-  ref += `- {"type": "play_tone", "frequency": 440, "duration": 0.5}\n`;
+  ref += `- {"type": "play_tone", "frequency": 440, "duration": 0.5} — beep at a specific frequency (100-2000 Hz)\n`;
+  ref += `- {"type": "play_sound", "sound": "laugh"} — built-in sound effect. sounds: laugh|wow|hi|bye|yeah|angry|sad|scared|spring|jump|score|beep|click|switch|ring|level_up|power_up|power_down\n`;
+  ref += `- {"type": "play_melody", "melody": "birthday"} — play a melody. melodies: birthday|entertainer|ba|dadada|erta|knock|jump_up|jump_down|power_up|power_down|alert|score\n`;
   ref += `- {"type": "display_text", "text": "Hello!", "size": 16}\n`;
   ref += `- {"type": "set_led", "color": "red"} — colors: red|green|blue|yellow|purple|white|off\n`;
+  ref += `- {"type": "led_effect", "effect": "rainbow"} — LED animation. effects: rainbow|breathe_red|breathe_green|breathe_blue|marquee\n`;
+
+  ref += `\n### Sensors (for while_sensor, move_until, if_sensor_range)\n`;
+  ref += `Available sensor names: distance|line|brightness|loudness|angle|timer\n`;
+  ref += `- brightness: ambient light level (0-100)\n`;
+  ref += `- loudness: microphone level (0-100) — react to clapping, shouting\n`;
+  ref += `- angle: gyro yaw in degrees\n`;
 
   ref += `\n### Control Flow\n`;
   ref += `- {"type": "wait", "duration": 1}\n`;
