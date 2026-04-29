@@ -214,7 +214,7 @@ class CommandHandler:
             melody = p.get("melody", "birthday")
             melody_map = {"happy": "birthday", "sad": "ba", "excited": "power_up", "alert": "alert"}
             try:
-                cyberpi.audio.play_melody(melody_map.get(melody, melody))
+                cyberpi.audio.play(melody_map.get(melody, melody))
             except:
                 pass
         elif t == "display_text" or t == "say":

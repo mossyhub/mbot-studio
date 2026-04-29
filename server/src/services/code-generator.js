@@ -216,7 +216,7 @@ function generateBlockCode(block, level, robotConfig) {
 
     case 'play_melody': {
       const melody = escapePyString(block.melody || 'birthday');
-      return `${pad}cyberpi.audio.play_melody("${melody}")\n`;
+      return `${pad}cyberpi.audio.play("${melody}")\n`;
     }
 
     case 'display_text':
