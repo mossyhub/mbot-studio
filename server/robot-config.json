@@ -90,7 +90,7 @@
       ]
     }
   ],
-  "turnMultiplier": 2.06,
+  "turnMultiplier": 1,
   "notes": "Default profile for mBot2 Rover two-servo claw.",
   "createdAt": "2026-02-13T05:42:36.178Z",
   "updatedAt": "2026-02-21T22:03:59.311Z"

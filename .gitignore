@@ -10,3 +10,7 @@ __pycache__/
 firmware/_bundled_debug.py
 ai-model-compat.json
 codereview.md
+test-results/
+playwright-report/
+server/public/
+tests/.harness-state.json

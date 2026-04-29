@@ -2,6 +2,7 @@
   "name": "mbot-studio",
   "version": "1.0.0",
   "description": "AI-powered mBot2 programming platform for kids",
+  "type": "module",
   "private": true,
   "workspaces": [
     "server",
@@ -18,10 +19,17 @@
     "start": "cd server && npm start",
     "docker:build": "docker build -t mbot-studio .",
     "docker:run": "docker run -p 3001:3001 --env-file .env mbot-studio",
-    "docker:push": "docker tag mbot-studio:latest ${npm_config_registry:-docker.io}/mbot-studio:latest && docker push ${npm_config_registry:-docker.io}/mbot-studio:latest"
+    "docker:push": "docker tag mbot-studio:latest ${npm_config_registry:-docker.io}/mbot-studio:latest && docker push ${npm_config_registry:-docker.io}/mbot-studio:latest",
+    "test": "npx playwright test",
+    "test:local": "cross-env TEST_AI_LOCAL=true npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "test:ui": "npx playwright test --ui",
+    "test:harness": "node tests/start-harness.js",
+    "test:harness:local": "node tests/start-harness.js --local"
   },
   "devDependencies": {
     "@electron/asar": "^4.0.1",
+    "@playwright/test": "^1.59.1",
     "concurrently": "^8.2.0"
   }
 }

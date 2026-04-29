@@ -5,8 +5,8 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "dev:debug": "node --inspect=9229 --watch src/index.js",
+    "dev": "node --watch-path=src src/index.js",
+    "dev:debug": "node --inspect=9229 --watch-path=src src/index.js",
     "start": "node src/index.js"
   },
   "dependencies": {
