@@ -506,7 +506,11 @@ function buildHardwareStateContext(robotConfig, hardwareStates) {
     const position = state?.assumedState && state.assumedState !== 'unknown'
       ? `"${state.assumedState}"`
       : 'unknown';
-    lines.push(`- ${a.label || a.port} (${a.port}): ${position}`);
+    let posLine = `- ${a.label || a.port} (${a.port}): ${position}`;
+    if (a.type === 'dc_motor' && typeof state?.positionPercent === 'number') {
+      posLine += ` (${state.positionPercent}%)`;
+    }
+    lines.push(posLine);
   }
   return lines.join('\n');
 }
@@ -652,9 +656,17 @@ function formatHardwareAddition(addition, hardwareStates) {
     s += `  Home position (start-up default): "${a.homeState}"\n`;
   }
 
-  // Feedback info
+  // Feedback info + percentage positioning for 2-action DC motors
   if (a.type === 'dc_motor') {
     s += `  ⚠️ No position sensor — robot can't tell where this is, so track state carefully\n`;
+    if (a.actions?.length === 2 && a.homeState) {
+      const homeAction = a.actions.find(act => act.targetState === a.homeState);
+      const awayAction = a.actions.find(act => act.targetState !== a.homeState);
+      const awayState = awayAction?.targetState || a.states?.find(st => st !== a.homeState) || 'other end';
+      const fullDuration = awayAction?.duration || homeAction?.duration || 1;
+      s += `  📏 Percentage positioning available: 0% = "${a.homeState}", 100% = "${awayState}" (full travel: ${fullDuration}s)\n`;
+      s += `  Use dc_motor_position for partial moves like "close 30%" or "open halfway".\n`;
+    }
   }
 
   // Stall behavior
@@ -724,7 +736,10 @@ function formatBlockReference(robotConfig) {
     ref += `- {"type": "servo", "port": "S1", "angle": 90} — move a servo to exact angle\n`;
     ref += `- {"type": "dc_motor", "port": "M1", "speed": 50, "duration": 1} — run a DC motor\n`;
     ref += `  For dc_motor: positive speed = forward, negative speed = reverse\n`;
-    ref += `\nONLY use servo/dc_motor for the custom hardware listed above. NEVER use them for driving.\n`;
+    ref += `- {"type": "dc_motor_position", "port": "M1", "position": 50} — move a DC motor to a percentage position (0–100)\n`;
+    ref += `  Use dc_motor_position when the child says a percentage like "close the claw 20%" or "open halfway".\n`;
+    ref += `  The server calculates the exact direction and duration automatically. 0% = home state, 100% = opposite end.\n`;
+    ref += `\nONLY use servo/dc_motor/dc_motor_position for the custom hardware listed above. NEVER use them for driving.\n`;
   }
 
   return ref;

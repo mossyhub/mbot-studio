@@ -31,11 +31,12 @@ const BLOCK_PALETTE = [
     color: 'cat-sound',
     blocks: [
       { type: 'play_tone', frequency: 440, duration: 0.5 },
-      { type: 'play_melody', melody: 'happy' },
+      { type: 'play_sound', sound: 'laugh' },
+      { type: 'play_melody', melody: 'birthday' },
       { type: 'display_text', text: 'Hello!' },
       { type: 'display_image', image: 'happy' },
-      { type: 'say', text: 'Hello!' },
       { type: 'set_led', color: 'green' },
+      { type: 'led_effect', effect: 'rainbow' },
     ],
   },
   {
@@ -112,23 +113,27 @@ const BLOCK_PARAM_SCHEMA = {
     { key: 'frequency', label: 'Frequency (Hz)', type: 'number', min: 100, max: 2000, step: 10 },
     { key: 'duration', label: 'Duration (s)', type: 'number', min: 0.1, max: 5, step: 0.1 },
   ],
+  play_sound: [
+    { key: 'sound', label: 'Sound', type: 'select', options: ['laugh', 'wow', 'hi', 'bye', 'yeah', 'angry', 'sad', 'scared', 'spring', 'jump', 'score', 'beep', 'click', 'switch', 'ring', 'level_up', 'power_up', 'power_down'] },
+  ],
   play_melody: [
-    { key: 'melody', label: 'Melody', type: 'select', options: ['happy', 'sad', 'excited', 'alert'] },
+    { key: 'melody', label: 'Melody', type: 'select', options: ['birthday', 'entertainer', 'ba', 'dadada', 'erta', 'knock', 'jump_up', 'jump_down', 'power_up', 'power_down', 'alert', 'score'] },
   ],
   display_text: [
     { key: 'text', label: 'Text', type: 'text' },
+    { key: 'size', label: 'Size', type: 'number', min: 8, max: 48, step: 2 },
   ],
   display_image: [
     { key: 'image', label: 'Image', type: 'select', options: ['happy', 'sad', 'heart', 'star', 'arrow_up', 'arrow_down'] },
-  ],
-  say: [
-    { key: 'text', label: 'Text', type: 'text' },
   ],
   if_obstacle: [
     { key: 'distance', label: 'Distance (cm)', type: 'number', min: 1, max: 200, step: 1 },
   ],
   if_color: [
     { key: 'color', label: 'Color', type: 'select', options: ['red', 'green', 'blue', 'yellow', 'white', 'black'] },
+  ],
+  led_effect: [
+    { key: 'effect', label: 'Effect', type: 'select', options: ['rainbow', 'breathe_red', 'breathe_green', 'breathe_blue', 'marquee'] },
   ],
   if_line: [
     { key: 'sensor', label: 'Sensor', type: 'select', options: ['left', 'right', 'both'] },
@@ -544,7 +549,9 @@ function getBlockCategory(type) {
     if_sensor_range: 'cat-sensor',
     display_value: 'cat-sensor',
     play_tone: 'cat-sound',
+    play_sound: 'cat-sound',
     play_melody: 'cat-sound',
+    led_effect: 'cat-sound',
     display_text: 'cat-display',
     display_image: 'cat-display',
     say: 'cat-display',
@@ -579,7 +586,9 @@ function getBlockIcon(type) {
     if_sensor_range: '📐',
     display_value: '📊',
     play_tone: '🎵',
+    play_sound: '🔊',
     play_melody: '🎶',
+    led_effect: '🌈',
     display_text: '📝',
     display_image: '🖼️',
     say: '💬',
@@ -614,7 +623,9 @@ function getBlockLabel(block) {
     if_sensor_range: 'If Sensor In Range',
     display_value: 'Show Sensor Value',
     play_tone: 'Play Tone',
+    play_sound: 'Play Sound',
     play_melody: 'Play Melody',
+    led_effect: 'LED Effect',
     display_text: 'Show Text',
     display_image: 'Show Image',
     say: 'Say',
@@ -648,8 +659,12 @@ function getBlockParams(block) {
       return `${block.times || 1} times`;
     case 'play_tone':
       return `${block.frequency || 440}Hz for ${block.duration || 0.5}s`;
+    case 'play_sound':
+      return `${block.sound || 'laugh'}`;
     case 'play_melody':
-      return `${block.melody || 'happy'}`;
+      return `${block.melody || 'birthday'}`;
+    case 'led_effect':
+      return `${block.effect || 'rainbow'}`;
     case 'display_text':
     case 'say':
       return `"${block.text || ''}"`;

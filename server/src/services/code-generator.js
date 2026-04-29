@@ -36,6 +36,65 @@ mbot2.motor_stop("all")
 `;
 
 /**
+ * Resolve a dc_motor_position block (percentage 0–100) to a concrete dc_motor command
+ * using the robot config's action definitions.
+ *
+ * 0% = home state, 100% = opposite end.
+ * Returns { port, speed, duration } or null if config is insufficient.
+ *
+ * @param {object} block - The dc_motor_position block { port, position }
+ * @param {object} robotConfig - The robot-config.json object
+ * @param {number|null} currentPercent - Current position (0–100), null means assume home (0%)
+ */
+export function resolveDcMotorPosition(block, robotConfig, currentPercent = null) {
+  const port = block.port;
+  const targetPct = Math.max(0, Math.min(100, Number(block.position ?? 0)));
+
+  const hw = robotConfig?.additions?.find(a => a.port === port && a.type === 'dc_motor');
+  if (!hw || !hw.actions || hw.actions.length < 2 || !hw.homeState) return null;
+
+  // Identify the "away" action (goes from home → opposite end, i.e. 0% → 100%)
+  const awayAction = hw.actions.find(a => a.targetState !== hw.homeState);
+  // Identify the "home" action (goes from opposite end → home, i.e. 100% → 0%)
+  const homeAction = hw.actions.find(a => a.targetState === hw.homeState);
+  if (!awayAction || !homeAction) return null;
+
+  const fullDuration = awayAction.duration || homeAction.duration || 1;
+  const fromPct = typeof currentPercent === 'number' ? currentPercent : 0;
+  const delta = targetPct - fromPct;
+
+  if (Math.abs(delta) < 0.5) {
+    return { port, speed: 0, duration: 0 };
+  }
+
+  // delta > 0 → moving toward 100% (away from home) → use awayAction direction
+  // delta < 0 → moving toward 0% (back to home) → use homeAction direction
+  const action = delta > 0 ? awayAction : homeAction;
+  const dir = action.motorDirection || 'forward';
+  const rawSpeed = action.speed || 50;
+  const speed = dir === 'reverse' ? -rawSpeed : rawSpeed;
+  const duration = Math.round((Math.abs(delta) / 100) * fullDuration * 100) / 100;
+
+  return { port, speed, duration };
+}
+
+/**
+ * Compute the state name for a given position percentage based on config.
+ * Returns the endpoint state name if near 0% or 100%, otherwise a descriptive string.
+ */
+export function positionPercentToStateName(port, percent, robotConfig) {
+  const hw = robotConfig?.additions?.find(a => a.port === port && a.type === 'dc_motor');
+  if (!hw || !hw.homeState) return 'unknown';
+
+  if (percent <= 0) return hw.homeState;
+
+  const awayState = hw.actions?.find(a => a.targetState !== hw.homeState)?.targetState;
+  if (percent >= 100) return awayState || 'unknown';
+
+  return `${percent}% (between "${hw.homeState}" and "${awayState || '?'}")`;
+}
+
+/**
  * Convert a block program (JSON array) to MicroPython source code
  */
 export function blocksToMicroPython(blocks, robotConfig = null) {
@@ -51,7 +110,7 @@ export function blocksToMicroPython(blocks, robotConfig = null) {
   }
 
   code += '# --- Program Start ---\n';
-  code += generateBlocksCode(blocks, 0);
+  code += generateBlocksCode(blocks, 0, robotConfig);
   code += FOOTER;
 
   return code;
@@ -61,17 +120,17 @@ function indent(level) {
   return '    '.repeat(level);
 }
 
-function generateBlocksCode(blocks, level) {
+function generateBlocksCode(blocks, level, robotConfig) {
   let code = '';
 
   for (const block of blocks) {
-    code += generateBlockCode(block, level);
+    code += generateBlockCode(block, level, robotConfig);
   }
 
   return code;
 }
 
-function generateBlockCode(block, level) {
+function generateBlockCode(block, level, robotConfig) {
   const pad = indent(level);
 
   switch (block.type) {
@@ -104,13 +163,13 @@ function generateBlockCode(block, level) {
     case 'if_obstacle': {
       let code = `${pad}if mbuild.ultrasonic2.get() < ${block.distance || 20}:\n`;
       if (block.then && block.then.length > 0) {
-        code += generateBlocksCode(block.then, level + 1);
+        code += generateBlocksCode(block.then, level + 1, robotConfig);
       } else {
         code += `${indent(level + 1)}pass\n`;
       }
       if (block.else && block.else.length > 0) {
         code += `${pad}else:\n`;
-        code += generateBlocksCode(block.else, level + 1);
+        code += generateBlocksCode(block.else, level + 1, robotConfig);
       }
       return code;
     }
@@ -118,13 +177,13 @@ function generateBlockCode(block, level) {
     case 'if_line': {
       let code = `${pad}if mbuild.dual_rgb_sensor.is_line():\n`;
       if (block.then && block.then.length > 0) {
-        code += generateBlocksCode(block.then, level + 1);
+        code += generateBlocksCode(block.then, level + 1, robotConfig);
       } else {
         code += `${indent(level + 1)}pass\n`;
       }
       if (block.else && block.else.length > 0) {
         code += `${pad}else:\n`;
-        code += generateBlocksCode(block.else, level + 1);
+        code += generateBlocksCode(block.else, level + 1, robotConfig);
       }
       return code;
     }
@@ -132,13 +191,13 @@ function generateBlockCode(block, level) {
     case 'if_color': {
       let code = `${pad}if mbuild.quad_rgb_sensor.is_color("${escapePyString(block.color || 'red')}"):\n`;
       if (block.then && block.then.length > 0) {
-        code += generateBlocksCode(block.then, level + 1);
+        code += generateBlocksCode(block.then, level + 1, robotConfig);
       } else {
         code += `${indent(level + 1)}pass\n`;
       }
       if (block.else && block.else.length > 0) {
         code += `${pad}else:\n`;
-        code += generateBlocksCode(block.else, level + 1);
+        code += generateBlocksCode(block.else, level + 1, robotConfig);
       }
       return code;
     }
@@ -150,14 +209,14 @@ function generateBlockCode(block, level) {
     case 'play_tone':
       return `${pad}cyberpi.audio.play_tone(${block.frequency || 440}, ${block.duration || 0.5})\n`;
 
+    case 'play_sound': {
+      const sound = escapePyString(block.sound || 'laugh');
+      return `${pad}cyberpi.audio.play("${sound}")\n`;
+    }
+
     case 'play_melody': {
-      const melodies = {
-        happy: 'cyberpi.audio.play("birthday")',
-        sad: 'cyberpi.audio.play("ba")',
-        excited: 'cyberpi.audio.play("power_up")',
-        alert: 'cyberpi.audio.play("alert")',
-      };
-      return `${pad}${melodies[block.melody] || melodies.happy}\n`;
+      const melody = escapePyString(block.melody || 'birthday');
+      return `${pad}cyberpi.audio.play_melody("${melody}")\n`;
     }
 
     case 'display_text':
@@ -185,7 +244,7 @@ function generateBlockCode(block, level) {
     case 'repeat': {
       let code = `${pad}for _i in range(${block.times || 1}):\n`;
       if (block.do && block.do.length > 0) {
-        code += generateBlocksCode(block.do, level + 1);
+        code += generateBlocksCode(block.do, level + 1, robotConfig);
       } else {
         code += `${indent(level + 1)}pass\n`;
       }
@@ -195,7 +254,7 @@ function generateBlockCode(block, level) {
     case 'repeat_forever': {
       let code = `${pad}while True:\n`;
       if (block.do && block.do.length > 0) {
-        code += generateBlocksCode(block.do, level + 1);
+        code += generateBlocksCode(block.do, level + 1, robotConfig);
       } else {
         code += `${indent(level + 1)}pass\n`;
       }
@@ -205,7 +264,7 @@ function generateBlockCode(block, level) {
     case 'if_button': {
       let code = `${pad}if cyberpi.controller.is_press("${escapePyString(block.button || 'a')}"):\n`;
       if (block.then && block.then.length > 0) {
-        code += generateBlocksCode(block.then, level + 1);
+        code += generateBlocksCode(block.then, level + 1, robotConfig);
       } else {
         code += `${indent(level + 1)}pass\n`;
       }
@@ -224,7 +283,7 @@ function generateBlockCode(block, level) {
       }
       let code = `${pad}while ${condition}:\n`;
       if (block.do && block.do.length > 0) {
-        code += generateBlocksCode(block.do, level + 1);
+        code += generateBlocksCode(block.do, level + 1, robotConfig);
       } else {
         code += `${indent(level + 1)}pass\n`;
       }
@@ -257,13 +316,13 @@ function generateBlockCode(block, level) {
       const expr = sensorExpression(block.sensor || 'distance');
       let code = `${pad}if ${Number(block.min ?? 10)} <= ${expr} <= ${Number(block.max ?? 30)}:\n`;
       if (block.then && block.then.length > 0) {
-        code += generateBlocksCode(block.then, level + 1);
+        code += generateBlocksCode(block.then, level + 1, robotConfig);
       } else {
         code += `${indent(level + 1)}pass\n`;
       }
       if (block.else && block.else.length > 0) {
         code += `${pad}else:\n`;
-        code += generateBlocksCode(block.else, level + 1);
+        code += generateBlocksCode(block.else, level + 1, robotConfig);
       }
       return code;
     }
@@ -309,6 +368,20 @@ function generateBlockCode(block, level) {
       return `${pad}mbot2.starter_shield.dc_motor_set_power(${pn}, ${speed})\n${pad}time.sleep(${duration})\n${pad}mbot2.starter_shield.dc_motor_set_power(${pn}, 0)\n`;
     }
 
+    case 'dc_motor_position': {
+      // Percentage positioning — resolved to a dc_motor command using robotConfig.
+      // The code generator resolves from assumed start (home = 0%) to target %.
+      const resolved = resolveDcMotorPosition(block, robotConfig);
+      if (!resolved) {
+        return `${pad}# dc_motor_position: no config found for port ${String(block.port || '?').replace(/[\n\r]/g, '')}\n`;
+      }
+      if (resolved.duration <= 0) {
+        return `${pad}# dc_motor_position: already at target position\n`;
+      }
+      const rpn = resolved.port === 'M1' ? 1 : resolved.port === 'M2' ? 2 : resolved.port === 'M3' ? 3 : 4;
+      return `${pad}mbot2.starter_shield.dc_motor_set_power(${rpn}, ${resolved.speed})\n${pad}time.sleep(${resolved.duration})\n${pad}mbot2.starter_shield.dc_motor_set_power(${rpn}, 0)\n`;
+    }
+
     case 'servo': {
       const port = block.port || 'S1';
       const pn = port === 'S1' ? 1 : port === 'S2' ? 2 : port === 'S3' ? 3 : 4;
@@ -324,6 +397,18 @@ function generateBlockCode(block, level) {
       }
       const safeColor = escapePyString(color);
       return `${pad}cyberpi.led.show("${safeColor} ${safeColor} ${safeColor} ${safeColor} ${safeColor}")\n`;
+    }
+
+    case 'led_effect': {
+      const effect = block.effect || 'rainbow';
+      const effectMap = {
+        rainbow: `${pad}cyberpi.led.play("rainbow")\n`,
+        breathe_red: `${pad}cyberpi.led.play("breathing", "red")\n`,
+        breathe_green: `${pad}cyberpi.led.play("breathing", "green")\n`,
+        breathe_blue: `${pad}cyberpi.led.play("breathing", "blue")\n`,
+        marquee: `${pad}cyberpi.led.play("marquee")\n`,
+      };
+      return effectMap[effect] || effectMap.rainbow;
     }
 
     default:

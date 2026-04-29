@@ -1,11 +1,53 @@
 import { Router } from 'express';
 import { MqttService } from '../services/mqtt-service.js';
 import { TelemetryService } from '../services/telemetry-service.js';
-import { blocksToMicroPython, blockToMqttCommand } from '../services/code-generator.js';
+import { blocksToMicroPython, blockToMqttCommand, resolveDcMotorPosition, positionPercentToStateName } from '../services/code-generator.js';
 import { loadConfig } from './config.js';
 import { validateBlocks, validateCommand } from '../services/validation.js';
 
 export const robotRoutes = Router();
+
+/**
+ * Recursively resolve dc_motor_position blocks in a block tree to concrete dc_motor commands.
+ * Tracks position per-port so sequential moves within a program accumulate correctly.
+ * Updates MQTT hardware state for the final position of each port.
+ */
+function resolvePositionBlocks(blocks, robotConfig, mqtt, positionTracker) {
+  return blocks.map(block => {
+    // Recurse into nested block arrays (repeat, if_obstacle, etc.)
+    const resolved = { ...block };
+    for (const key of ['do', 'then', 'else']) {
+      if (Array.isArray(resolved[key])) {
+        resolved[key] = resolvePositionBlocks(resolved[key], robotConfig, mqtt, positionTracker);
+      }
+    }
+
+    if (resolved.type !== 'dc_motor_position') return resolved;
+
+    const port = resolved.port;
+    // Get current tracked position: check our local tracker first, then MQTT state
+    let currentPct = positionTracker[port];
+    if (typeof currentPct !== 'number') {
+      const hwState = mqtt.getHardwareState(port);
+      currentPct = typeof hwState.positionPercent === 'number' ? hwState.positionPercent : 0;
+    }
+
+    const result = resolveDcMotorPosition(resolved, robotConfig, currentPct);
+    if (!result || result.duration <= 0) {
+      // Already at target — emit a no-op wait instead of skipping (preserves block count)
+      return { type: 'wait', duration: 0.01 };
+    }
+
+    const targetPct = Math.max(0, Math.min(100, Number(resolved.position ?? 0)));
+    positionTracker[port] = targetPct;
+
+    // Update MQTT hardware state
+    const stateName = positionPercentToStateName(port, targetPct, robotConfig);
+    mqtt.setHardwareState(port, stateName, `position_${targetPct}%`, targetPct);
+
+    return { type: 'dc_motor', port: result.port, speed: result.speed, duration: result.duration };
+  });
+}
 
 /**
  * POST /api/robot/command
@@ -27,7 +69,25 @@ robotRoutes.post('/command', (req, res) => {
     });
   }
 
-  const mqttCmd = blockToMqttCommand(commandValidation.value);
+  let cmd = commandValidation.value;
+
+  // Resolve dc_motor_position to a concrete dc_motor command using tracked state
+  if (cmd.type === 'dc_motor_position') {
+    const robotConfig = loadConfig();
+    const hwState = mqtt.getHardwareState(cmd.port);
+    const currentPct = typeof hwState.positionPercent === 'number' ? hwState.positionPercent : 0;
+    const resolved = resolveDcMotorPosition(cmd, robotConfig, currentPct);
+    if (!resolved || resolved.duration <= 0) {
+      return res.json({ sent: false, info: 'Already at target position' });
+    }
+    const targetPct = Math.max(0, Math.min(100, Number(cmd.position ?? 0)));
+    cmd = { type: 'dc_motor', port: resolved.port, speed: resolved.speed, duration: resolved.duration };
+    // Update tracked state
+    const stateName = positionPercentToStateName(resolved.port, targetPct, robotConfig);
+    mqtt.setHardwareState(resolved.port, stateName, `position_${targetPct}%`, targetPct);
+  }
+
+  const mqttCmd = blockToMqttCommand(cmd);
   const sent = mqtt.sendCommand(mqttCmd);
 
   res.json({ sent, command: mqttCmd });
@@ -86,6 +146,11 @@ robotRoutes.post('/program', (req, res) => {
         return block;
       });
     }
+
+    // Resolve dc_motor_position blocks to concrete dc_motor commands.
+    // Track position per-port through the program so sequential moves accumulate correctly.
+    const positionTracker = {};
+    finalProgram = resolvePositionBlocks(finalProgram, robotConfig, mqtt, positionTracker);
   } catch { /* ignore config errors */ }
 
   const sent = mqtt.sendProgram(finalProgram);
@@ -227,7 +292,16 @@ robotRoutes.post('/test-action', (req, res) => {
 
   // Update assumed state if the action has a targetState
   if (sent && action.targetState) {
-    mqtt.setHardwareState(port, action.targetState, action.name);
+    // For DC motors, determine position percentage from the action's target state
+    let positionPct = null;
+    if (type === 'dc_motor') {
+      const robotConfig = loadConfig();
+      const hw = robotConfig?.additions?.find(a => a.port === port && a.type === 'dc_motor');
+      if (hw?.homeState) {
+        positionPct = action.targetState === hw.homeState ? 0 : 100;
+      }
+    }
+    mqtt.setHardwareState(port, action.targetState, action.name, positionPct);
   }
 
   res.json({ sent, command, newState: action.targetState || null });

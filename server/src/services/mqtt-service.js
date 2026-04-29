@@ -202,14 +202,19 @@ export class MqttService {
   /**
    * Set the assumed state for a hardware port (after an action is executed)
    */
-  setHardwareState(port, state, actionName = null) {
-    this.hardwareStates.set(port, {
+  setHardwareState(port, state, actionName = null, positionPercent = null) {
+    const entry = {
       assumedState: state,
       lastAction: actionName,
       timestamp: Date.now(),
       confidence: 'high', // Just set — confidence starts high
-    });
-    console.log(`🔧 Port ${port} assumed state: "${state}" (action: ${actionName || 'manual'})`);
+    };
+    if (typeof positionPercent === 'number') {
+      entry.positionPercent = Math.round(Math.max(0, Math.min(100, positionPercent)));
+    }
+    this.hardwareStates.set(port, entry);
+    const pctInfo = typeof positionPercent === 'number' ? ` (${entry.positionPercent}%)` : '';
+    console.log(`🔧 Port ${port} assumed state: "${state}"${pctInfo} (action: ${actionName || 'manual'})`);
   }
 
   /**
@@ -221,6 +226,7 @@ export class MqttService {
       lastAction: null,
       timestamp: null,
       confidence: 'none',
+      positionPercent: null,
     };
   }
 
@@ -270,8 +276,9 @@ export class MqttService {
       lastAction: 'home',
       timestamp: Date.now(),
       confidence: 'high',
+      positionPercent: 0,
     });
-    console.log(`🏠 Port ${port} homed to "${homeState}"`);
+    console.log(`🏠 Port ${port} homed to "${homeState}" (0%)`);
   }
 
   /**
