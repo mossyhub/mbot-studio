@@ -335,7 +335,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         {/* Voice/Text Command */}
         <div className="live-command-area">
           <h3>Tell your robot what to do right now:</h3>
-          <p className="live-subtext">Live mode is a remote control surface. Commands are sent over MQTT to the firmware already running on your robot.</p>
+          <p className="live-subtext">Type a command or use the buttons below to control your robot in real time!</p>
           <VoiceControl
             onVoiceCommand={(text) => {
               setLiveInput(text);

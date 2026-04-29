@@ -32,8 +32,7 @@ export default function StatusBar({ robotConnected, robotStatus, soundMuted, onS
         )}
       </div>
       <div className="status-right">
-        <span className="status-item">mBot Studio v2.0</span>
-        <span className="status-item">AI: GitHub Copilot</span>
+        <span className="status-item">mBot Studio</span>
         {soundMuted && (
           <button className="status-sound-btn" onClick={onSoundToggle} title="Sound is muted — click to unmute">
             🔇 Muted

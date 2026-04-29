@@ -14,6 +14,9 @@ export default function Header({
   const [renameProfileName, setRenameProfileName] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(projectName || '');
+  const [showDebugTab, setShowDebugTab] = useState(false);
+  const debugClickCount = useRef(0);
+  const debugClickTimer = useRef(null);
   const projectRef = useRef(null);
   const profileRef = useRef(null);
   const nameInputRef = useRef(null);
@@ -71,7 +74,15 @@ export default function Header({
   return (
     <header className="header">
       <div className="header-brand">
-        <span className="header-logo">🤖</span>
+        <span className="header-logo" onClick={() => {
+          debugClickCount.current++;
+          if (debugClickTimer.current) clearTimeout(debugClickTimer.current);
+          debugClickTimer.current = setTimeout(() => { debugClickCount.current = 0; }, 600);
+          if (debugClickCount.current >= 5) {
+            setShowDebugTab(prev => !prev);
+            debugClickCount.current = 0;
+          }
+        }}>🤖</span>
         <h1 className="header-title">mBot Studio</h1>
       </div>
 
@@ -206,12 +217,14 @@ export default function Header({
         >
           ⚙️ Setup
         </button>
-        <button
-          className={`tab ${activeTab === 'debug' ? 'tab-active' : ''}`}
-          onClick={() => onTabChange('debug')}
-        >
-          🔧 Debug
-        </button>
+        {showDebugTab && (
+          <button
+            className={`tab ${activeTab === 'debug' ? 'tab-active' : ''}`}
+            onClick={() => onTabChange('debug')}
+          >
+            🔧 Debug
+          </button>
+        )}
       </nav>
 
       <div className="header-right">
@@ -222,12 +235,6 @@ export default function Header({
         >
           {soundMuted ? '🔇' : '🔊'}
         </button>
-
-        <div className="model-selector" title="AI model selected automatically by server startup">
-          <div className="model-selector-btn model-selector-readonly">
-            🧠 {currentModel || 'Detecting model...'}
-          </div>
-        </div>
 
         <div className="header-status">
           <span className={`status-dot ${

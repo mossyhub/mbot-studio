@@ -1150,10 +1150,16 @@ Types can be: dc_motor, servo, ultrasonic, color_sensor, light_sensor, custom`,
     const response = await createCompletionWithAdaptiveParams({
       messages,
       temperature: 0.3,
-      maxCompletionTokens: 800,
+      maxCompletionTokens: 2000,
     });
 
-    const parsed = parseJsonFromContent(response.choices[0].message.content);
+    const content = response.choices[0].message.content;
+    const finishReason = response.choices[0].finish_reason;
+    if (finishReason === 'length') {
+      console.warn('[config-parse] Response truncated (finish_reason=length). Raw tail:', content?.slice(-200));
+    }
+
+    const parsed = parseJsonFromContent(content);
     const merged = [...existing];
 
     for (const addition of (parsed.additions || [])) {

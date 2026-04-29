@@ -104,9 +104,7 @@ export default function Achievements({ currentProfileId }) {
             <div
               key={badge.id}
               className={`achievement-card ${isEarned ? 'earned' : 'locked'}`}
-              title={`${badge.description}\n\nClick to ${isEarned ? 'mark incomplete' : 'mark complete'}`}
-              onClick={() => handleToggleBadge(badge.id)}
-              style={{ cursor: 'pointer' }}
+              title={badge.description}
             >
               <div className="achievement-icon">{isEarned ? badge.icon : '🔒'}</div>
               <div className="achievement-info">

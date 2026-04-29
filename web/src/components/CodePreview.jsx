@@ -48,7 +48,7 @@ export default function CodePreview({ code, blocks }) {
 
       <div className="code-info">
         <p>This is a learning view of Python generated from your {blocks.length} block{blocks.length !== 1 ? 's' : ''}.</p>
-        <p className="code-info-sub">Program and Live control run by sending MQTT commands to the firmware already on the robot. One-time firmware setup via mLink is in the Setup tab.</p>
+        <p className="code-info-sub">This is what your block program looks like in Python! You can copy it to learn how coding works.</p>
       </div>
 
       <pre className="code-block">

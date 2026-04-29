@@ -302,8 +302,8 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
             />
           </div>
           <div className="config-field">
-            <label>Describe Your Robot</label>
-            <p className="field-hint">Tell the AI what your robot looks like. Where are things attached? What can it do? This helps the AI understand your robot's physical shape.</p>
+            <label>What does your robot look like?</label>
+            <p className="field-hint">Tell the AI about your robot! What's attached to it? What can it do? This helps the AI write better programs for you.</p>
             <textarea
               className="config-notes"
               value={physicalDescription}
@@ -315,32 +315,37 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
         </section>
 
         <section className="config-section">
-          <h2>🔌 One-Time Firmware Setup (mLink)</h2>
+          <h2>🔌 First-Time Setup</h2>
           <p className="section-desc">
-            Upload the robot firmware once using Makeblock's mLink bridge. After that, Program and Live tabs control the robot by sending MQTT commands to the existing firmware.
+            You only need to do this once! This uploads the robot brain software so your mBot2 can talk to this app over WiFi.
           </p>
-          <p className="section-desc">
-            <strong>Required:</strong> Download and install <strong>mLink2</strong> (Makeblock), then keep it running on this computer while you upload.
-          </p>
-          <FirmwareFlasher />
-          <ol className="setup-steps">
-            <li>Install and run <strong>mLink2</strong> on this computer.</li>
-            <li>Connect your mBot2/CyberPi over USB-C.</li>
-            <li>Fill in WiFi + MQTT settings, then click <strong>Upload Firmware via mLink</strong>.</li>
-            <li>Wait for reboot and confirm the app shows robot online status.</li>
-          </ol>
+          <details>
+            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 14, color: '#4f46e5' }}>📦 Upload Robot Software (for parents/grown-ups)</summary>
+            <div style={{ marginTop: 8 }}>
+              <p className="section-desc">
+                <strong>Required:</strong> Download and install <strong>mLink2</strong> from Makeblock, then keep it running while you upload.
+              </p>
+              <FirmwareFlasher />
+              <ol className="setup-steps">
+                <li>Install and run <strong>mLink2</strong> on this computer.</li>
+                <li>Connect your mBot2/CyberPi with a USB-C cable.</li>
+                <li>Fill in your WiFi name and password, then click <strong>Upload</strong>.</li>
+                <li>Wait for it to restart — the status bar will say "Robot Online" when it's ready!</li>
+              </ol>
+            </div>
+          </details>
         </section>
 
         {/* Hardware List + Add Buttons */}
         <section className="config-section">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <h2>🔧 Hardware</h2>
+            <h2>🔧 Extra Hardware</h2>
             <button className="btn-primary btn-small" onClick={() => setShowWizard(true)}>
               + Add Hardware
             </button>
           </div>
           <p className="section-desc">
-            Your mBot2 comes with drive motors, ultrasonic sensor, line follower, color sensor, and gyroscope. Add extra servos and motors here.
+            Did you attach extra servos, motors, or sensors? Tell your robot about them here so the AI knows what it can do!
           </p>
 
           {additions.length === 0 ? (
@@ -713,18 +718,18 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           )}
 
           <details style={{ marginTop: 12 }}>
-            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13, color: '#666' }}>Or describe hardware with AI text...</summary>
+            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13, color: '#666' }}>� Or describe hardware with AI...</summary>
             <div style={{ marginTop: 8 }}>
               <div className="nl-input-area">
                 <textarea
                   value={nlInput}
                   onChange={(e) => setNlInput(e.target.value)}
-                  placeholder='Example: "I connected a claw gripper motor to port M3"'
+                  placeholder='Example: "I plugged a claw gripper motor into port M3" or "There&#39;s a servo on S1 that moves the arm up and down"'
                   rows={2}
                   disabled={loading}
                 />
                 <button className="btn-primary btn-small" onClick={handleNLParse} disabled={!nlInput.trim() || loading}>
-                  {loading ? 'Thinking...' : 'Add'}
+                  {loading ? '🤔 Thinking...' : '✨ Add with AI'}
                 </button>
               </div>
               {clarificationQuestions.length > 0 && (
@@ -740,9 +745,9 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
         {/* Calibration Teaching */}
         <section className="config-section">
           <details>
-            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 16 }}>🎓 Teach Your Robot (Calibration)</summary>
+            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 16 }}>🎓 Teach Your Robot</summary>
             <p className="section-desc" style={{ marginTop: 8 }}>
-              Have a conversation with the AI to teach your robot about how far it moves, how fast it turns, and more!
+              Chat with the AI to help your robot learn how far it moves and how fast it turns!
             </p>
             <CalibrationChat robotConnected={robotConnected} onAchievement={onAchievement} />
           </details>
@@ -763,9 +768,9 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
         {/* Physical Constraints */}
         {constraints.length > 0 && (
           <section className="config-section">
-            <h2>⚠️ Physical Rules</h2>
+            <h2>⚠️ Robot Rules</h2>
             <p className="section-desc">
-              The AI follows these rules when generating programs. They were auto-detected from your robot description, or you can edit them.
+              The AI follows these rules to keep your robot safe. They were figured out from your robot description.
             </p>
             <ul className="constraints-list">
               {constraints.map((c, i) => (
@@ -782,7 +787,7 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
         <div className="config-save-area">
           {saveStatus && <span className="save-status">{saveStatus}</span>}
           <button className="btn-primary btn-save" onClick={handleSave}>
-            💾 Save Configuration
+            💾 Save Robot Settings
           </button>
         </div>
       </div>

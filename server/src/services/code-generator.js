@@ -45,7 +45,7 @@ export function blocksToMicroPython(blocks, robotConfig = null) {
   if (robotConfig?.additions) {
     code += '\n# Custom Hardware Setup\n';
     for (const hw of robotConfig.additions) {
-      code += `# ${hw.label || hw.type}: Port ${hw.port} - ${hw.description}\n`;
+      code += `# ${hw.label || hw.type}: Port ${hw.port}${hw.description ? ' - ' + hw.description : ''}\n`;
     }
     code += '\n';
   }
@@ -144,7 +144,7 @@ function generateBlockCode(block, level) {
     }
 
     case 'get_distance':
-      return `${pad}distance = mbot2.ultrasonic2.get_distance()\n`;
+      return `${pad}distance = mbuild.ultrasonic2.get()\n`;
 
     // === Sound & Display ===
     case 'play_tone':

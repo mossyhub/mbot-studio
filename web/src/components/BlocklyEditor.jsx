@@ -238,6 +238,7 @@ export default function BlocklyEditor({ blocks, onBlocksChange, robotConfig }) {
 
   const handleClearAll = () => {
     if (blocks.length === 0) return;
+    if (!window.confirm('Remove all blocks? You can undo this.')) return;
     onBlocksChange([]);
     setEditingIndex(null);
   };

@@ -102,6 +102,7 @@ export default function App() {
   const [applyMode, setApplyMode] = useState('replace');
   const [celebrationQueue, setCelebrationQueue] = useState([]);
   const [soundMuted, setSoundMuted] = useState(isMuted());
+  const [errorToast, setErrorToast] = useState(null);
   const prevRobotOnline = useRef(false);
 
   const commitBlocks = useCallback((newBlocks) => {
@@ -210,6 +211,13 @@ export default function App() {
     prevRobotOnline.current = robotStatus.robotOnline;
   }, [robotStatus.robotOnline]);
 
+  // Auto-dismiss error toast
+  useEffect(() => {
+    if (!errorToast) return;
+    const timer = setTimeout(() => setErrorToast(null), 6000);
+    return () => clearTimeout(timer);
+  }, [errorToast]);
+
   const handleAIResponse = useCallback((response) => {
     if (response.program) {
       setPendingSuggestion({
@@ -310,7 +318,9 @@ export default function App() {
       const data = await res.json();
       if (data.error) {
         playError();
-        alert('Could not send to robot: ' + data.error + '\n' + (data.hint || ''));
+        setErrorToast(data.hint
+          ? `Could not send to robot: ${data.error} — ${data.hint}`
+          : `Could not send to robot: ${data.error}`);
       } else {
         // Trigger celebrations for achievements earned
         if (newBadges.length > 0) {
@@ -321,7 +331,7 @@ export default function App() {
       }
     } catch (err) {
       playError();
-      alert('Error sending program: ' + err.message);
+      setErrorToast('Error sending program: ' + err.message);
     }
   }, [blocks]);
 
@@ -547,7 +557,7 @@ export default function App() {
               <div className="panel-header">
                 <div>
                   <h2>🧩 Block Program</h2>
-                  <div className="panel-subtitle">Run sends commands to the robot firmware over MQTT.</div>
+                  <div className="panel-subtitle">Your blocks will be sent to the robot when you click Run.</div>
                 </div>
                 <div className="panel-actions">
                   <button
@@ -591,7 +601,7 @@ export default function App() {
                     onClick={handleRunProgram}
                     disabled={blocks.length === 0}
                   >
-                    ▶️ Send via MQTT
+                    ▶️ Run Program
                   </button>
                 </div>
               </div>
@@ -675,6 +685,14 @@ export default function App() {
         celebrationQueue={celebrationQueue}
         onCelebrationDone={handleCelebrationDone}
       />
+
+      {errorToast && (
+        <div className="error-toast" onClick={() => setErrorToast(null)}>
+          <span className="error-toast-icon">😵</span>
+          <span className="error-toast-msg">{errorToast}</span>
+          <button className="error-toast-close" onClick={() => setErrorToast(null)}>✕</button>
+        </div>
+      )}
 
       <StatusBar
         robotConnected={robotStatus.connected}
