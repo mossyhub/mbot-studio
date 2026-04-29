@@ -335,6 +335,35 @@ configRoutes.get('/firmware/test', (req, res) => {
 });
 
 /**
+ * POST /api/config/firmware/bundle
+ * Bundle all firmware modules into a single main.py with settings applied.
+ * Called by the browser-side mLink client before upload.
+ *
+ * Body: { settings: { wifiSsid, wifiPassword, mqttBroker, mqttPort, topicPrefix, clientId } }
+ * Returns: { files: [{ name: 'main.py', content: '...' }] }
+ */
+configRoutes.post('/firmware/bundle', (req, res) => {
+  try {
+    const { settings } = req.body || {};
+
+    const freshFiles = REQUIRED_FIRMWARE_FILES.map((name) => {
+      const filePath = path.join(FIRMWARE_DIR, name);
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Missing firmware file: ${name}`);
+      }
+      return { name, content: fs.readFileSync(filePath, 'utf-8') };
+    });
+
+    const patchedFiles = applySettingsToFiles(freshFiles, settings);
+    const bundled = bundleFirmwareFiles(patchedFiles);
+
+    res.json({ files: [bundled] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * GET /api/config/mlink/discover
  * Probe local mLink bridge and return announced channels
  */

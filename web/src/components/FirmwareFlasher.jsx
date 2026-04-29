@@ -135,10 +135,32 @@ export default function FirmwareFlasher() {
   };
 
   const flashViaMlink = async () => {
+    setStatus('Bundling firmware with your settings...');
+
+    // Fetch bundled firmware from server (all modules merged into single main.py)
+    const bundleRes = await fetch('/api/config/firmware/bundle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        settings: {
+          wifiSsid: settings.wifiSsid,
+          wifiPassword: settings.wifiPassword,
+          mqttBroker: settings.mqttBroker,
+          mqttPort: settings.mqttPort,
+          topicPrefix: settings.topicPrefix,
+          clientId: settings.clientId,
+        },
+      }),
+    });
+    const bundleData = await bundleRes.json();
+    if (!bundleRes.ok || !bundleData.files?.length) {
+      throw new Error(bundleData.error || 'Could not bundle firmware');
+    }
+
     setStatus('Connecting to mLink (browser → localhost)...');
 
     const result = await uploadViaMlink({
-      files: filesToFlash,
+      files: bundleData.files,
       serialPort: settings.serialPort?.trim() || null,
       slot: settings.programSlot || 1,
       onProgress: (msg) => setProgress((prev) => [...prev, msg]),
