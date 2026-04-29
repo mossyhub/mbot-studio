@@ -96,29 +96,23 @@ class MotorController:
         self.is_moving = False
 
     def _turn(self, direction, speed, angle):
-        """Polled turn using differential drive. direction: 1=right, -1=left.
-        Estimates duration from angle (calibrated: ~90 degrees per second at speed 50)."""
+        """Turn using mbot2.turn() built-in. direction: 1=right, -1=left.
+        Estimates duration from angle for estop polling."""
         degrees_per_sec = speed * 1.8  # rough calibration factor
         duration = angle / max(degrees_per_sec, 1)
         duration = min(duration, 30)  # safety cap at 30 seconds
-        left = speed * direction
-        right = -speed * direction
-        avg = (left + right) // 2
         try:
-            if avg >= 0:
-                mbot2.forward(abs(avg)) if avg != 0 else None
-            else:
-                mbot2.backward(abs(avg))
-        except:
-            # Fallback to blocking turn if differential drive fails
             mbot2.turn(angle * direction)
+        except Exception as e:
+            self._log("Turn err: " + str(e))
+            self.stop()
             return
         end = time.time() + duration
         while time.time() < end:
             if self._estop_check and self._estop_check():
+                self.stop()
                 break
             time.sleep(0.05)
-        self.stop()
 
     def set_speed(self, left, right):
         left = self._clamp(left)
@@ -150,7 +144,11 @@ class MotorController:
         try:
             mbot2.starter_shield.dc_motor_set_power(pn, speed)
             if duration > 0:
-                time.sleep(duration)
+                end = time.time() + duration
+                while time.time() < end:
+                    if self._estop_check and self._estop_check():
+                        break
+                    time.sleep(0.05)
                 mbot2.starter_shield.dc_motor_set_power(pn, 0)
         except Exception as e:
             self._log("DC err: " + str(e))

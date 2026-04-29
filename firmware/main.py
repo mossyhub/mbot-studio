@@ -28,7 +28,14 @@ repl_enabled = True
 def on_emergency():
     global program_running, _estop
     program_running = False
-    _estop = True  # Just set the flag - main loop and motor sleep will handle it
+    _estop = True
+    # Immediately stop motors and signal handler to break out of program
+    try:
+        motor.emergency_stop()
+    except:
+        pass
+    if handler:
+        handler.stop_requested = True
     print("ESTOP")
 
 
@@ -142,7 +149,15 @@ def main():
     handler = CommandHandler(motor, sensor, mqtt_client=mqtt)
 
     # Wire estop check so motor sleep can be interrupted
-    motor._estop_check = lambda: _estop
+    # Also polls MQTT so emergency messages arrive during motor operations
+    def estop_check():
+        if mqtt and mqtt.connected:
+            try:
+                mqtt.check_messages()
+            except:
+                pass
+        return _estop
+    motor._estop_check = estop_check
 
     # Wire motor logging through MQTT so we can see diagnostics remotely
     def motor_log(msg):

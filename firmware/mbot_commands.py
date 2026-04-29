@@ -108,6 +108,14 @@ class CommandHandler:
                 break
             self._dispatch(block)
 
+    def _interruptible_sleep(self, duration):
+        """Sleep that can be interrupted by stop_requested every 50ms."""
+        end = time.time() + duration
+        while time.time() < end:
+            if self.stop_requested:
+                break
+            time.sleep(0.05)
+
     # --- Main dispatch ---
 
     def _dispatch(self, cmd):
@@ -220,7 +228,7 @@ class CommandHandler:
 
         # --- Control Flow ---
         elif t == "wait":
-            time.sleep(p.get("duration", 1))
+            self._interruptible_sleep(p.get("duration", 1))
         elif t == "repeat":
             for _ in range(p.get("times", 1)):
                 if self.stop_requested:
