@@ -386,6 +386,11 @@ function generateBlockCode(block, level, robotConfig) {
       const port = block.port || 'S1';
       const pn = port === 'S1' ? 1 : port === 'S2' ? 2 : port === 'S3' ? 3 : 4;
       const angle = block.angle || 90;
+      const speed = block.speed || 0;
+      if (speed > 0) {
+        const delay = ((101 - Math.max(1, Math.min(100, speed))) * 0.001).toFixed(3);
+        return `${pad}_sv_cur = mbot2.starter_shield.servo_get_angle(${pn})\n${pad}if _sv_cur is None or _sv_cur < 0 or _sv_cur > 180:\n${pad}    _sv_cur = 90\n${pad}_sv_cur = int(_sv_cur)\n${pad}_sv_step = 1 if ${angle} > _sv_cur else -1\n${pad}while _sv_cur != ${angle}:\n${pad}    _sv_cur += _sv_step\n${pad}    mbot2.starter_shield.servo_set_angle(${pn}, _sv_cur)\n${pad}    time.sleep(${delay})\n`;
+      }
       return `${pad}mbot2.starter_shield.servo_set_angle(${pn}, ${angle})\n`;
     }
 
@@ -402,11 +407,10 @@ function generateBlockCode(block, level, robotConfig) {
     case 'led_effect': {
       const effect = block.effect || 'rainbow';
       const effectMap = {
-        rainbow: `${pad}cyberpi.led.play("rainbow")\n`,
-        breathe_red: `${pad}cyberpi.led.play("breathing", "red")\n`,
-        breathe_green: `${pad}cyberpi.led.play("breathing", "green")\n`,
-        breathe_blue: `${pad}cyberpi.led.play("breathing", "blue")\n`,
-        marquee: `${pad}cyberpi.led.play("marquee")\n`,
+        rainbow: `${pad}cyberpi.led.rainbow_effect()\n`,
+        breathe_red: `${pad}cyberpi.led.breathe("red")\n`,
+        breathe_green: `${pad}cyberpi.led.breathe("green")\n`,
+        breathe_blue: `${pad}cyberpi.led.breathe("blue")\n`,
       };
       return effectMap[effect] || effectMap.rainbow;
     }

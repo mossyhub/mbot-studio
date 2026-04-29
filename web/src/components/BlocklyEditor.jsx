@@ -133,7 +133,7 @@ const BLOCK_PARAM_SCHEMA = {
     { key: 'color', label: 'Color', type: 'select', options: ['red', 'green', 'blue', 'yellow', 'white', 'black'] },
   ],
   led_effect: [
-    { key: 'effect', label: 'Effect', type: 'select', options: ['rainbow', 'breathe_red', 'breathe_green', 'breathe_blue', 'marquee'] },
+    { key: 'effect', label: 'Effect', type: 'select', options: ['rainbow', 'breathe_red', 'breathe_green', 'breathe_blue'] },
   ],
   if_line: [
     { key: 'sensor', label: 'Sensor', type: 'select', options: ['left', 'right', 'both'] },

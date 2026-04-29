@@ -234,11 +234,11 @@ class CommandHandler:
             effect = p.get("effect", "rainbow")
             try:
                 if effect == "rainbow":
-                    cyberpi.led.play("rainbow")
+                    cyberpi.led.rainbow_effect()
                 elif effect.startswith("breathe_"):
-                    cyberpi.led.play("breathing", effect[8:])
-                elif effect == "marquee":
-                    cyberpi.led.play("marquee")
+                    cyberpi.led.breathe(effect[8:])
+                else:
+                    cyberpi.led.rainbow_effect()
             except:
                 pass
 
@@ -290,7 +290,7 @@ class CommandHandler:
         elif t == "dc_motor":
             self.motors.dc_motor_run(p.get("port", "M3"), p.get("speed", 50), p.get("duration", 1))
         elif t == "servo":
-            self.motors.servo_set(p.get("port", "S1"), p.get("angle", 90))
+            self.motors.servo_set(p.get("port", "S1"), p.get("angle", 90), p.get("speed", 0))
         elif t == "emergency_stop":
             self.stop_requested = True
             self.motors.emergency_stop()

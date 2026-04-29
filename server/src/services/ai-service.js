@@ -725,7 +725,7 @@ function formatBlockReference(robotConfig) {
   ref += `- {"type": "play_melody", "melody": "birthday"} — play a melody. melodies: birthday|entertainer|ba|dadada|erta|knock|jump_up|jump_down|power_up|power_down|alert|score\n`;
   ref += `- {"type": "display_text", "text": "Hello!", "size": 16}\n`;
   ref += `- {"type": "set_led", "color": "red"} — colors: red|green|blue|yellow|purple|white|off\n`;
-  ref += `- {"type": "led_effect", "effect": "rainbow"} — LED animation. effects: rainbow|breathe_red|breathe_green|breathe_blue|marquee\n`;
+  ref += `- {"type": "led_effect", "effect": "rainbow"} — LED animation. effects: rainbow|breathe_red|breathe_green|breathe_blue\n`;
 
   ref += `\n### Sensors (for while_sensor, move_until, if_sensor_range)\n`;
   ref += `Available sensor names: distance|line|brightness|loudness|angle|timer\n`;
@@ -742,7 +742,9 @@ function formatBlockReference(robotConfig) {
   // Only include custom hardware blocks if there are additions
   if (robotConfig?.additions?.length) {
     ref += `\n### Custom Hardware (servos & motors from config — NOT for driving!)\n`;
-    ref += `- {"type": "servo", "port": "S1", "angle": 90} — move a servo to exact angle\n`;
+    ref += `- {"type": "servo", "port": "S1", "angle": 90} — move a servo to exact angle (instant)\n`;
+    ref += `  Optional "speed": 1–100 for smooth movement (1=slowest, 100=fastest). Omit for instant jump.\n`;
+    ref += `  Example: {"type": "servo", "port": "S1", "angle": 45, "speed": 30}\n`;
     ref += `- {"type": "dc_motor", "port": "M1", "speed": 50, "duration": 1} — run a DC motor\n`;
     ref += `  For dc_motor: positive speed = forward, negative speed = reverse\n`;
     ref += `- {"type": "dc_motor_position", "port": "M1", "position": 50} — move a DC motor to a percentage position (0–100)\n`;

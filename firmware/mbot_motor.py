@@ -157,13 +157,31 @@ class MotorController:
             except:
                 pass
 
-    def servo_set(self, port, angle=90):
+    def servo_set(self, port, angle=90, speed=0):
         port_map = {"S1": 1, "S2": 2, "S3": 3, "S4": 4}
         pn = port_map.get(str(port).upper(), 1)
         angle = max(0, min(180, int(angle)))
-        self._log("SERVO p=" + str(pn) + " a=" + str(angle))
+        speed = max(0, min(100, int(speed)))
+        self._log("SERVO p=" + str(pn) + " a=" + str(angle) + " spd=" + str(speed))
         try:
-            mbot2.starter_shield.servo_set_angle(pn, angle)
+            if speed <= 0:
+                mbot2.starter_shield.servo_set_angle(pn, angle)
+            else:
+                cur = mbot2.starter_shield.servo_get_angle(pn)
+                if cur is None or cur < 0 or cur > 180:
+                    cur = 90
+                cur = int(cur)
+                if cur == angle:
+                    return
+                step = 1 if angle > cur else -1
+                delay = (101 - speed) * 0.001
+                pos = cur
+                while pos != angle:
+                    if self._estop_check and self._estop_check():
+                        break
+                    pos += step
+                    mbot2.starter_shield.servo_set_angle(pn, pos)
+                    time.sleep(delay)
         except Exception as e:
             self._log("Servo err: " + str(e))
 
