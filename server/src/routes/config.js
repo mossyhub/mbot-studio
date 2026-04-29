@@ -12,7 +12,15 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../..');
 const CONFIG_PATH = path.join(DATA_DIR, 'robot-config.json');
-const FIRMWARE_DIR = path.join(__dirname, '../../..', 'firmware');
+
+// Firmware directory: in dev it's at project_root/firmware (3 levels up from routes/),
+// in Docker it's at /app/firmware (2 levels up since server/src is copied to /app/src).
+// Resolve by checking which path actually exists.
+const FIRMWARE_DIR_CANDIDATES = [
+  path.join(__dirname, '../../..', 'firmware'),   // dev: server/src/routes → project root
+  path.join(__dirname, '../..', 'firmware'),       // Docker: src/routes → /app
+];
+const FIRMWARE_DIR = FIRMWARE_DIR_CANDIDATES.find(d => fs.existsSync(d)) || FIRMWARE_DIR_CANDIDATES[0];
 const REQUIRED_FIRMWARE_FILES = [
   'main.py',
   'mbot_dashboard.py',
