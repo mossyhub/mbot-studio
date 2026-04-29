@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import './FirmwareFlasher.css';
+import { discoverMlink, listSerialPorts, uploadViaMlink } from '../services/mlink-client.js';
 
 const DEFAULT_SETTINGS = {
   wifiSsid: '',
@@ -74,15 +75,16 @@ export default function FirmwareFlasher() {
 
   useEffect(() => {
     let active = true;
-    fetch('/api/config/mlink/discover')
-      .then(r => r.json())
+
+    // Discover mLink directly from the browser (localhost WebSocket)
+    discoverMlink()
       .then((data) => {
         if (!active) return;
         setMlinkSupport({
           checked: true,
-          ok: !!data?.ok,
+          ok: true,
           version: data?.version || '',
-          error: data?.ok ? '' : (data?.error || 'mLink not detected'),
+          error: '',
         });
       })
       .catch((error) => {
@@ -91,15 +93,15 @@ export default function FirmwareFlasher() {
           checked: true,
           ok: false,
           version: '',
-          error: error?.message || 'Could not reach mLink bridge',
+          error: error?.message || 'mLink not detected',
         });
       });
 
-    fetch('/api/config/mlink/serialports')
-      .then(r => r.json())
+    // List serial ports directly from the browser
+    listSerialPorts()
       .then((data) => {
         if (!active || !data?.ok) return;
-        const ports = Array.isArray(data.ports) ? data.ports : [];
+        const ports = data.ports || [];
         setSerialPorts(ports);
         setSettings((prev) => {
           if (prev.serialPort || ports.length === 0) return prev;
@@ -133,45 +135,19 @@ export default function FirmwareFlasher() {
   };
 
   const flashViaMlink = async () => {
-    setStatus('Trying mLink bridge device upload...');
-    const res = await fetch('/api/config/mlink/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        files: filesToFlash,
-        settings: {
-          wifiSsid: settings.wifiSsid,
-          wifiPassword: settings.wifiPassword,
-          mqttBroker: settings.mqttBroker,
-          mqttPort: settings.mqttPort,
-          topicPrefix: settings.topicPrefix,
-          clientId: settings.clientId,
-        },
-        serialPort: settings.serialPort?.trim() || undefined,
-        slot: settings.programSlot || 1,
-      }),
+    setStatus('Connecting to mLink (browser → localhost)...');
+
+    const result = await uploadViaMlink({
+      files: filesToFlash,
+      serialPort: settings.serialPort?.trim() || null,
+      slot: settings.programSlot || 1,
+      onProgress: (msg) => setProgress((prev) => [...prev, msg]),
     });
 
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      const steps = Array.isArray(data.details?.diagnostics)
-        ? data.details.diagnostics
-        : [];
-
-      const lastSteps = steps
-        .slice(-6)
-        .map((d) => {
-          const label = d.system || d.step || d.method || 'step';
-          const ok = d.ok === true ? 'ok' : d.ok === false ? 'fail' : 'n/a';
-          return `${label}:${ok}`;
-        })
-        .join(', ');
-
-      const detailText = lastSteps ? ` Diagnostics: ${lastSteps}` : '';
-      throw new Error(`${data.error || 'mLink upload failed.'}${detailText}`.trim());
+    if (!result.ok) {
+      throw new Error('Upload failed — check diagnostics above');
     }
 
-    setProgress((data.uploaded || []).map((name) => `✅ ${name}`));
     setStatus('✅ Upload complete — program is now running on the CyberPi.');
   };
 
@@ -199,28 +175,33 @@ export default function FirmwareFlasher() {
     setStatus('Uploading minimal motor test firmware...');
 
     try {
-      const res = await fetch('/api/config/mlink/upload-test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          settings: {
-            wifiSsid: settings.wifiSsid,
-            wifiPassword: settings.wifiPassword,
-            mqttBroker: settings.mqttBroker,
-            mqttPort: settings.mqttPort,
-            topicPrefix: settings.topicPrefix,
-          },
-          serialPort: settings.serialPort?.trim() || undefined,
-          slot: settings.programSlot || 1,
-        }),
-      });
-
+      // Fetch test firmware from server
+      const res = await fetch('/api/config/firmware/test');
       const data = await res.json();
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || 'Test upload failed');
+      if (!data.files || data.files.length === 0) {
+        throw new Error('No test firmware files from server');
       }
 
-      setProgress((data.uploaded || []).map((name) => `✅ ${name}`));
+      // Apply WiFi/MQTT settings to config file
+      const testFiles = data.files.map((file) => {
+        const fileName = String(file.name || '');
+        if (fileName === 'mbot_config.py' || fileName.endsWith('/mbot_config.py')) {
+          return { ...file, content: applySettingsToConfig(file.content, settings) };
+        }
+        return file;
+      });
+
+      const result = await uploadViaMlink({
+        files: testFiles,
+        serialPort: settings.serialPort?.trim() || null,
+        slot: settings.programSlot || 1,
+        onProgress: (msg) => setProgress((prev) => [...prev, msg]),
+      });
+
+      if (!result.ok) {
+        throw new Error('Test upload failed');
+      }
+
       setStatus('✅ Motor test firmware uploaded! Press Button A on CyberPi = forward, Button B = backward.');
     } catch (error) {
       setStatus(`❌ Test upload failed: ${error.message}`);
@@ -303,8 +284,8 @@ export default function FirmwareFlasher() {
       {mlinkSupport.checked && (
         <p className="section-desc" style={{ marginTop: 8 }}>
           {mlinkSupport.ok
-            ? `✅ mLink detected${mlinkSupport.version ? ` (v${mlinkSupport.version})` : ''}.`
-            : `⚠️ mLink not detected. Install and run mLink2, then refresh this page. ${mlinkSupport.error || ''}`}
+            ? `✅ mLink detected${mlinkSupport.version ? ` (v${mlinkSupport.version})` : ''} — connecting directly from your browser.`
+            : `⚠️ mLink not detected on this computer. Install and run mLink2, then refresh. ${mlinkSupport.error || ''}`}
         </p>
       )}
 

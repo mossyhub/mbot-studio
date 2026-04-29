@@ -310,6 +310,23 @@ configRoutes.get('/firmware', (req, res) => {
 });
 
 /**
+ * GET /api/config/firmware/test
+ * Return the minimal motor test firmware file content
+ */
+configRoutes.get('/firmware/test', (req, res) => {
+  try {
+    const testPath = path.join(FIRMWARE_DIR, 'test_motors.py');
+    if (!fs.existsSync(testPath)) {
+      return res.status(404).json({ error: 'test_motors.py not found' });
+    }
+    const content = fs.readFileSync(testPath, 'utf-8');
+    res.json({ files: [{ name: 'main.py', content }] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * GET /api/config/mlink/discover
  * Probe local mLink bridge and return announced channels
  */
