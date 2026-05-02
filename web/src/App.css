@@ -28,14 +28,14 @@
 }
 
 .chat-panel-container {
-  width: 380px;
-  min-width: 320px;
-  flex-shrink: 0;
+  width: 320px;
+  min-width: 240px;
+  flex-shrink: 1;
 }
 
 .blocks-panel-container {
-  flex: 1;
-  min-width: 0;
+  flex: 2 1 480px;
+  min-width: 480px;
 }
 
 .panel-header {

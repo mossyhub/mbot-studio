@@ -721,8 +721,8 @@ function formatBlockReference(robotConfig) {
 
   ref += `\n### Sound & Display\n`;
   ref += `- {"type": "play_tone", "frequency": 440, "duration": 0.5} — beep at a specific frequency (100-2000 Hz)\n`;
-  ref += `- {"type": "play_sound", "sound": "laugh"} — built-in sound effect. sounds: laugh|wow|hi|bye|yeah|angry|sad|scared|spring|jump|score|beep|click|switch|ring|level_up|power_up|power_down\n`;
-  ref += `- {"type": "play_melody", "melody": "birthday"} — play a melody. melodies: birthday|entertainer|ba|dadada|erta|knock|jump_up|jump_down|power_up|power_down|alert|score\n`;
+  ref += `- {"type": "play_sound", "sound": "laugh"} — built-in CyberPi sound effect. Valid sounds: hello|hi|bye|yeah|wow|laugh|hum|sad|sigh|annoyed|angry|surprised|yummy|curious|embarrassed|ready|sprint|sleepy|meow|start|switch|beeps|buzzing|explosion|jump|laser|level-up|low-energy|prompt-tone|right|wrong|ring|score|wake|warning|metal-clash|shot|glass-clink|inflator|running-water|clockwork|click|current|wood-hit|iron|drop|bubble|wave|magic|spitfire|heartbeat|load. NOTE: hyphens are required (use "level-up" not "level_up").\n`;
+  ref += `- {"type": "play_melody", "melody": "birthday"} — play a tune. Valid melodies: birthday|twinkle|jingle|ode|scale|fanfare|alert|win|lose|power_up|power_down|level_up|score\n`;
   ref += `- {"type": "display_text", "text": "Hello!", "size": 16}\n`;
   ref += `- {"type": "set_led", "color": "red"} — colors: red|green|blue|yellow|purple|white|off\n`;
   ref += `- {"type": "led_effect", "effect": "rainbow"} — LED animation. effects: rainbow|breathe_red|breathe_green|breathe_blue\n`;
@@ -738,6 +738,36 @@ function formatBlockReference(robotConfig) {
   ref += `- {"type": "repeat", "times": 3, "do": [...]}\n`;
   ref += `- {"type": "if_obstacle", "distance": 20, "then": [...], "else": [...]}\n`;
   ref += `- {"type": "move_until", "direction": "forward", "speed": 50, "sensor": "distance", "operator": "<", "value": 15}\n`;
+
+  // ── Generic if / while with predicate slot ─────────────────────────────
+  ref += `\n### Generic conditionals (preferred — composable with predicate reporters)\n`;
+  ref += `Predicate blocks (boolean reporters) plug into the "cond" slot:\n`;
+  ref += `- {"type": "if_predicate", "cond": <predicate>, "then": [...]}\n`;
+  ref += `- {"type": "if_else_predicate", "cond": <predicate>, "then": [...], "else": [...]}\n`;
+  ref += `- {"type": "while_block", "cond": <predicate>, "do": [...]}\n`;
+  ref += `- {"type": "repeat_until", "cond": <predicate>, "do": [...]}\n`;
+  ref += `- {"type": "wait_until", "cond": <predicate>}\n`;
+  ref += `\n### Predicate reporters (use as "cond" values above)\n`;
+  ref += `- {"type": "sensor_obstacle_close", "distance": 20}\n`;
+  ref += `- {"type": "sensor_button_pressed", "button": "a"}\n`;
+  ref += `- {"type": "sensor_is_shaking"}\n`;
+  ref += `- {"type": "sensor_is_upside_down"}\n`;
+  ref += `- {"type": "sensor_is_tilted", "direction": "forward"}  // forward|backward|left|right\n`;
+  ref += `- {"type": "sensor_wifi_connected"}\n`;
+  ref += `- {"type": "op_gt", "a": <expr>, "b": <expr>}  // also op_lt, op_eq\n`;
+  ref += `- {"type": "op_and", "a": <pred>, "b": <pred>}  // also op_or, op_not\n`;
+  ref += `- {"type": "op_contains", "a": "haystack", "b": "needle"}\n`;
+  ref += `\n### Numeric / sensor reporters (plug into number slots)\n`;
+  ref += `- {"type": "sensor_distance"}, {"type": "sensor_line"}, {"type": "sensor_brightness"}\n`;
+  ref += `- {"type": "sensor_loudness"}, {"type": "sensor_angle"}, {"type": "sensor_pitch"}, {"type": "sensor_roll"}\n`;
+  ref += `- {"type": "sensor_timer"}, {"type": "sensor_battery"}\n`;
+  ref += `- {"type": "op_add" | "op_sub" | "op_mul" | "op_div" | "op_mod", "a": <expr>, "b": <expr>}\n`;
+  ref += `- {"type": "op_random", "min": 1, "max": 10}\n`;
+  ref += `- {"type": "var_get", "name": "my_var"}\n`;
+  ref += `\nReporters/predicates can NEST: e.g. an op_and's "a" can be another predicate.\n`;
+  ref += `Slot values that take expressions (speed, duration, value, distance, etc) accept either a literal number/string OR a reporter object.\n`;
+  ref += `\n### Stop / cap blocks\n`;
+  ref += `- {"type": "stop_all", "what": "all"}  // also "this script"\n`;
 
   // Only include custom hardware blocks if there are additions
   if (robotConfig?.additions?.length) {

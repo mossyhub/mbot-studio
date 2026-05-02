@@ -160,15 +160,15 @@
 /* Badge grid */
 .achievements-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
 }
 
 .achievement-card {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
   border-radius: 10px;
   transition: all 0.15s;
   position: relative;
@@ -182,7 +182,17 @@
 .achievement-card.locked {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
-  opacity: 0.6;
+}
+
+.achievement-card.locked .achievement-icon {
+  opacity: 0.55;
+}
+.achievement-card.locked .achievement-name {
+  color: var(--color-text-light);
+}
+.achievement-card.locked .achievement-desc {
+  color: var(--color-text-light);
+  opacity: 0.85;
 }
 
 .achievement-card.earned:hover {
@@ -190,8 +200,10 @@
 }
 
 .achievement-icon {
-  font-size: 28px;
+  font-size: 30px;
+  line-height: 1;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .achievement-info {
@@ -205,19 +217,28 @@
   color: var(--color-text);
 }
 
-.locked .achievement-name {
-  color: var(--color-text-light);
-}
-
 .achievement-desc {
   font-size: 11px;
   color: var(--color-text-light);
-  margin-top: 1px;
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.achievement-hint {
+  font-size: 11px;
+  color: #6366f1;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(99, 102, 241, 0.08);
+  border-left: 2px solid #6366f1;
+  border-radius: 4px;
+  line-height: 1.4;
 }
 
 .achievement-check {
   font-size: 14px;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 /* Recent badge */

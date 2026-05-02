@@ -101,6 +101,130 @@ class CommandHandler:
             return abs(a - b) >= 0.5
         return False
 
+    # --- Audio helpers ---
+    # Valid cyberpi.audio.play() preset sound names (see Makeblock CyberPi docs).
+    # Hyphens are required for: level-up, low-energy, prompt-tone, metal-clash,
+    # glass-clink, running-water, wood-hit. We accept underscore variants and
+    # common aliases and translate them to the canonical hyphenated name.
+    _SOUND_ALIASES = {
+        # underscore -> hyphen normalization
+        "level_up": "level-up",
+        "low_energy": "low-energy",
+        "prompt_tone": "prompt-tone",
+        "metal_clash": "metal-clash",
+        "glass_clink": "glass-clink",
+        "running_water": "running-water",
+        "wood_hit": "wood-hit",
+        # common synonyms / what AI tends to emit
+        "beep": "beeps",
+        "spring": "sprint",
+        "scared": "warning",
+        "power_up": "level-up",
+        "powerup": "level-up",
+        "power-up": "level-up",
+        "power_down": "low-energy",
+        "powerdown": "low-energy",
+        "power-down": "low-energy",
+        "alert": "warning",
+        "happy": "yeah",
+        "excited": "yeah",
+        "applause": "yeah",
+        "fail": "wrong",
+        "win": "right",
+        "success": "right",
+        "error": "wrong",
+        "click_sound": "click",
+        "siren": "warning",
+    }
+
+    # Predefined melodies as (midi_note, beats) sequences. Beat=0 means rest.
+    # cyberpi.audio.play_music(midi, beats) plays a single MIDI note.
+    _MELODIES = {
+        "birthday": [
+            (67, 0.375), (67, 0.125), (69, 0.5), (67, 0.5), (72, 0.5), (71, 1.0),
+            (67, 0.375), (67, 0.125), (69, 0.5), (67, 0.5), (74, 0.5), (72, 1.0),
+            (67, 0.375), (67, 0.125), (79, 0.5), (76, 0.5), (72, 0.5), (71, 0.5), (69, 1.0),
+            (77, 0.375), (77, 0.125), (76, 0.5), (72, 0.5), (74, 0.5), (72, 1.0),
+        ],
+        "twinkle": [
+            (60, 0.5), (60, 0.5), (67, 0.5), (67, 0.5), (69, 0.5), (69, 0.5), (67, 1.0),
+            (65, 0.5), (65, 0.5), (64, 0.5), (64, 0.5), (62, 0.5), (62, 0.5), (60, 1.0),
+        ],
+        "jingle": [
+            (64, 0.25), (64, 0.25), (64, 0.5),
+            (64, 0.25), (64, 0.25), (64, 0.5),
+            (64, 0.25), (67, 0.25), (60, 0.375), (62, 0.125), (64, 1.0),
+        ],
+        "ode": [
+            (64, 0.5), (64, 0.5), (65, 0.5), (67, 0.5),
+            (67, 0.5), (65, 0.5), (64, 0.5), (62, 0.5),
+            (60, 0.5), (60, 0.5), (62, 0.5), (64, 0.5),
+            (64, 0.75), (62, 0.25), (62, 1.0),
+        ],
+        "scale": [(60, 0.25), (62, 0.25), (64, 0.25), (65, 0.25),
+                  (67, 0.25), (69, 0.25), (71, 0.25), (72, 0.5)],
+        "fanfare": [(60, 0.25), (64, 0.25), (67, 0.25), (72, 0.5), (67, 0.25), (72, 0.75)],
+        "alert": [(76, 0.2), (71, 0.2), (76, 0.2), (71, 0.2), (76, 0.4)],
+        "win": [(60, 0.15), (64, 0.15), (67, 0.15), (72, 0.4)],
+        "lose": [(67, 0.3), (64, 0.3), (60, 0.3), (55, 0.6)],
+        "power_up": [(60, 0.1), (64, 0.1), (67, 0.1), (72, 0.1), (76, 0.3)],
+        "power_down": [(76, 0.1), (72, 0.1), (67, 0.1), (64, 0.1), (60, 0.3)],
+        "level_up": [(60, 0.1), (67, 0.1), (72, 0.1), (76, 0.3), (79, 0.4)],
+        "score": [(72, 0.15), (76, 0.15), (79, 0.4)],
+    }
+    # Aliases for melody names
+    _MELODY_ALIASES = {
+        "happy": "birthday", "happy_birthday": "birthday",
+        "twinkle_twinkle": "twinkle", "star": "twinkle",
+        "jingle_bells": "jingle", "christmas": "jingle",
+        "ode_to_joy": "ode", "joy": "ode",
+        "sad": "lose", "ba": "lose", "fail": "lose",
+        "excited": "win", "victory": "win", "yay": "win",
+        "powerup": "power_up", "power-up": "power_up",
+        "powerdown": "power_down", "power-down": "power_down",
+        "levelup": "level_up", "level-up": "level_up",
+        "entertainer": "scale", "dadada": "fanfare",
+        "erta": "scale", "knock": "fanfare",
+        "jump_up": "power_up", "jump_down": "power_down",
+    }
+
+    def _play_sound(self, name):
+        if not name:
+            name = "laugh"
+        key = str(name).strip().lower()
+        canonical = self._SOUND_ALIASES.get(key, key)
+        try:
+            cyberpi.audio.play(canonical)
+        except:
+            # fall back to a reliable default so kids still hear something
+            try:
+                cyberpi.audio.play("beeps")
+            except:
+                pass
+
+    def _play_melody(self, name):
+        key = str(name or "birthday").strip().lower()
+        key = self._MELODY_ALIASES.get(key, key)
+        notes = self._MELODIES.get(key)
+        if not notes:
+            # unknown melody: short cheerful default
+            notes = self._MELODIES["fanfare"]
+        for midi, beats in notes:
+            if self.stop_requested:
+                break
+            try:
+                if midi <= 0 or beats <= 0:
+                    time.sleep(max(0.05, beats))
+                else:
+                    cyberpi.audio.play_music(midi, beats)
+            except:
+                # if play_music fails for any reason, approximate with a tone
+                try:
+                    freq = int(440.0 * (2 ** ((midi - 69) / 12.0)))
+                    cyberpi.audio.play_tone(freq, beats)
+                except:
+                    pass
+
     def _run_blocks(self, blocks):
         """Execute a list of blocks, checking stop flag."""
         for block in blocks:
@@ -206,17 +330,9 @@ class CommandHandler:
         elif t == "play_tone":
             cyberpi.audio.play_tone(p.get("frequency", 440), p.get("duration", 0.5))
         elif t == "play_sound":
-            try:
-                cyberpi.audio.play(p.get("sound", "laugh"))
-            except:
-                pass
+            self._play_sound(p.get("sound", "laugh"))
         elif t == "play_melody":
-            melody = p.get("melody", "birthday")
-            melody_map = {"happy": "birthday", "sad": "ba", "excited": "power_up", "alert": "alert"}
-            try:
-                cyberpi.audio.play(melody_map.get(melody, melody))
-            except:
-                pass
+            self._play_melody(p.get("melody", "birthday"))
         elif t == "display_text" or t == "say":
             cyberpi.display.show_label(p.get("text", ""), p.get("size", 14), "center", index=0)
         elif t == "display_image":

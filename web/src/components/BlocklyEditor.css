@@ -1,508 +1,921 @@
-.blockly-editor {
+/* === Scratch-style block editor === */
+
+.scratch-editor {
   flex: 1;
+  display: grid;
+  grid-template-columns: 56px 200px minmax(280px, 1fr);
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--color-bg, #f4f6fb);
+}
+
+/* ── Category rail ─────────────────────────────────────────────────────── */
+.se-cats {
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  padding: 8px 4px;
+  background: #ffffff;
+  border-right: 1px solid var(--color-border, #e0e4eb);
+  overflow-y: auto;
+}
+
+.se-cat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.se-cat:hover { background: rgba(0, 0, 0, 0.04); }
+.se-cat.active {
+  background: rgba(0, 0, 0, 0.06);
+  box-shadow: inset 4px 0 0 var(--cat);
+}
+
+.se-cat-dot {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  font-size: 14px;
+  color: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.se-cat-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: #444;
+  text-align: center;
+  line-height: 1.1;
+}
+
+/* ── Palette ──────────────────────────────────────────────────────────── */
+.se-palette {
+  display: flex;
+  flex-direction: column;
+  background: #fafbfd;
+  border-right: 1px solid var(--color-border, #e0e4eb);
   overflow: hidden;
 }
 
-.blockly-empty {
+.se-palette-title {
+  padding: 8px 10px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #555;
+  border-bottom: 1px solid var(--color-border, #e0e4eb);
+  background: white;
+}
+
+.se-palette-list {
   flex: 1;
+  padding: 12px 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  text-align: center;
-  color: var(--color-text-light);
+  align-items: flex-start;
+  gap: 10px;
 }
 
-.empty-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
-  opacity: 0.5;
+/* ── Canvas / Workspace ───────────────────────────────────────────────── */
+.se-canvas-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background:
+    radial-gradient(circle, rgba(0,0,0,0.06) 1px, transparent 1px) 0 0 / 18px 18px,
+    #f4f6fb;
 }
 
-.blockly-empty h3 {
-  font-size: 20px;
-  color: var(--color-text);
-  margin-bottom: 8px;
-}
-
-.blockly-empty p {
-  font-size: 14px;
-  max-width: 340px;
-  line-height: 1.5;
-}
-
-.empty-hint {
-  margin-top: 8px;
-  font-size: 12px !important;
-  opacity: 0.7;
-}
-
-/* === Toolbar === */
-.blocks-toolbar {
+.se-canvas-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--color-border);
-  flex-shrink: 0;
-}
-
-.toolbar-actions {
-  display: flex;
-  gap: 6px;
-}
-
-/* === Block Palette === */
-.block-palette {
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg);
-  flex-shrink: 0;
-  animation: paletteSlideDown 0.15s ease-out;
-}
-
-@keyframes paletteSlideDown {
-  from { max-height: 0; opacity: 0; }
-  to { max-height: 300px; opacity: 1; }
-}
-
-.palette-categories {
-  display: flex;
-  gap: 4px;
+  gap: 8px;
   padding: 8px 12px;
-  overflow-x: auto;
-  flex-wrap: wrap;
+  background: white;
+  border-bottom: 1px solid var(--color-border, #e0e4eb);
+  flex-shrink: 0;
+  z-index: 2;
 }
 
-.palette-cat-btn {
-  padding: 5px 12px;
-  border-radius: 16px;
+.se-count {
   font-size: 12px;
   font-weight: 700;
-  color: white;
-  border: 2px solid transparent;
-  transition: all 0.15s;
-  white-space: nowrap;
+  color: #555;
 }
 
-.palette-cat-btn:hover {
-  transform: none;
-  box-shadow: none;
-  filter: brightness(1.1);
-}
-
-.palette-cat-btn.active {
-  border-color: white;
-  box-shadow: 0 0 0 2px var(--color-primary);
-}
-
-.palette-cat-btn.cat-movement { background: #4c97ff; }
-.palette-cat-btn.cat-sensor { background: #ff8c1a; }
-.palette-cat-btn.cat-sound { background: #cf63cf; }
-.palette-cat-btn.cat-control { background: #ffab19; color: #333; }
-.palette-cat-btn.cat-hardware { background: #0fbd8c; }
-.palette-cat-btn.cat-variable { background: #ff6680; }
-
-.palette-blocks {
-  display: flex;
-  gap: 6px;
-  padding: 8px 12px 12px;
-  flex-wrap: wrap;
-  animation: fadeInUp 0.1s ease-out;
-}
-
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.palette-block-btn {
+.se-zoom {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: white;
-  transition: all 0.15s;
-  border: none;
+  gap: 4px;
 }
 
-.palette-block-btn:hover {
-  transform: none;
-  box-shadow: none;
-  filter: brightness(1.15);
+.se-zoom button {
+  width: 28px; height: 28px;
+  border: 1px solid var(--color-border, #e0e4eb);
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14px;
+  color: #444;
+  display: flex; align-items: center; justify-content: center;
 }
+.se-zoom button:hover { background: #f0f2f8; }
 
-.palette-block-btn.cat-movement { background: #4c97ff; }
-.palette-block-btn.cat-sensor { background: #ff8c1a; }
-.palette-block-btn.cat-sound { background: #cf63cf; }
-.palette-block-btn.cat-display { background: #9966ff; }
-.palette-block-btn.cat-control { background: #ffab19; color: #333; }
-.palette-block-btn.cat-hardware { background: #0fbd8c; }
-.palette-block-btn.cat-variable { background: #ff6680; }
-.palette-block-btn.cat-other { background: #64748b; }
-
-.palette-block-icon {
-  font-size: 16px;
-}
-
-.palette-block-label {
-  white-space: nowrap;
-}
-
-/* === Block Parameter Editor === */
-.block-param-editor {
-  padding: 10px 14px 10px 52px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 0 0 8px 8px;
-  animation: editorSlide 0.1s ease-out;
-}
-
-@keyframes editorSlide {
-  from { max-height: 0; opacity: 0; }
-  to { max-height: 300px; opacity: 1; }
-}
-
-.param-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.param-label {
+.se-zoom-pct {
   font-size: 11px;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.85);
-  min-width: 90px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.param-input,
-.param-select {
-  padding: 4px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.15);
-  color: white;
-  font-size: 13px;
-  font-weight: 600;
-  max-width: 120px;
-}
-
-.param-input-text {
-  max-width: 200px;
-  flex: 1;
-}
-
-.param-input:focus,
-.param-select:focus {
-  outline: none;
-  border-color: rgba(255, 255, 255, 0.6);
-  background: rgba(255, 255, 255, 0.25);
-}
-
-.param-select option {
-  background: #333;
-  color: white;
-}
-
-.param-range-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-}
-
-.param-range {
-  flex: 1;
-  max-width: 120px;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: rgba(255, 255, 255, 0.3);
-  border-radius: 2px;
-  outline: none;
-}
-
-.param-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: white;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
-.param-range-value {
-  font-size: 13px;
-  font-weight: 700;
-  color: white;
-  min-width: 32px;
+  color: #666;
+  min-width: 40px;
   text-align: center;
 }
 
-/* Block action buttons */
-.block-actions {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.block-item:hover .block-actions {
-  opacity: 1;
-}
-
-.block-item.editing .block-actions {
-  opacity: 1;
-}
-
-.block-action-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.2);
-  color: white;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: background 0.15s;
-  border: none;
-}
-
-.block-action-btn:hover {
-  background: rgba(255, 255, 255, 0.4);
-  transform: none;
-  box-shadow: none;
-}
-
-.block-action-btn.block-delete {
-  font-size: 16px;
-  font-weight: bold;
-}
-
-.block-item.editing {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4);
-  border-radius: 8px;
-}
-
-.blocks-count {
-  font-size: 13px;
-  color: var(--color-text-light);
-  font-weight: 600;
-}
-
-/* === Block Stack === */
-.blocks-stack {
+.se-canvas {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
+  position: relative;
   padding: 16px;
+}
+
+.se-program {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-
-/* === Individual Block === */
-.block-item {
-  position: relative;
-  border-radius: 8px;
-  transition: all 0.15s ease;
-  cursor: grab;
-  user-select: none;
-}
-
-.block-item:active {
-  cursor: grabbing;
-}
-
-.block-item.dragging {
-  opacity: 0.4;
-  transform: scale(0.95);
-}
-
-.block-item.drag-over {
-  transform: translateY(4px);
-}
-
-.block-item.drag-over::before {
-  content: '';
-  position: absolute;
-  top: -4px;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: var(--color-primary);
-  border-radius: 2px;
-}
-
-.block-body {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  min-height: 48px;
-}
-
-.block-connector {
-  width: 20px;
-  height: 6px;
-  background: inherit;
-  border-radius: 0 0 4px 4px;
-  margin-left: 20px;
-  opacity: 0.7;
-}
-
-.block-icon {
-  font-size: 20px;
-  flex-shrink: 0;
-  width: 28px;
-  text-align: center;
-}
-
-.block-content {
-  flex: 1;
+  align-items: flex-start;
+  gap: 0;
+  transform-origin: top left;
+  transition: transform 0.1s ease-out;
+  width: max-content;
   min-width: 0;
 }
 
-.block-label {
-  font-weight: 700;
-  font-size: 14px;
+/* Free-form canvas: scripts are positioned absolutely. The board is a
+   fixed (huge) area inside the scrollable canvas so users have plenty of
+   space to spread out their work. */
+.se-canvas-board {
+  position: relative;
+  width: 4000px;
+  height: 3000px;
+  transform-origin: top left;
+  transition: transform 0.1s ease-out;
+}
+
+.se-script {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  user-select: none;
+}
+.se-script.floating {
+  /* Slightly desaturated so users can tell at a glance which script is
+     "live" (the main one with the hat). */
+  filter: saturate(0.85);
+  opacity: 0.92;
+}
+.se-script.floating::before {
+  content: '';
+  position: absolute;
+  inset: -4px -4px -4px -4px;
+  border: 1px dashed rgba(0, 0, 0, 0.18);
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.se-script.floating:hover::before { opacity: 1; }
+.se-script-grip {
+  position: absolute;
+  top: -10px; left: 0;
+  width: 28px; height: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px 4px 0 0;
+  cursor: grab;
+}
+.se-script-grip:active { cursor: grabbing; }
+/* Don't force every block to stretch — each block sizes to its own content,
+   so a c-block whose mouth contains a wider child sticks out to the right. */
+
+.se-empty-hint {
+  margin-top: 16px;
+  padding: 16px 20px;
+  border: 2px dashed rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+  font-size: 13px;
+  color: #777;
+  background: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+}
+/* ── Block shapes ─────────────────────────────────────────────────────── */
+/*
+ * Scratch's puzzle-piece geometry, matched to its actual SVG paths.
+ *   Notch (top): 36px wide × 8px deep, x=12 → x=48.
+ *   Bump (bottom): 36px wide × 8px tall, x=12 → x=48 (extends OUT of block).
+ *   Corner radius: 4px (rounded via 45° polygon cut for performance).
+ *   Top-row content height: 32px → block total = 32 + 8 (notch) + 8 (bump) = 48px.
+ *
+ * Vertical interlock: each block in a chain has margin-top: -8px so its
+ * notch swallows the previous block's bump exactly.
+ */
+.se-block-shape {
+  --notch: 8px;
+  --r: 4px;
+  position: relative;
+  background: var(--cat, #4c97ff);
   color: white;
-}
-
-.block-params {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.85);
-  margin-top: 2px;
-}
-
-/* (block-delete is now inside .block-actions — see above) */
-
-/* === Block Categories (Colors) === */
-.cat-movement .block-body { background: #4c97ff; }
-.cat-movement .block-connector { background: #4c97ff; }
-
-.cat-sensor .block-body { background: #ff8c1a; }
-.cat-sensor .block-connector { background: #ff8c1a; }
-
-.cat-sound .block-body { background: #cf63cf; }
-.cat-sound .block-connector { background: #cf63cf; }
-
-.cat-display .block-body { background: #9966ff; }
-.cat-display .block-connector { background: #9966ff; }
-
-.cat-control .block-body { background: #ffab19; }
-.cat-control .block-connector { background: #ffab19; }
-.cat-control .block-label { color: #333; }
-.cat-control .block-params { color: rgba(0, 0, 0, 0.6); }
-
-.cat-hardware .block-body { background: #0fbd8c; }
-.cat-hardware .block-connector { background: #0fbd8c; }
-
-.cat-variable .block-body { background: #ff6680; }
-.cat-variable .block-connector { background: #ff6680; }
-
-.cat-other .block-body { background: #64748b; }
-.cat-other .block-connector { background: #64748b; }
-
-/* === Start/End blocks === */
-.block-start, .block-end {
-  cursor: default;
-}
-
-.block-start .block-body,
-.block-start {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  background: var(--color-bg);
-  border-radius: 12px 12px 4px 4px;
-  border: 2px dashed var(--color-border);
-}
-
-.block-end .block-body,
-.block-end {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  background: var(--color-bg);
-  border-radius: 4px 4px 12px 12px;
-  border: 2px dashed var(--color-border);
-}
-
-.block-start .block-label,
-.block-end .block-label {
-  color: var(--color-text-light);
-  font-size: 12px;
   font-weight: 600;
+  font-size: 11px;
+  font-family: 'Helvetica Neue', 'Segoe UI', Helvetica, Arial, sans-serif;
+  margin: 0;
+  cursor: grab;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: max-content;
+  max-width: 100%;
 }
 
-.block-start .block-icon,
-.block-end .block-icon {
-  font-size: 16px;
+.se-block-shape:active { cursor: grabbing; }
+.se-block-shape:hover { filter: brightness(1.05); }
+.se-block-shape.editing { outline: 2px solid #ffd95e; outline-offset: 2px; }
+
+/* Apply ONE drop-shadow to the program/mouth as a whole, so the puzzle
+   pieces' bumps don't get shadow halos at every interface. */
+.se-program,
+.se-mouth {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
 }
 
-.block-start .block-connector,
-.block-end .block-connector {
+/* Stack block: notch on top, bump on bottom — both 36px wide × 8px deep,
+   spanning x=12 to x=48. Corners are kept square (no rounding) on the
+   left and right edges so chained blocks meet flush without showing
+   gaps where each block's clip-path would otherwise cut its corner. */
+.se-block-shape.stack {
+  padding: 10px 12px 12px 12px;
+  min-height: 24px;
+  background: var(--cat);
+  clip-path: polygon(
+    /* flat top with notch */
+    0 0,
+    12px 0, 16px 2px, 20px 6px, 24px 8px, 36px 8px, 40px 6px, 44px 2px, 48px 0,
+    100% 0,
+    /* right edge to flat bottom (above the bump) */
+    100% calc(100% - 8px),
+    /* flat bottom with bump (extends OUT of block) */
+    48px calc(100% - 8px),
+    44px calc(100% - 6px), 40px calc(100% - 2px), 36px 100%, 24px 100%, 20px calc(100% - 2px), 16px calc(100% - 6px), 12px calc(100% - 8px),
+    0 calc(100% - 8px)
+  );
+}
+
+/* Hat block: domed top (no notch), bump on bottom. Only the TOP corners
+   are rounded (the dome), since this block is always first in a chain.
+   Bottom corners are square so the next block meets flush. */
+.se-block-shape.hat {
+  padding: 14px 12px 12px 12px;
+  min-height: 28px;
+  background: var(--cat);
+  clip-path: polygon(
+    /* domed top (stepped to approximate the arc) */
+    16px 0, calc(100% - 16px) 0,
+    calc(100% - 11px) 0.5px, calc(100% - 6px) 2px, calc(100% - 2px) 6px, calc(100% - 0.5px) 11px, 100% 16px,
+    100% calc(100% - 8px),
+    48px calc(100% - 8px),
+    44px calc(100% - 6px), 40px calc(100% - 2px), 36px 100%, 24px 100%, 20px calc(100% - 2px), 16px calc(100% - 6px), 12px calc(100% - 8px),
+    0 calc(100% - 8px),
+    0 16px,
+    0.5px 11px, 2px 6px, 6px 2px, 11px 0.5px
+  );
+}
+
+/* Cap block: notch on top, FLAT bottom (terminator). Square corners on
+   top, slightly rounded on bottom for visual termination. */
+.se-block-shape.cap {
+  padding: 10px 12px 10px 12px;
+  min-height: 24px;
+  background: var(--cat);
+  clip-path: polygon(
+    0 0,
+    12px 0, 16px 2px, 20px 6px, 24px 8px, 36px 8px, 40px 6px, 44px 2px, 48px 0,
+    100% 0,
+    100% calc(100% - 6px), calc(100% - 2px) calc(100% - 2px), calc(100% - 6px) 100%,
+    6px 100%, 2px calc(100% - 2px), 0 calc(100% - 6px)
+  );
+}
+
+/* C-block (loop, if): renders as a 2-column CSS grid:
+ *   col 1 (12px) = the left rail
+ *   col 2 (auto) = children of the mouth
+ * Header spans both columns (row 1). Footer spans both columns (row 3).
+ * The rail (::before) sits in col 1 row 2 as a colored bar and visually
+ * connects the header's bottom-left to the footer's top-left.
+ * Children in col 2 sit at x=12 (in c-block coords); their notches at
+ * x=12..48 (in their own coords) align with the header's bump at x=12..48
+ * (in c-block coords, since the header is full-width but its bump is at
+ * the same relative position as a stack block's bump). */
+.se-block-shape.c,
+.se-block-shape.e {
+  background: transparent;
+  filter: none;
+  padding: 0;
+  border-radius: 0;
+  clip-path: none;
+  min-width: 0;
+  width: max-content;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* Header and chin both stretch to the c-block's full width (= widest of
+   header content vs widest mouth child). The mouth grows naturally; the
+   c-block wraps to whichever is wider. */
+.se-block-shape.c > .se-block-row,
+.se-block-shape.e > .se-block-row,
+.se-block-shape.c > .se-mouth-divider,
+.se-block-shape.e > .se-mouth-divider {
+  align-self: stretch;
+}
+
+/* Header — notch top + BUMP bottom. Bump shifted +12 to x=24..60 so it
+   aligns with the first child's notch (children indent by 12px via the
+   mouth's border-left rail). */
+.se-block-shape.c > .se-block-row,
+.se-block-shape.e > .se-block-row {
+  background: var(--cat);
+  padding: 10px 12px 16px 12px;
+  min-height: 32px;
+  width: auto;
+  display: flex; align-items: center; gap: 6px;
+  clip-path: polygon(
+    0 0,
+    12px 0, 16px 2px, 20px 6px, 24px 8px, 36px 8px, 40px 6px, 44px 2px, 48px 0,
+    100% 0,
+    100% calc(100% - 8px),
+    60px calc(100% - 8px),
+    56px calc(100% - 6px), 52px calc(100% - 2px), 48px 100%,
+    36px 100%,
+    32px calc(100% - 2px), 28px calc(100% - 6px), 24px calc(100% - 8px),
+    0 calc(100% - 8px)
+  );
+}
+
+/* Mouth — 12px left rail via border. Children indent into rail. Right
+   padding (16px) makes the mouth wider than the widest child so the
+   c-block's chin/header naturally extend past the children's right edge,
+   creating Scratch's signature "orange wraps around blue" silhouette. */
+.se-block-shape.c > .se-mouth,
+.se-block-shape.e > .se-mouth {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  border-left: 12px solid var(--cat);
+  padding-right: 16px;
+  min-height: 16px;
+  min-width: 60px;
+  width: max-content;
+  margin-top: -8px;        /* overlap header's flat bottom */
+  background: transparent;
+  position: relative;
+  z-index: 1;
+}
+
+/* First child plugs notch into header's (or divider's) bump. */
+.se-block-shape.c > .se-mouth > .se-block-shape:first-child,
+.se-block-shape.e > .se-mouth > .se-block-shape:first-child,
+.se-block-shape.c > .se-mouth > .se-slot:first-child + .se-block-shape,
+.se-block-shape.e > .se-mouth > .se-slot:first-child + .se-block-shape {
+  margin-top: 0;
+}
+
+/* Footer rail (chin) — see flex layout above for full geometry context. */
+.se-block-shape.c::after,
+.se-block-shape.e::after {
+  content: '';
+  align-self: stretch;
+  width: auto;
+  height: 24px;
+  margin-top: -8px;
+  background: var(--cat);
+  position: relative;
+  z-index: 0;
+  clip-path: polygon(
+    0 0,
+    24px 0, 28px 2px, 32px 6px, 36px 8px, 48px 8px, 52px 6px, 56px 2px, 60px 0,
+    100% 0,
+    100% calc(100% - 8px),
+    48px calc(100% - 8px),
+    44px calc(100% - 6px), 40px calc(100% - 2px), 36px 100%, 24px 100%, 20px calc(100% - 2px), 16px calc(100% - 6px), 12px calc(100% - 8px),
+    0 calc(100% - 8px)
+  );
+}
+
+/* Vertical interlock between sibling blocks in a chain (top-level program
+   stack and inside mouths). Drop slots are zero-height, so margin-top: -8px
+   on the next block makes its notch swallow the previous block's bump. */
+.se-block-shape.stack + .se-slot + .se-block-shape.stack,
+.se-block-shape.stack + .se-slot + .se-block-shape.cap,
+.se-block-shape.stack + .se-slot + .se-block-shape.c,
+.se-block-shape.stack + .se-slot + .se-block-shape.e,
+.se-block-shape.hat   + .se-slot + .se-block-shape.stack,
+.se-block-shape.hat   + .se-slot + .se-block-shape.cap,
+.se-block-shape.hat   + .se-slot + .se-block-shape.c,
+.se-block-shape.hat   + .se-slot + .se-block-shape.e,
+.se-block-shape.c     + .se-slot + .se-block-shape.stack,
+.se-block-shape.c     + .se-slot + .se-block-shape.cap,
+.se-block-shape.c     + .se-slot + .se-block-shape.c,
+.se-block-shape.c     + .se-slot + .se-block-shape.e,
+.se-block-shape.e     + .se-slot + .se-block-shape.stack,
+.se-block-shape.e     + .se-slot + .se-block-shape.cap,
+.se-block-shape.e     + .se-slot + .se-block-shape.c,
+.se-block-shape.e     + .se-slot + .se-block-shape.e,
+.se-mouth > .se-slot + .se-block-shape {
+  margin-top: -8px;
+}
+
+/* Mouth label (e.g. "then" / "else" markers inside e-blocks) */
+.se-mouth-label {
+  background: var(--cat);
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 12px 3px 14px;
+  align-self: flex-start;
+  margin: 0 0 -8px -12px;
+  text-transform: lowercase;
+  letter-spacing: 0.5px;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  position: relative;
+  z-index: 2;
+}
+
+/* Palette mouths need a visible height so the C/E silhouette reads as a
+   proper "mouth" and not a flat line. Use the same min-height as a small
+   empty stack slot would occupy on the workspace. */
+.se-palette-list .se-block-shape.c > .se-mouth,
+.se-palette-list .se-block-shape.e > .se-mouth {
+  min-height: 22px;
+  height: 22px;
+  min-width: 60px;
+  padding: 0;
+}
+.se-palette-list .se-block-shape {
+  font-size: 11px;
+  /* Let blocks size to their content (no forced min-width) so each tile
+     fits its label + chips. The palette column is wide enough (200px) to
+     hold the longest labels in our library. */
+}
+.se-palette-list .se-block-row {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+/* Tighter padding inside palette tiles to match Scratch's density. */
+.se-palette-list .se-block-shape.stack,
+.se-palette-list .se-block-shape.cap {
+  padding: 8px 10px 10px 10px;
+  min-height: auto;
+}
+.se-palette-list .se-block-shape.hat {
+  padding: 12px 10px 10px 10px;
+  min-height: auto;
+}
+.se-palette-list .se-block-shape.c > .se-block-row,
+.se-palette-list .se-block-shape.e > .se-block-row {
+  padding: 8px 10px 12px 10px;
+  min-height: auto;
+}
+.se-palette-list .se-block-shape .se-block-icon { font-size: 12px; }
+.se-palette-list .se-block-shape .se-block-text { font-weight: 600; }
+
+/* Else divider on E-blocks. Acts like an internal header: notch on top
+   (catches mouth1's last child bump at x=24..60) + BUMP on bottom (mouth2's
+   first child plugs in at x=24..60). Same silhouette as the c-block header. */
+.se-mouth-divider {
+  align-self: stretch;
+  width: 100%;
+  height: 32px;
+  margin-top: -8px;
+  background: var(--cat);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.3px;
+  display: flex;
+  align-items: center;
+  padding: 8px 12px 12px 14px;
+  position: relative;
+  z-index: 0;
+  clip-path: polygon(
+    0 0,
+    /* notch on top at x=24..60 — receives last child of mouth1 */
+    24px 0, 28px 2px, 32px 6px, 36px 8px, 48px 8px, 52px 6px, 56px 2px, 60px 0,
+    100% 0,
+    100% calc(100% - 8px),
+    /* bump on bottom at x=24..60 — receives first child of mouth2 */
+    60px calc(100% - 8px),
+    56px calc(100% - 6px), 52px calc(100% - 2px), 48px 100%,
+    36px 100%,
+    32px calc(100% - 2px), 28px calc(100% - 6px), 24px calc(100% - 8px),
+    0 calc(100% - 8px)
+  );
+}
+
+/* ── Reporter (oval) and Predicate (hexagon) ───────────────────────────── */
+.se-block-shape.reporter,
+.se-block-shape.predicate {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  background: var(--cat);
+  color: white;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.15));
+  cursor: grab;
+}
+.se-block-shape.reporter  { border-radius: 999px; clip-path: none; }
+.se-block-shape.predicate {
+  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
+  padding: 3px 18px;
+  border-radius: 0;
+}
+
+.se-block-shape.reporter.palette,
+.se-block-shape.predicate.palette { padding: 4px 12px; font-size: 12px; }
+
+.se-block-shape.reporter > .se-block-row,
+.se-block-shape.predicate > .se-block-row { gap: 5px; }
+
+/* Inline operand row for reporters */
+.se-rep-row { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
+.se-rep-icon { font-size: 13px; }
+.se-rep-label { font-weight: 800; }
+.se-rep-infix { font-weight: 800; opacity: 0.95; padding: 0 1px; }
+.se-rep-prefix { font-weight: 700; opacity: 0.85; font-size: 11px; }
+
+/* Empty slot pill (preview only) */
+.se-rep-slot {
+  background: white; color: #333;
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 11px;
+  min-width: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.se-rep-slot.bool {
+  background: rgba(0, 0, 0, 0.25);
+  color: white;
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%);
+  padding: 2px 14px;
+  border-radius: 0;
+  min-width: 30px;
+  min-height: 16px;
+}
+
+/* Slot host: the drop area inside a stack/reporter block that holds a value */
+.se-slot-host {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.92);
+  color: #222;
+  border-radius: 999px;
+  padding: 0 4px;
+  min-height: 18px;
+  min-width: 24px;
+  vertical-align: middle;
+}
+/* When the slot is occupied by a reporter block, drop the white pill
+   background/padding so the reporter sits flush in the slot. */
+.se-slot-host:has(> .se-block-shape) {
+  background: transparent;
+  padding: 0;
+  min-height: 0;
+}
+.se-slot-host.bool {
+  background: rgba(0, 0, 0, 0.18);
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%);
+  border-radius: 0;
+  min-width: 36px;
+  padding: 2px 14px;
+}
+.se-slot-host.bool.empty { min-height: 22px; min-width: 50px; }
+.se-slot-host.active {
+  outline: 2px solid #ffd95e;
+  outline-offset: 1px;
+}
+
+/* Reporter block placed inside a slot — shrink its drop shadow & make it adopt the host */
+.se-slot-host > .se-block-shape.reporter,
+.se-slot-host > .se-block-shape.predicate {
+  margin: 0;
+  filter: none;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+}
+
+/* The literal input rendered inside an oval slot */
+.se-prim {
+  border: none;
+  background: transparent;
+  color: #222;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  outline: none;
+  padding: 0 2px;
+  min-width: 24px;
+  text-align: center;
+}
+.se-prim.num { width: 36px; }
+.se-prim.txt { min-width: 50px; max-width: 110px; }
+.se-prim:focus { background: #fff7d6; border-radius: 4px; }
+
+/* Stack-block slot pair (label + value) */
+.se-slot-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+}
+.se-slot-label {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.85;
+  text-transform: lowercase;
+  letter-spacing: 0.2px;
+}
+/* Inline value preview shown in palette tiles. Shape mirrors what the
+   block will look like once dragged: oval for value slots, hexagon for
+   boolean slots. */
+.se-slot-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  color: #2a2a2a;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 22px;
+  min-height: 14px;
+  padding: 0 6px;
+}
+.se-slot-preview.val { border-radius: 999px; }
+.se-slot-preview.bool {
+  background: rgba(0, 0, 0, 0.2);
+  color: white;
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%);
+  border-radius: 0;
+  min-width: 36px;
+  padding: 2px 14px;
+}
+
+/* Block contents (icon + label + meta) */
+.se-block-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.se-block-shape.stack > .se-block-row,
+.se-block-shape.hat > .se-block-row,
+.se-block-shape.cap > .se-block-row {
+  /* already inside the shape */
+}
+
+.se-block-icon { font-size: 13px; line-height: 1; }
+.se-block-text { font-weight: 600; flex: 0 0 auto; }
+.se-block-fmt {
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.22);
+  padding: 2px 8px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.se-block-actions {
+  margin-left: auto;
   display: none;
+  gap: 2px;
+}
+.se-block-shape:hover > .se-block-row > .se-block-actions,
+.se-block-shape:hover > .se-block-actions,
+.se-block-shape.editing > .se-block-row > .se-block-actions,
+.se-block-shape.editing > .se-block-actions {
+  display: inline-flex;
+}
+.se-iconbtn {
+  background: rgba(255, 255, 255, 0.25);
+  border: none;
+  color: white;
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+.se-iconbtn:hover { background: rgba(255, 255, 255, 0.45); }
+
+/* Inline parameter editor */
+.se-params {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: 0 0 8px 8px;
 }
 
-/* === Nested Blocks (for if/loop) === */
-.block-nested {
-  margin-left: 32px;
-  padding-left: 12px;
-  border-left: 3px solid rgba(255, 255, 255, 0.3);
-  margin-top: 2px;
-  margin-bottom: 4px;
+.se-block-shape.c .se-params,
+.se-block-shape.e .se-params {
+  background: var(--cat);
+  filter: brightness(0.9);
+  margin-top: -2px;
 }
 
-.block-nested-else {
-  border-left-color: rgba(239, 68, 68, 0.4);
-}
-
-.nested-label {
+.se-param {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--color-text-light);
-  padding: 4px 8px;
+  letter-spacing: 0.5px;
+}
+.se-param > span:first-child { min-width: 64px; opacity: 0.85; }
+.se-param input[type="text"],
+.se-param input[type="number"],
+.se-param select {
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  max-width: 110px;
+}
+.se-param input[type="range"] { flex: 1; max-width: 130px; accent-color: white; }
+.se-param-val {
+  background: rgba(255,255,255,0.25);
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  min-width: 28px;
+  text-align: center;
+}
+.se-param select option { color: #222; }
+
+/* ── Drop slots ──────────────────────────────────────────────────────── */
+/*
+ * Slots sit between blocks for hit-testing but consume zero vertical space
+ * (height 0). A wider invisible padding via the ::before gives a generous
+ * drop target without breaking the puzzle-piece interlock between adjacent
+ * blocks. When active (drag hovering), the slot expands into a yellow
+ * indicator bar so the user can see exactly where the block will land.
+ */
+.se-slot {
+  height: 0;
+  width: 100%;
+  min-width: 160px;
+  margin: 0;
+  position: relative;
+  pointer-events: auto;
+  z-index: 2;
+  transition: height 0.1s ease-out, background 0.1s;
+}
+.se-slot::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: -6px; bottom: -6px;
+  pointer-events: auto;
+}
+.se-slot.inset { min-width: 100px; }
+.se-slot.active,
+.se-slot.snap-active {
+  height: 18px;
+  background: rgba(255, 220, 100, 0.85);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px #ffab19;
+  margin: 4px 0;
+}
+.se-slot.snap-active {
+  animation: snapPulse 0.5s ease-in-out infinite alternate;
+}
+@keyframes snapPulse {
+  from { box-shadow: 0 0 0 2px #ffab19; }
+  to   { box-shadow: 0 0 0 4px rgba(255, 171, 25, 0.5); }
 }
 
-.block-nested-item {
-  cursor: default;
-  margin-bottom: 2px;
+/* Reporter socket grow-to-fit while a compatible reporter is dragged near. */
+.se-slot-host.snap-grow {
+  transition: min-width 0.12s ease-out, background 0.12s, box-shadow 0.12s;
+  background: rgba(255, 250, 220, 1);
+  box-shadow: 0 0 0 2px #ffab19;
 }
 
-.block-nested-item .block-body {
-  padding: 6px 10px;
-  min-height: 36px;
+/* ── Trash drop zone ────────────────────────────────────────────────── */
+.se-trash {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: #ff4d4d;
+  color: white;
+  font-size: 26px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.15s, transform 0.15s;
+  pointer-events: none;
+}
+.se-trash.visible {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
 }
 
-.block-nested-item .block-icon {
-  font-size: 16px;
+/* ── Responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .scratch-editor { grid-template-columns: 64px 180px 1fr; }
 }
 
-.block-nested-item .block-label {
+/* === Context menu === */
+.se-ctxmenu {
+  position: fixed;
+  z-index: 1000;
+  background: white;
+  border: 1px solid #d6d9e0;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.1);
+  padding: 4px;
+  min-width: 200px;
   font-size: 13px;
+  user-select: none;
+  animation: ctxFadeIn 0.08s ease-out;
+}
+@keyframes ctxFadeIn {
+  from { opacity: 0; transform: translateY(-2px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.block-nested-item .block-connector {
-  display: none;
+.se-ctxitem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #222;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+.se-ctxitem:hover:not(:disabled) { background: #eef2fb; }
+.se-ctxitem:disabled { color: #999; cursor: not-allowed; }
+.se-ctxitem > span:first-child { font-size: 14px; width: 18px; text-align: center; }
+.se-ctxitem.danger { color: #c0392b; }
+.se-ctxitem.danger:hover:not(:disabled) { background: #fdecea; }
+.se-ctxitem kbd {
+  margin-left: auto;
+  font-size: 10px;
+  font-family: ui-monospace, Menlo, monospace;
+  color: #888;
+  background: #f1f3f7;
+  border: 1px solid #e0e3ea;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.se-ctxsep {
+  height: 1px;
+  background: #eaecf2;
+  margin: 4px 6px;
 }

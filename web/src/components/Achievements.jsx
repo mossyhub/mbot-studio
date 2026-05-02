@@ -6,6 +6,7 @@ const CATEGORIES = [
   { id: 'all',          label: '🏆 All',           filter: null },
   { id: 'first-steps',  label: '👶 First Steps',   filter: 'first-steps' },
   { id: 'coding',       label: '💻 Coding',        filter: 'coding' },
+  { id: 'operators',    label: '⚖️ Operators',     filter: 'operators' },
   { id: 'sensors',      label: '📡 Sensors',       filter: 'sensors' },
   { id: 'creative',     label: '🎨 Creative',      filter: 'creative' },
   { id: 'challenges',   label: '🎯 Challenges',    filter: 'challenges' },
@@ -104,12 +105,14 @@ export default function Achievements({ currentProfileId }) {
             <div
               key={badge.id}
               className={`achievement-card ${isEarned ? 'earned' : 'locked'}`}
-              title={badge.description}
             >
               <div className="achievement-icon">{isEarned ? badge.icon : '🔒'}</div>
               <div className="achievement-info">
                 <div className="achievement-name">{badge.name}</div>
                 <div className="achievement-desc">{badge.description}</div>
+                {!isEarned && badge.hint && (
+                  <div className="achievement-hint">💡 {badge.hint}</div>
+                )}
               </div>
               {isEarned && <div className="achievement-check">✅</div>}
             </div>

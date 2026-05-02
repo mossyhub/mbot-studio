@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import TelemetryPanel from './TelemetryPanel';
-import VoiceControl from './VoiceControl';
 import './LiveControl.css';
 
 const MAX_MISSION_EVENTS = 500;
@@ -332,18 +331,10 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
           </button>
         </div>
 
-        {/* Voice/Text Command */}
+        {/* Text Command */}
         <div className="live-command-area">
           <h3>Tell your robot what to do right now:</h3>
-          <p className="live-subtext">Type a command or use the buttons below to control your robot in real time!</p>
-          <VoiceControl
-            onVoiceCommand={(text) => {
-              setLiveInput(text);
-              sendLiveCommand(text);
-              if (onAchievement) onAchievement('first_voice');
-            }}
-            disabled={sending}
-          />
+          <p className="live-subtext">Type a command below — spelling it out works best! Or use the buttons to drive in real time.</p>
           <div className="live-input-row">
             <input
               type="text"
