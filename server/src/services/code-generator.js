@@ -179,6 +179,12 @@ function evalExpr(v, fallback = 0) {
   return `"${escapePyString(s)}"`;
 }
 
+/** STR slots contain literal text unless an explicit reporter is supplied. */
+function evalString(v, fallback = '') {
+  if (v && typeof v === 'object' && typeof v.type === 'string') return reporterExpr(v);
+  return `"${escapePyString(v ?? fallback)}"`;
+}
+
 /** Number-only evaluation (used where the AI may emit a string-cast number). */
 function evalNum(v, fallback = 0) {
   if (typeof v === 'object' && v && typeof v.type === 'string') return reporterExpr(v);
@@ -216,7 +222,7 @@ function reporterExpr(b) {
       const fn = b.fn || 'sqrt';
       const a = evalExpr(b.a, 0);
       const fns = {
-        floor: `int(${a})`,
+        floor: `__import__('math').floor(${a})`,
         ceil:  `(int(${a}) + (1 if (${a}) > int(${a}) else 0))`,
         sqrt:  `((${a}) ** 0.5)`,
         sin:   `__import__('math').sin(${a})`,
@@ -228,13 +234,13 @@ function reporterExpr(b) {
       return fns[fn] || fns.sqrt;
     }
     // strings
-    case 'op_join':   return `(str(${evalExpr(b.a, '""')}) + str(${evalExpr(b.b, '""')}))`;
+    case 'op_join':   return `(str(${evalString(b.a)}) + str(${evalString(b.b)}))`;
     case 'op_letter': {
       const idx = `(int(${evalExpr(b.n, 1)}) - 1)`;
-      const s = `str(${evalExpr(b.a, '""')})`;
+      const s = `str(${evalString(b.a)})`;
       return `(${s}[${idx}] if 0 <= ${idx} < len(${s}) else "")`;
     }
-    case 'op_length': return `len(str(${evalExpr(b.a, '""')}))`;
+    case 'op_length': return `len(str(${evalString(b.a)}))`;
 
     // predicates
     case 'op_gt': return `(${evalExpr(b.a, 0)} > ${evalExpr(b.b, 0)})`;
@@ -244,7 +250,7 @@ function reporterExpr(b) {
     case 'op_or':  return `(${evalBool(b.a, 'False')} or ${evalBool(b.b, 'False')})`;
     case 'op_not': return `(not ${evalBool(b.a, 'False')})`;
     case 'op_contains':
-      return `(str(${evalExpr(b.b, '""')}) in str(${evalExpr(b.a, '""')}))`;
+      return `(str(${evalString(b.b)}) in str(${evalString(b.a)}))`;
 
     // sensor reporters
     case 'sensor_distance':   return 'mbuild.ultrasonic2.get()';
@@ -295,6 +301,11 @@ function generateBlocksCode(blocks, level, robotConfig) {
     code += generateBlockCode(block, level, robotConfig);
   }
 
+  // Nonempty block lists can emit only comments (melody, no-op position, unknown).
+  // Python still requires a statement in every nested suite.
+  if (level > 0 && !code.split('\n').some(line => line.trim() && !line.trim().startsWith('#'))) {
+    code += `${indent(level)}pass\n`;
+  }
   return code;
 }
 
@@ -390,7 +401,7 @@ function generateBlockCode(block, level, robotConfig) {
     }
 
     case 'display_text':
-      return `${pad}cyberpi.display.show_label("${escapePyString(block.text || 'Hello!')}", ${block.size || 16}, "center", index=0)\n`;
+      return `${pad}cyberpi.display.show_label(str(${evalString(block.text, 'Hello!')}), ${evalNum(block.size, 16)}, "center", index=0)\n`;
 
     case 'display_image': {
       const images = {
@@ -607,7 +618,7 @@ function generateBlockCode(block, level, robotConfig) {
       const exprs = {
         abs:   `abs(${a})`,
         round: `round(${a})`,
-        floor: `int(${a})`,
+        floor: `__import__('math').floor(${a})`,
         ceil:  `(int(${a}) + (1 if (${a}) > int(${a}) else 0))`,
         sqrt:  `(${a}) ** 0.5`,
         sin:   `__import__('math').sin(${a})`,
@@ -672,11 +683,14 @@ function generateBlockCode(block, level, robotConfig) {
     case 'servo': {
       const port = block.port || 'S1';
       const pn = port === 'S1' ? 1 : port === 'S2' ? 2 : port === 'S3' ? 3 : 4;
-      const angle = block.angle || 90;
+      const angle = evalNum(block.angle, 90);
       const speed = block.speed || 0;
       if (speed > 0) {
         const delay = ((101 - Math.max(1, Math.min(100, speed))) * 0.001).toFixed(3);
-        return `${pad}_sv_cur = mbot2.starter_shield.servo_get_angle(${pn})\n${pad}if _sv_cur is None or _sv_cur < 0 or _sv_cur > 180:\n${pad}    _sv_cur = 90\n${pad}_sv_cur = int(_sv_cur)\n${pad}_sv_step = 1 if ${angle} > _sv_cur else -1\n${pad}while _sv_cur != ${angle}:\n${pad}    _sv_cur += _sv_step\n${pad}    mbot2.starter_shield.servo_set_angle(${pn}, _sv_cur)\n${pad}    time.sleep(${delay})\n`;
+        // Slow moves use whole degrees (editor angle domain: 0..180, step 1).
+        // Sample once and truncate toward zero, matching int(_sv_cur), so the
+        // +/-1 counter can reach fractional reporter targets after normalization.
+        return `${pad}_sv_target = int(${angle})\n${pad}_sv_cur = mbot2.starter_shield.servo_get_angle(${pn})\n${pad}if _sv_cur is None or _sv_cur < 0 or _sv_cur > 180:\n${pad}    _sv_cur = 90\n${pad}_sv_cur = int(_sv_cur)\n${pad}_sv_step = 1 if _sv_target > _sv_cur else -1\n${pad}while _sv_cur != _sv_target:\n${pad}    _sv_cur += _sv_step\n${pad}    mbot2.starter_shield.servo_set_angle(${pn}, _sv_cur)\n${pad}    time.sleep(${delay})\n`;
       }
       return `${pad}mbot2.starter_shield.servo_set_angle(${pn}, ${angle})\n`;
     }

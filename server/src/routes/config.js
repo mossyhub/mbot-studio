@@ -4,7 +4,7 @@ import { calibrationChat } from '../services/calibration-service.js';
 import { MqttService } from '../services/mqtt-service.js';
 import { discoverMlink, diagnoseCyberpiPrograms, execCyberpiSnippet, listMlinkSerialPorts, probeMlinkServices, probeProgramNamingApis, probePythonTerminal, probeVirtualFs, uploadViaMlink, virtualFsListDir } from '../services/mlink-bridge.js';
 import { SessionStore } from '../services/session-store.js';
-import { getSessionId, validateMessage } from '../services/validation.js';
+import { getSessionId, validateMessage, validateRobotConfig, validateAddition } from '../services/validation.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -38,10 +38,12 @@ export const configRoutes = Router();
 // ---------------------------------------------------------------------------
 
 function replaceConfigValue(content, key, value) {
-  const escaped = String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  // JSON string escaping is also valid for these Python string literals.
+  const literal = JSON.stringify(String(value ?? ''));
   const regex = new RegExp(`^${key}\\s*=\\s*".*"`, 'm');
   if (regex.test(content)) {
-    return content.replace(regex, `${key} = "${escaped}"`);
+    // A callback prevents $&, $$, $` and $' in settings becoming replace tokens.
+    return content.replace(regex, () => `${key} = ${literal}`);
   }
   return content;
 }
@@ -609,6 +611,10 @@ const ALLOWED_CONFIG_KEYS = new Set(['name', 'additions', 'notes', 'turnMultipli
 
 configRoutes.post('/', (req, res) => {
   try {
+    const inputValidation = validateRobotConfig(req.body);
+    if (!inputValidation.ok) {
+      return res.status(400).json({ error: inputValidation.error });
+    }
     const existing = loadConfig();
     const update = {};
     for (const key of Object.keys(req.body)) {
@@ -621,6 +627,11 @@ configRoutes.post('/', (req, res) => {
       ...update,
       updatedAt: new Date().toISOString(),
     };
+
+    const configValidation = validateRobotConfig(config);
+    if (!configValidation.ok) {
+      return res.status(400).json({ error: configValidation.error });
+    }
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 
@@ -672,6 +683,10 @@ configRoutes.post('/addition', (req, res) => {
     }
     if (!addition.type || !['servo', 'dc_motor', 'sensor'].includes(addition.type)) {
       return res.status(400).json({ error: 'type must be "servo", "dc_motor", or "sensor"' });
+    }
+    const additionValidation = validateAddition(addition);
+    if (!additionValidation.ok) {
+      return res.status(400).json({ error: additionValidation.error });
     }
 
     // Check if port is already used
@@ -828,7 +843,7 @@ export function loadConfig() {
       const data = fs.readFileSync(CONFIG_PATH, 'utf-8');
       const parsed = JSON.parse(data);
 
-      const hasExistingAdditions = Array.isArray(parsed?.additions) && parsed.additions.length > 0;
+      const hasExistingAdditions = Array.isArray(parsed?.additions);
       if (hasExistingAdditions) {
         return parsed;
       }

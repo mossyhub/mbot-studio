@@ -11,22 +11,16 @@ import { TestHarness } from './test-harness.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default async function globalSetup() {
-  // Build the frontend so the server can serve it from /
+  // Always rebuild: an existing index.html may belong to an older source tree.
   const publicDir = path.resolve(__dirname, '../server/public');
-  const indexHtml = path.join(publicDir, 'index.html');
-  if (!fs.existsSync(indexHtml)) {
-    console.log('[setup] Building frontend...');
-    execSync('npm run build', {
-      cwd: path.resolve(__dirname, '../web'),
-      stdio: 'inherit',
-    });
-
-    // Vite outputs to web/dist by default, copy to server/public
-    const distDir = path.resolve(__dirname, '../web/dist');
-    if (fs.existsSync(distDir) && !fs.existsSync(publicDir)) {
-      fs.cpSync(distDir, publicDir, { recursive: true });
-    }
-  }
+  console.log('[setup] Building frontend...');
+  execSync('npm run build', {
+    cwd: path.resolve(__dirname, '../web'),
+    stdio: 'inherit',
+  });
+  const distDir = path.resolve(__dirname, '../web/dist');
+  fs.rmSync(publicDir, { recursive: true, force: true });
+  fs.cpSync(distDir, publicDir, { recursive: true });
 
   const harness = new TestHarness();
   await harness.start();

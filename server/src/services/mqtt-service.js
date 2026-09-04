@@ -286,7 +286,7 @@ export class MqttService {
    * (received a message within the timeout window)
    */
   isRobotOnline() {
-    if (!this.robotLastSeen) return false;
+    if (!this.robotLastSeen || this.robotState === 'offline') return false;
     return (Date.now() - this.robotLastSeen) < MqttService.ROBOT_TIMEOUT;
   }
 

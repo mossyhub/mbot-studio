@@ -13,6 +13,7 @@ import { createServer as createNetServer } from 'net';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { RobotSimulator } from './robot-simulator.js';
 
@@ -57,10 +58,12 @@ export class TestHarness {
     this._serverProc = null;
     this.simulator = null;
     this.useRealAI = false; // set during start
+    this._dataDir = null;
   }
 
   /** Start MQTT broker → server → simulator. Returns when all are ready. */
   async start() {
+    this._dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mbot-test-'));
     await this._startMqttBroker();
     await this._startServer();
     this.simulator = new RobotSimulator(
@@ -80,6 +83,8 @@ export class TestHarness {
     }
     await this._stopServer();
     await this._stopMqttBroker();
+    if (this._dataDir) fs.rmSync(this._dataDir, { recursive: true, force: true });
+    this._dataDir = null;
   }
 
   // ── MQTT broker (Aedes) ────────────────────────────────────────
@@ -127,6 +132,7 @@ export class TestHarness {
         MQTT_BROKER_URL: `mqtt://127.0.0.1:${this.mqttPort}`,
         MQTT_TOPIC_PREFIX: this.topicPrefix,
         NODE_ENV: 'test',
+        DATA_DIR: this._dataDir,
       };
 
       if (this.useRealAI) {

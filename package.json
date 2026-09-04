@@ -20,6 +20,7 @@
     "docker:build": "docker build -t mbot-studio .",
     "docker:run": "docker run -p 3001:3001 --env-file .env mbot-studio",
     "docker:push": "docker tag mbot-studio:latest ${npm_config_registry:-docker.io}/mbot-studio:latest && docker push ${npm_config_registry:-docker.io}/mbot-studio:latest",
+    "test:unit": "node --test tests/*.test.js",
     "test": "npx playwright test",
     "test:local": "cross-env TEST_AI_LOCAL=true npx playwright test",
     "test:headed": "npx playwright test --headed",
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@electron/asar": "^4.0.1",
     "@playwright/test": "^1.59.1",
-    "concurrently": "^8.2.0"
+    "concurrently": "^8.2.0",
+    "cross-env": "^7.0.3"
   }
 }

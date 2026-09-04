@@ -910,47 +910,35 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
       return;
     }
 
-    // Cross-tree move (float→main, main→float, or float→float).
-    // 1) Remove from source.
-    const block = found.loc.block;
+    // Update both trees in this event, before dropping empty source scripts.
+    // Keeping their indices stable until insertion prevents a removed source
+    // from shifting (or deleting) the destination.
+    const destIndex = scriptId === 'main' ? null : parseInt(scriptId.slice(6), 10);
+    if (destIndex !== null && !floating[destIndex]) return;
+    let nextMain = internal;
+    const nextFloating = floating.slice();
     if (found.source === 'main') {
-      const { blocks: nextMain } = removeById(internal, drag.sourceId);
-      commit(nextMain);
+      nextMain = removeById(internal, drag.sourceId).blocks;
     } else {
       const fi = found.floatingIndex;
-      const { blocks: nextFloat } = removeById(floating[fi].blocks, drag.sourceId);
-      setFloating((arr) => {
-        const out = arr.slice();
-        if (nextFloat.length === 0) out.splice(fi, 1);
-        else out[fi] = { ...out[fi], blocks: nextFloat };
-        return out;
-      });
+      nextFloating[fi] = {
+        ...nextFloating[fi],
+        blocks: removeById(nextFloating[fi].blocks, drag.sourceId).blocks,
+      };
     }
-    // 2) Insert into destination on next tick (so state has settled).
-    setTimeout(() => {
-      const dest = scriptId === 'main' ? internal : (() => {
-        const idx = parseInt(scriptId.slice(6), 10);
-        // Re-read latest floating after possible removal above
-        return (floating[idx]?.blocks) || [];
-      })();
-      // (Use functional updates to avoid stale state)
-      if (scriptId === 'main') {
-        setInternal((cur) => {
-          const next = insertIntoArr(cur, { ...target, scriptId: undefined }, block);
-          lastEmittedRef.current = next;
-          onBlocksChange(next);
-          return next;
-        });
-      } else {
-        const idx = parseInt(scriptId.slice(6), 10);
-        setFloating((arr) => {
-          const out = arr.slice();
-          if (!out[idx]) return arr;
-          out[idx] = { ...out[idx], blocks: insertIntoArr(out[idx].blocks, { ...target, scriptId: undefined }, block) };
-          return out;
-        });
-      }
-    }, 0);
+    const destination = found.source === 'floating' && found.floatingIndex === destIndex
+      ? adjustTargetAfterRemoval({ ...target, scriptId: undefined }, found.loc)
+      : { ...target, scriptId: undefined };
+    if (destIndex === null) {
+      nextMain = insertIntoArr(nextMain, destination, found.loc.block);
+    } else {
+      nextFloating[destIndex] = {
+        ...nextFloating[destIndex],
+        blocks: insertIntoArr(nextFloating[destIndex].blocks, destination, found.loc.block),
+      };
+    }
+    if (nextMain !== internal) commit(nextMain);
+    setFloating(nextFloating.filter(s => s.blocks.length > 0));
   };
 
   const dropOnReporterSlot = (parentId, key, slotKind) => {
@@ -1007,44 +995,29 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
       }
       return;
     }
-    // Cross-tree: remove then insert (using functional updates)
-    const moved = found.loc.block;
+    // As with stack moves, do not compact floating indices until insertion.
+    let nextMain = internal;
+    const nextFloating = floating.slice();
     if (found.source === 'main') {
-      setInternal((cur) => {
-        const { blocks: next } = removeById(cur, drag.sourceId);
-        lastEmittedRef.current = next;
-        onBlocksChange(next);
-        return next;
-      });
+      nextMain = removeById(internal, drag.sourceId).blocks;
     } else {
       const fi = found.floatingIndex;
-      setFloating((arr) => {
-        const out = arr.slice();
-        if (!out[fi]) return arr;
-        const { blocks: next } = removeById(out[fi].blocks, drag.sourceId);
-        if (next.length === 0) out.splice(fi, 1);
-        else out[fi] = { ...out[fi], blocks: next };
-        return out;
-      });
+      nextFloating[fi] = {
+        ...nextFloating[fi],
+        blocks: removeById(nextFloating[fi].blocks, drag.sourceId).blocks,
+      };
     }
-    setTimeout(() => {
-      if (parentLoc.source === 'main') {
-        setInternal((cur) => {
-          const next = setSlot(cur, parentId, key, moved);
-          lastEmittedRef.current = next;
-          onBlocksChange(next);
-          return next;
-        });
-      } else {
-        const fi = parentLoc.floatingIndex;
-        setFloating((arr) => {
-          const out = arr.slice();
-          if (!out[fi]) return arr;
-          out[fi] = { ...out[fi], blocks: setSlot(out[fi].blocks, parentId, key, moved) };
-          return out;
-        });
-      }
-    }, 0);
+    if (parentLoc.source === 'main') {
+      nextMain = setSlot(nextMain, parentId, key, found.loc.block);
+    } else {
+      const fi = parentLoc.floatingIndex;
+      nextFloating[fi] = {
+        ...nextFloating[fi],
+        blocks: setSlot(nextFloating[fi].blocks, parentId, key, found.loc.block),
+      };
+    }
+    if (nextMain !== internal) commit(nextMain);
+    setFloating(nextFloating.filter(s => s.blocks.length > 0));
   };
 
   const dropOnTrash = () => {

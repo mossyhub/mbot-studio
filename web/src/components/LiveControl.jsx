@@ -158,6 +158,9 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     connect();
 
     return () => {
+      // Abandon pending AI work before this Live Control instance goes away.
+      aiRequestController.current?.abort();
+      aiRequestController.current = null;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (wsRef.current) {
         wsRef.current.onclose = null;
@@ -175,7 +178,8 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     setLiveInput('');
     addLog('user', `💬 ${text}`);
     recordMissionEvent('live_prompt', { text });
-    aiRequestController.current = new AbortController();
+    const controller = new AbortController();
+    aiRequestController.current = controller;
 
     // First live control achievement
     if (onAchievement) onAchievement('first_live');
@@ -185,10 +189,12 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       const res = await fetch('/api/ai/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: aiRequestController.current.signal,
+        signal: controller.signal,
         body: JSON.stringify({ message: text }),
       });
       const data = await res.json();
+      // STOP/unmount can invalidate work even after the response has arrived.
+      if (controller.signal.aborted || aiRequestController.current !== controller) return;
 
       if (data.program) {
         addLog('ai', `🧠 Generated ${data.program.length} commands`);
@@ -201,9 +207,11 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         const robotRes = await fetch('/api/robot/program', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({ program: data.program }),
         });
         const robotData = await robotRes.json();
+        if (controller.signal.aborted || aiRequestController.current !== controller) return;
 
         if (robotData.error) {
           addLog('error', `❌ ${robotData.error}`);
@@ -217,6 +225,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         recordMissionEvent('ai_chat', { message: data.chat });
       }
     } catch (err) {
+      if (aiRequestController.current !== controller) return;
       if (err.name === 'AbortError') {
         addLog('system', '🛑 AI command canceled');
         recordMissionEvent('ai_canceled', { text });
@@ -225,8 +234,10 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       addLog('error', `❌ Error: ${err.message}`);
       recordMissionEvent('client_error', { message: err.message });
     } finally {
-      aiRequestController.current = null;
-      setSending(false);
+      if (aiRequestController.current === controller) {
+        aiRequestController.current = null;
+        setSending(false);
+      }
     }
   };
 
@@ -346,7 +357,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
             />
             <button
               className="btn-primary"
-              onClick={sendLiveCommand}
+              onClick={() => sendLiveCommand()}
               disabled={!liveInput.trim() || sending}
             >
               {sending ? '⏳' : '▶️ Go!'}

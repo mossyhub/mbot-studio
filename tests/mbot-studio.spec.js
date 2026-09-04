@@ -31,7 +31,8 @@ test.describe('Server health', () => {
     const res = await request.get('/api/config');
     expect(res.ok()).toBeTruthy();
     const body = await res.json();
-    expect(body).toHaveProperty('turnMultiplier');
+    expect(body.name).toEqual(expect.any(String));
+    expect(Array.isArray(body.additions)).toBe(true);
   });
 });
 
@@ -245,7 +246,7 @@ test.describe('UI end-to-end', () => {
     await applyBtn.click();
 
     // Blocks should now appear in the editor
-    await expect(page.locator('.block-item').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.se-script.main .se-block-shape:not(.hat)').first()).toBeVisible({ timeout: 5000 });
   });
 
   test('typing a message generates blocks', async ({ page }) => {
@@ -274,8 +275,8 @@ test.describe('UI end-to-end', () => {
     await expect(applyBtn).toBeVisible({ timeout: 3000 });
     await applyBtn.click();
 
-    // Click "Send via MQTT"
-    const runBtn = page.locator('button', { hasText: 'Send via MQTT' });
+    // Click "Run Program"
+    const runBtn = page.locator('button', { hasText: 'Run Program' });
     await expect(runBtn).toBeEnabled({ timeout: 5000 });
     await runBtn.click();
 
@@ -318,7 +319,7 @@ test.describe('UI end-to-end', () => {
     await applyBtn.click();
 
     // Send to robot
-    const runBtn = page.locator('button', { hasText: 'Send via MQTT' });
+    const runBtn = page.locator('button', { hasText: 'Run Program' });
     await expect(runBtn).toBeEnabled({ timeout: 5000 });
     await runBtn.click();
 

@@ -224,9 +224,8 @@ export default function App() {
         program: response.program,
         explanation: response.explanation || '',
       });
-      if (response.pythonCode) {
-        setPythonCode(response.pythonCode);
-      }
+      // Drafts do not change the current project's Python. Apply regenerates
+      // it from the final (replaced or appended) block program.
     }
     // First chat achievement
     const b = tryEarnBadge('first_chat');

@@ -279,13 +279,13 @@ robotRoutes.post('/test-action', (req, res) => {
   // Build the motor command from the action definition
   let command;
   if (type === 'servo') {
-    command = { type: 'servo', port, angle: action.angle || 90 };
+    command = { type: 'servo', port, angle: action.angle ?? 90 };
   } else {
     // DC motor — translate direction + speed into signed speed
     const dir = action.motorDirection || 'forward';
-    const speed = action.speed || 50;
+    const speed = action.speed ?? 50;
     const signedSpeed = dir === 'reverse' ? -speed : speed;
-    command = { type: 'dc_motor', port, speed: signedSpeed, duration: action.duration || 1 };
+    command = { type: 'dc_motor', port, speed: signedSpeed, duration: action.duration ?? 1 };
   }
 
   const sent = mqtt.sendCommand(command);
@@ -312,6 +312,9 @@ robotRoutes.post('/test-action', (req, res) => {
  * Send code to the robot's remote REPL for execution
  */
 robotRoutes.post('/repl', (req, res) => {
+  if (process.env.ENABLE_REPL === 'false') {
+    return res.status(403).json({ error: 'REPL is disabled. Set ENABLE_REPL=true in .env to enable.' });
+  }
   const { code, id } = req.body;
   const mqtt = MqttService.getInstance();
 
