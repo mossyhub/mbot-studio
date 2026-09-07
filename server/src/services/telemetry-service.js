@@ -100,6 +100,9 @@ export class TelemetryService {
 
       // === Sensors ===
       sensors: {
+        // Preserve firmware-specific readings and raw errors (including quad
+        // color objects). Yaw/pitch/roll are not synthetic gyro_x/y/z readings.
+        ...sensors,
         // Navigation
         distance: sensors.distance ?? null,
         line_left: sensors.line_left ?? null,
@@ -121,7 +124,7 @@ export class TelemetryService {
         tilt_right: sensors.tilt_right ?? false,
         tilt_forward: sensors.tilt_forward ?? false,
         tilt_backward: sensors.tilt_backward ?? false,
-        face_up: sensors.face_up ?? true,
+        face_up: sensors.face_up ?? null,
 
         // Environment
         loudness: sensors.loudness ?? null,

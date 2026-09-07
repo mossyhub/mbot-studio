@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { MqttService } from '../services/mqtt-service.js';
 import { TelemetryService } from '../services/telemetry-service.js';
 import { blocksToMicroPython, blockToMqttCommand, resolveDcMotorPosition, positionPercentToStateName } from '../services/code-generator.js';
@@ -71,6 +72,13 @@ robotRoutes.post('/command', (req, res) => {
 
   let cmd = commandValidation.value;
 
+  if (mqtt.isCooperativeApp()) {
+    const run_id = randomUUID();
+    const mqttCmd = { ...cmd, run_id };
+    const sent = mqtt.sendCommand(mqttCmd);
+    return res.json({ sent, command: mqttCmd, run_id });
+  }
+
   // Resolve dc_motor_position to a concrete dc_motor command using tracked state
   if (cmd.type === 'dc_motor_position') {
     const robotConfig = loadConfig();
@@ -111,6 +119,14 @@ robotRoutes.post('/program', (req, res) => {
       error: 'Robot not connected',
       hint: 'Make sure MQTT broker is running and robot is connected to WiFi',
     });
+  }
+
+  // The cooperative runtime owns execution/homing. Never infer actuator state
+  // or inject legacy S1/S2 home commands into its programs.
+  if (mqtt.isCooperativeApp()) {
+    const run_id = randomUUID();
+    const sent = mqtt.sendProgram(programValidation.value, run_id);
+    return res.json({ sent, blockCount: programValidation.value.length, run_id });
   }
 
   // Prepend home actions for hardware with homeState
@@ -363,4 +379,11 @@ robotRoutes.post('/telemetry/reset', (req, res) => {
   const telemetry = TelemetryService.getInstance();
   telemetry.reset();
   res.json({ success: true });
+});
+
+// Admission failures from the shared send boundary must stay explicit JSON,
+// including older routes (diagnostic/test-action/upload) that use that boundary.
+robotRoutes.use((err, req, res, next) => {
+  if (!err.code?.startsWith('COOPERATIVE_')) return next(err);
+  res.status(err.status).json({ error: err.message, code: err.code });
 });

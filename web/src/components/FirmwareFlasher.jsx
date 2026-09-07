@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import './FirmwareFlasher.css';
+import OtaBootstrap from './OtaBootstrap';
 import { discoverMlink, listSerialPorts, uploadViaMlink } from '../services/mlink-client.js';
 
 const DEFAULT_SETTINGS = {
@@ -336,6 +337,8 @@ export default function FirmwareFlasher() {
           🧪 Test Motors Only
         </button>
       </div>
+
+      <OtaBootstrap flashing={flashing} onBusy={setFlashing} serialPort={settings.serialPort} slot={settings.programSlot}/>
 
       {status && <p className="firmware-status">{status}</p>}
 

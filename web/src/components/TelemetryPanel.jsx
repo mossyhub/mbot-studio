@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import './TelemetryPanel.css';
 
 /**
@@ -6,21 +6,19 @@ import './TelemetryPanel.css';
  * Shows sensors, battery, orientation, actuators, alerts, and sparklines.
  * Receives telemetry via WebSocket (type: 'telemetry').
  */
-export default function TelemetryPanel({ wsRef, robotConnected }) {
+export default function TelemetryPanel({ wsRef, wsConnected, robotConnected }) {
   const [telemetry, setTelemetry] = useState(null);
   const [expanded, setExpanded] = useState(true);
-  const prevTelemetry = useRef(null);
 
   // Listen for telemetry messages on the shared WebSocket
   useEffect(() => {
     const ws = wsRef?.current;
-    if (!ws) return;
+    if (!wsConnected || !ws) return;
 
     const handleMessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'telemetry') {
-          prevTelemetry.current = telemetry;
           setTelemetry(msg.data);
         }
       } catch { /* ignore */ }
@@ -28,17 +26,40 @@ export default function TelemetryPanel({ wsRef, robotConnected }) {
 
     ws.addEventListener('message', handleMessage);
     return () => ws.removeEventListener('message', handleMessage);
-  }, [wsRef, telemetry]);
+  }, [wsRef, wsConnected]);
 
-  // Also poll telemetry on mount for initial data
+  // Recover the cached snapshot on each connection (including one sent before
+  // React attached the listener). This reads the server cache, not the robot.
   useEffect(() => {
-    fetch('/api/robot/telemetry')
+    if (!wsConnected) return;
+    const controller = new AbortController();
+    fetch('/api/robot/telemetry', { signal: controller.signal })
       .then(r => r.json())
-      .then(data => { if (data.timestamp) setTelemetry(data); })
+      .then(data => {
+        if (!controller.signal.aborted && data.timestamp) {
+          setTelemetry(current => !current?.timestamp || data.timestamp >= current.timestamp ? data : current);
+        }
+      })
       .catch(() => {});
-  }, []);
+    return () => controller.abort();
+  }, [wsConnected]);
+
+  // Snapshots are on demand: never schedule sensor scans during a program.
+  const refreshSensors = () => {
+    const ws = wsRef?.current;
+    if (robotConnected && wsConnected && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'request_sensors' }));
+    }
+  };
 
   const s = telemetry?.sensors || {};
+  const displayValue = value => typeof value === 'object' ? JSON.stringify(value) : String(value);
+  const quadColors = {
+    ...(s.color && typeof s.color === 'object' ? s.color : {}),
+    ...Object.fromEntries(['L1', 'L2', 'R1', 'R2']
+      .filter(port => s[`color_${port}`] != null)
+      .map(port => [port, s[`color_${port}`]])),
+  };
   const actuators = telemetry?.actuators || {};
   const alerts = telemetry?.alerts || [];
   const history = telemetry?.history || {};
@@ -107,7 +128,7 @@ export default function TelemetryPanel({ wsRef, robotConnected }) {
   }
 
   return (
-    <div className={`telemetry-panel ${stale ? 'telemetry-stale' : ''}`}>
+    <div className={`telemetry-panel ${stale ? 'telemetry-stale' : ''}`} style={{ flexShrink: 0 }}>
       {/* Header */}
       <div className="telemetry-header">
         <div className="telemetry-header-left">
@@ -118,6 +139,7 @@ export default function TelemetryPanel({ wsRef, robotConnected }) {
             <span className="telemetry-live">● Live</span>
           )}
         </div>
+        <button onClick={refreshSensors} disabled={!robotConnected || !wsConnected}>Refresh sensors</button>
         <button className="telemetry-collapse-btn" onClick={() => setExpanded(false)} title="Collapse">▼</button>
       </div>
 
@@ -135,7 +157,7 @@ export default function TelemetryPanel({ wsRef, robotConnected }) {
       {!telemetry?.timestamp && (
         <div className="telemetry-empty">
           <p>No telemetry data yet.</p>
-          <p className="telemetry-hint">{robotConnected ? 'Waiting for sensor data from robot...' : 'Connect your robot to see live data.'}</p>
+          <p className="telemetry-hint">{robotConnected ? 'Click Refresh sensors to request a snapshot.' : 'Connect your robot to see live data.'}</p>
         </div>
       )}
 
@@ -191,14 +213,54 @@ export default function TelemetryPanel({ wsRef, robotConnected }) {
           )}
 
           {/* Color Sensor */}
-          {s.color != null && s.color !== 'unknown' && (
+          {s.color != null && typeof s.color !== 'object' && (
             <div className="telem-card telem-color">
               <div className="telem-icon">🎨</div>
               <div className="telem-data">
-                <div className="telem-value">{s.color}</div>
+                <div className="telem-value">{displayValue(s.color)}</div>
                 <div className="telem-label">Color</div>
               </div>
-              <div className="color-swatch" style={{ background: s.color.toLowerCase() }} />
+              {typeof s.color === 'string' && <div className="color-swatch" style={{ background: s.color.toLowerCase() }} />}
+            </div>
+          )}
+
+          {Object.keys(quadColors).length > 0 && (
+            <div className="telem-card telem-color">
+              <div className="telem-data">
+                {Object.entries(quadColors).map(([port, value]) => (
+                  <div key={port}>{port}: {displayValue(value)}</div>
+                ))}
+                <div className="telem-label">Quad colors</div>
+              </div>
+            </div>
+          )}
+
+          {s.line_status != null && (
+            <div className="telem-card telem-line">
+              <div className="telem-data">
+                <div className="telem-value">{displayValue(s.line_status)}</div>
+                <div className="telem-label">Line status (raw)</div>
+              </div>
+            </div>
+          )}
+
+          {['yaw', 'pitch', 'roll'].some(axis => s[axis] != null) && (
+            <div className="telem-card telem-orientation">
+              <div className="telem-data">
+                {['yaw', 'pitch', 'roll'].filter(axis => s[axis] != null).map(axis => (
+                  <div key={axis}>{axis[0].toUpperCase() + axis.slice(1)}: {displayValue(s[axis])}°</div>
+                ))}
+                <div className="telem-label">Orientation</div>
+              </div>
+            </div>
+          )}
+
+          {s.errors && Object.keys(s.errors).length > 0 && (
+            <div className="telem-card telem-warn">
+              <div className="telem-data">
+                <div className="telem-label">Sensor errors (raw)</div>
+                <div>{displayValue(s.errors)}</div>
+              </div>
             </div>
           )}
 
@@ -208,7 +270,7 @@ export default function TelemetryPanel({ wsRef, robotConnected }) {
               <div className="telem-icon">🧭</div>
               <div className="telem-data">
                 <div className="telem-value telem-value-compact">
-                  X:{s.gyro_x ?? 0}° Y:{s.gyro_y ?? 0}° Z:{s.gyro_z ?? 0}°
+                  X:{s.gyro_x == null ? '—' : `${s.gyro_x}°`} Y:{s.gyro_y == null ? '—' : `${s.gyro_y}°`} Z:{s.gyro_z}°
                 </div>
                 <div className="telem-label">Gyroscope <TiltIndicator /></div>
               </div>
