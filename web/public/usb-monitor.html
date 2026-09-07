@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>mBot USB Serial Monitor</title><style>
+body{font:16px system-ui;margin:24px;background:#141927;color:#edf2ff}main{max-width:1100px;margin:auto}button,select{font:inherit;padding:10px;margin:6px 8px 6px 0}pre{background:#080c14;padding:16px;min-height:350px;max-height:60vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}small{color:#b4c1db}.warn{color:#ffd27b}#status{padding:12px 0}label{display:inline-block}a{color:#9dc5ff}
+</style></head><body><main><h1>mBot USB Serial Monitor</h1>
+<p>This page connects directly to <strong>mLink on this laptop</strong>. It reads USB serial bytes at 115200 baud. It does not send robot commands, flash firmware, or request a reset.</p>
+<p class="warn">Close other serial monitors and do not upload while listening. Opening the USB port may itself affect the board's reset lines. Blank output means no bytes received—not a successful boot.</p>
+<button id="find">Find USB ports</button><label>USB port <select id="port"><option value="">Find ports first</option></select></label>
+<button id="start" disabled>Start listening</button><button id="stop" disabled>Disconnect</button><button id="save">Download log</button><button id="clear">Clear display</button>
+<div id="status" role="status">Not connected. Keep mLink running on this laptop.</div>
+<small>UTF-8 serial output is shown below; the downloadable log also includes exact hex bytes. Logs can contain device information or credentials—review before sharing. Buffer limited to the latest 1 MiB.</small>
+<pre id="output" tabindex="0"></pre><p><a href="/">Back to mBot Studio</a></p>
+<script type="module" src="/usb-monitor.js"></script></main></body></html>

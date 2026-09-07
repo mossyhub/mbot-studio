@@ -1,6 +1,7 @@
 import { MqttService } from './mqtt-service.js';
 import { TelemetryService } from './telemetry-service.js';
 import { validateCommand } from './validation.js';
+import { randomUUID } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -49,6 +50,10 @@ export function setupWebSocket(wss) {
         const msg = JSON.parse(data.toString());
         handleWebSocketMessage(ws, msg);
       } catch (e) {
+        if (mqtt.isCooperativeApp()) {
+          ws.send(JSON.stringify({ type: 'error', message: e.message, code: e.code || 'COOPERATIVE_INVALID' }));
+          return;
+        }
         console.error('WebSocket message parse error:', e);
       }
     });
@@ -100,6 +105,14 @@ function handleWebSocketMessage(ws, msg) {
       }
       // Apply turn multiplier if this is a turn command
       let cmd = cmdValidation.value;
+      if (mqtt.isCooperativeApp()) {
+        const run_id = randomUUID();
+        const sent = mqtt.sendCommand({ ...cmd, run_id });
+        ws.send(JSON.stringify(sent
+          ? { type: 'ack', command: cmd.type, run_id }
+          : { type: 'error', message: 'Robot not connected' }));
+        break;
+      }
       if ((cmd.type === 'turn_left' || cmd.type === 'turn_right') && cmd.angle) {
         const mult = getTurnMultiplier();
         if (mult !== 1) {
@@ -146,6 +159,10 @@ function handleWebSocketMessage(ws, msg) {
       break;
 
     default:
+      if (mqtt.isCooperativeApp()) {
+        ws.send(JSON.stringify({ type: 'error', message: `Unknown WebSocket message type: ${msg.type}` }));
+        break;
+      }
       console.log('Unknown WebSocket message type:', msg.type);
   }
 }

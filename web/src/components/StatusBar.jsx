@@ -25,6 +25,12 @@ export default function StatusBar({ robotConnected, robotStatus, soundMuted, onS
         <span className={`status-badge ${status.className}`}>
           {status.icon} {status.text}
         </span>
+        {robotStatus?.robotOnline && robotStatus?.application === 'cooperative-v1' && (
+          <span className="status-hint">
+            {robotStatus.motion_enabled !== true ? 'Motion disabled' : robotStatus.armed ? 'Armed' : 'Disarmed'}
+            {robotStatus.build ? ` · ${robotStatus.build}` : ''}
+          </span>
+        )}
         {robotStatus?.mqttConnected && !robotStatus?.robotOnline && (
           <span className="status-hint">
             Turn on your mBot2 — it needs the firmware uploaded and WiFi connected

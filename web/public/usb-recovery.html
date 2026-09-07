@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>mBot OTA USB Recovery</title><style>body{font:16px system-ui;background:#141927;color:#edf2ff;margin:24px}main{max-width:850px;margin:auto}label{display:block;margin:14px 0}input,select,button{font:inherit;padding:9px}input:not([type=checkbox]){display:block;width:90%}button{margin:8px 8px 8px 0}pre{white-space:pre-wrap;background:#080c14;padding:16px}a{color:#9dc5ff}.warn{color:#ffd27b}</style></head><body><main>
+<h1>Install corrected OTA loader</h1><p>Commissioning revision: <strong>explicit startup + visible stage diagnostics</strong>. This replaces the current robot program with the nonmoving OTA recovery loader. It does not install driving controls or replace Makeblock's native firmware.</p>
+<p class="warn">First disconnect the USB Serial Monitor and close other serial apps. Keep mLink running and the robot secured with wheels raised and mechanisms clear. USB recovery must remain available.</p>
+<form id="form"><label>WiFi name<input id="ssid" required maxlength="128" autocomplete="off"></label><label>WiFi password<input id="password" type="password" maxlength="256" autocomplete="off"></label>
+<label>MQTT broker<input id="broker" required value="192.168.0.10" maxlength="253"></label><label>MQTT port<input id="mqttport" type="number" required min="1" max="65535" value="1883"></label>
+<label>Topic prefix<input id="prefix" required value="mbot-studio"></label><label>Device ID<input id="device" required value="mbot2-rover"></label>
+<button type="button" id="find">Find USB ports</button><label>USB port<select id="serial"><option value="">Find ports first</option></select></label>
+<label><input id="consent" type="checkbox"> Robot is secured; replace its startup program</label>
+<button id="install" type="submit" disabled>Install corrected loader via USB</button></form>
+<p>Your WiFi password stays in this page's memory and the robot upload; this page does not save it or submit it to the web server. Reloading clears it.</p>
+<div id="status" role="status">Loading corrected loader…</div><pre id="progress"></pre>
+<p>A transfer acknowledgement is not proof the loader booted. Afterward, report the exact CyberPi screen message. If blank, use the <a href="/usb-monitor.html">USB Serial Monitor</a> after the upload releases the port.</p>
+<script type="module" src="/usb-recovery.js"></script></main></body></html>

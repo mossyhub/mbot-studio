@@ -125,9 +125,19 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
           } else if (msg.type === 'mqtt' && msg.topic === 'robot/log') {
             addLog('robot', `🤖 ${typeof msg.data === 'string' ? msg.data : JSON.stringify(msg.data)}`);
             recordMissionEvent('robot_log', msg.data);
+          } else if (msg.type === 'mqtt' && msg.topic === 'robot/execution') {
+            const execution = msg.data;
+            if (!execution || typeof execution !== 'object' || !execution.event) return;
+            // Only program-scoped events describe the whole run. A block can
+            // complete while a later block still fails or is canceled.
+            const scope = execution.type === 'program' ? 'Program' : `Block ${execution.type || 'unknown'}`;
+            const correlation = execution.run_id ? `run_id=${execution.run_id}` : 'uncorrelated';
+            const details = execution.details == null ? '' : `: ${typeof execution.details === 'string' ? execution.details : JSON.stringify(execution.details)}`;
+            addLog(execution.event === 'failed' ? 'error' : 'robot', `${scope} ${execution.event} [${correlation}]${details}`);
+            recordMissionEvent(execution.type === 'program' ? `program_${execution.event}` : 'execution_block', execution);
           } else if (msg.type === 'ack') {
-            addLog('system', `✅ Command sent: ${msg.command}`);
-            recordMissionEvent('ack', { command: msg.command });
+            addLog('system', `✅ Command sent: ${msg.command}${msg.run_id ? ` [run_id=${msg.run_id}] — submission only; see device execution events` : ''}`);
+            recordMissionEvent('ack', { command: msg.command, ...(msg.run_id ? { run_id: msg.run_id } : {}) });
           } else if (msg.type === 'error') {
             addLog('error', `❌ ${msg.message}`);
             recordMissionEvent('ws_error', { message: msg.message });
@@ -213,12 +223,15 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         const robotData = await robotRes.json();
         if (controller.signal.aborted || aiRequestController.current !== controller) return;
 
-        if (robotData.error) {
-          addLog('error', `❌ ${robotData.error}`);
-          recordMissionEvent('program_send_error', { error: robotData.error });
+        if (!robotRes.ok || robotData.error || robotData.sent === false) {
+          const error = robotData.error || 'Program was not sent';
+          addLog('error', `❌ ${error}${robotData.run_id ? ` [run_id=${robotData.run_id}]` : ''}`);
+          recordMissionEvent('program_send_error', { error, ...(robotData.run_id ? { run_id: robotData.run_id } : {}) });
         } else {
-          addLog('system', `📡 Program sent to robot!`);
-          recordMissionEvent('program_sent', { blockCount: data.program.length });
+          addLog('system', robotData.run_id
+            ? `📡 Program sent [run_id=${robotData.run_id}] — submission only; see device execution events`
+            : '📡 Program sent to robot! Execution unverified');
+          recordMissionEvent('program_sent', { blockCount: data.program.length, ...(robotData.run_id ? { run_id: robotData.run_id } : {}) });
         }
       } else if (data.chat) {
         addLog('ai', `🤖 ${data.chat}`);
@@ -421,7 +434,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         </div>
 
         {/* Live Telemetry Dashboard */}
-        <TelemetryPanel wsRef={wsRef} robotConnected={robotConnected} />
+        <TelemetryPanel wsRef={wsRef} wsConnected={wsConnected} robotConnected={robotConnected} />
       </div>
 
       {/* Middle: Hardware Ports */}

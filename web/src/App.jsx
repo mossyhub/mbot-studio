@@ -104,6 +104,12 @@ export default function App() {
   const [soundMuted, setSoundMuted] = useState(isMuted());
   const [errorToast, setErrorToast] = useState(null);
   const prevRobotOnline = useRef(false);
+  const activeRun = useRef(null);
+  const [programLifecycle, setProgramLifecycle] = useState(null);
+  useEffect(() => () => {
+    activeRun.current?.dispose();
+    activeRun.current = null;
+  }, []);
 
   const commitBlocks = useCallback((newBlocks) => {
     setBlocks(newBlocks);
@@ -193,6 +199,10 @@ export default function App() {
           robotOnline: s.robotOnline,       // robot heartbeat received recently
           robotState: s.robotState || 'unknown',
           robotLastSeen: s.robotLastSeen,
+          application: s.application,
+          motion_enabled: s.motion_enabled,
+          armed: s.armed,
+          build: s.build,
         }))
         .catch(() => setRobotStatus({ connected: false, mqttConnected: false, robotOnline: false, robotState: 'unknown' }));
     };
@@ -302,37 +312,103 @@ export default function App() {
   }, [historyIndex, blockHistory]);
 
   const handleRunProgram = useCallback(async () => {
-    if (blocks.length === 0) return;
-
-    // Check achievements before running
-    const newBadges = checkProgramAchievements(blocks);
-
+    if (blocks.length === 0 || activeRun.current) return;
+    const run = { id: null, events: [], controller: new AbortController() };
+    activeRun.current = run;
+    setProgramLifecycle({ text: 'Submitting program…', pending: true });
+    const award = () => {
+      const badges = checkProgramAchievements(blocks);
+      setCelebrationQueue(prev => [...prev, ...badges.map(badge => ({ badge, type: 'confetti' }))]);
+      badges.forEach(() => playAchievement());
+    };
+    run.dispose = () => {
+      clearTimeout(run.timer);
+      run.controller.abort();
+      run.socket?.close();
+      run.events = [];
+    };
+    const finish = (text) => {
+      if (activeRun.current !== run) return;
+      activeRun.current = null;
+      run.dispose();
+      setProgramLifecycle({ text, pending: false });
+    };
+    // Absolute observation deadline, not refreshed by telemetry/noisy events.
+    run.timer = setTimeout(() => finish('Unverified — timed out waiting for device confirmation; the robot may still be running.'), 120000);
+    const observe = event => {
+      if (activeRun.current !== run || event.run_id !== run.id) return;
+      if (['completed', 'failed', 'canceled'].includes(event.event)) {
+        if (event.type !== 'program') return; // A block ending is not a program ending.
+        const label = { completed: 'Completed', failed: 'Failed', canceled: 'Canceled' }[event.event];
+        const detail = event.details ? ` — ${typeof event.details === 'string' ? event.details.slice(0, 300) : JSON.stringify(event.details).slice(0, 300)}` : '';
+        finish(`${label} — device confirmed (${run.id})${detail}`);
+        if (event.event === 'completed') award();
+        else if (event.event === 'failed') playError();
+      } else if (['accepted', 'started'].includes(event.event)) {
+        // Do not regress started to accepted when events arrive out of order.
+        if (run.started && event.event === 'accepted') return;
+        if (event.event === 'started') run.started = true;
+        setProgramLifecycle({ text: `${run.started ? 'Started' : 'Accepted'} — device confirmed (${run.id})`, pending: true });
+      }
+    };
     try {
+      // Existing sockets are private to conditionally-mounted LiveControl/Debug
+      // components; there is no shared hook. Observe only for this run and close
+      // on every terminal path. Open before POST so fast device events aren't lost.
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      run.socket = socket;
+      socket.onmessage = message => {
+        if (activeRun.current !== run) return;
+        try {
+          const msg = JSON.parse(message.data);
+          if (msg.type !== 'mqtt' || msg.topic !== 'robot/execution' || typeof msg.data?.run_id !== 'string') return;
+          if (run.id) observe(msg.data);
+          else {
+            run.events.push(msg.data);
+            if (run.events.length > 128) run.events.shift();
+          }
+        } catch { /* malformed telemetry cannot complete a run */ }
+      };
+      await new Promise(resolve => {
+        socket.onopen = resolve;
+        socket.onerror = resolve; // HTTP can still submit; timeout remains unverified.
+        socket.onclose = resolve;
+      });
+      if (activeRun.current !== run) return;
       playProgramSent();
       const res = await fetch('/api/robot/program', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ program: blocks }),
+        signal: run.controller.signal,
       });
       const data = await res.json();
-      if (data.error) {
+      if (activeRun.current !== run) return;
+      if (!res.ok || data.error) {
         playError();
-        setErrorToast(data.hint
-          ? `Could not send to robot: ${data.error} — ${data.hint}`
-          : `Could not send to robot: ${data.error}`);
+        const error = data.error || `HTTP ${res.status}`;
+        finish(`Submission failed — ${error}`);
+        setErrorToast(data.hint ? `Could not send to robot: ${error} — ${data.hint}` : `Could not send to robot: ${error}`);
+      } else if (typeof data.run_id === 'string' && data.run_id) {
+        run.id = data.run_id;
+        setProgramLifecycle({ text: `Submitted — awaiting device confirmation (${run.id})`, pending: true });
+        const earlyEvents = run.events;
+        run.events = [];
+        earlyEvents.forEach(observe);
+      } else if (robotStatus.application === 'cooperative-v1') {
+        finish('Unverified — submission returned no run ID; device completion cannot be confirmed.');
       } else {
-        // Trigger celebrations for achievements earned
-        if (newBadges.length > 0) {
-          const celebrations = newBadges.map(badge => ({ badge, type: 'confetti' }));
-          setCelebrationQueue(prev => [...prev, ...celebrations]);
-          newBadges.forEach(() => playAchievement());
-        }
+        finish('Program sent (legacy transport acknowledgement).');
+        award();
       }
     } catch (err) {
+      if (activeRun.current !== run) return;
+      finish('Unverified — error sending program: ' + err.message);
       playError();
       setErrorToast('Error sending program: ' + err.message);
     }
-  }, [blocks]);
+  }, [blocks, robotStatus.application]);
 
   const handleStop = useCallback(async () => {
     playStop();
@@ -598,12 +674,16 @@ export default function App() {
                   <button
                     className="btn-primary"
                     onClick={handleRunProgram}
-                    disabled={blocks.length === 0}
+                    disabled={blocks.length === 0 || programLifecycle?.pending}
                   >
                     ▶️ Run Program
                   </button>
                 </div>
               </div>
+
+              {programLifecycle && (
+                <div role="status" data-testid="program-lifecycle">{programLifecycle.text}</div>
+              )}
 
               {pendingSuggestion && (
                 <div className="suggestion-bar">
