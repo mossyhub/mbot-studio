@@ -121,6 +121,231 @@ test('cooperative wrapped editor block metadata passes admission unchanged', asy
   assert.deepEqual(result.published[0].payload.program, program);
 });
 
+const motorCapabilities = ['move_forward', 'move_backward', 'dc_motor', 'servo',
+  'wait', 'stop', 'display_text', 'set_led', 'read_sensors', 'status', 'turn_left', 'turn_right'];
+
+async function motorControl(overrides = {}) {
+  await cooperative({ build: 'mbot-motor-control-v1', capabilities: motorCapabilities,
+    motion_enabled: true, armed: true, ...overrides });
+}
+
+function assertPublished(result, route, value) {
+  assert.equal(result.status, 200);
+  assert.equal(result.body.sent, true);
+  assert.equal(result.published.length, 1);
+  assert.equal(result.published[0].topic, `${prefix}/robot${route}`);
+  assert.match(result.body.run_id, uuid);
+  const { run_id, timestamp, ...payload } = result.published[0].payload;
+  assert.equal(run_id, result.body.run_id);
+  assert.deepEqual(payload, route === '/program' ? { program: value } : value);
+}
+
+test('motor-control admission caps a flat program at 32 blocks without disabling valid sends', async () => {
+  await motorControl();
+  const tooMany = Array.from({ length: 33 }, () => ({ type: 'wait', duration: 0 }));
+  const rejected = await send('/program', { program: tooMany });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.code, 'COOPERATIVE_INVALID');
+  assert.deepEqual(rejected.published, []);
+  const valid = tooMany.slice(0, 32);
+  assertPublished(await send('/program', { program: valid }), '/program', valid);
+  // The full engine still accepts programs beyond the small app's limit.
+  await cooperative();
+  assertPublished(await send('/program', { program: tooMany }), '/program', tooMany);
+});
+
+// Exercise both wire forms through both real HTTP routes. Every invalid block
+// is also the tail of an otherwise valid program: no prefix may be published.
+async function checkMotorBlock(invalid, valid, expected = 400) {
+  for (const wrapped of [false, true]) {
+    const form = ({ type, ...params }) => wrapped
+      ? { type, _id: 'editor-block', params } : { type, ...params };
+    for (const route of ['/command', '/program']) {
+      const body = command => route === '/command' ? { command }
+        : { program: [{ type: 'display_text', text: 'no partial program' }, command] };
+      const rejected = await send(route, body(form(invalid)));
+      assert.equal(rejected.status, expected, JSON.stringify({ route, invalid: form(invalid) }));
+      assert.equal(rejected.body.code, expected === 422 ? 'COOPERATIVE_UNSUPPORTED' : 'COOPERATIVE_INVALID');
+      assert.deepEqual(rejected.published, []);
+      const permitted = body(form(valid));
+      assertPublished(await send(route, permitted), route, permitted.command || permitted.program);
+    }
+  }
+}
+
+const nonNumbers = ['20', true, null, { type: 'sensor_distance' }];
+for (const [type, baseParams, field, invalid, valid] of [
+  ['move_forward', {}, 'speed', [-0.1, 50.1, ...nonNumbers], [0, 20.5, 50]],
+  ['move_backward', {}, 'speed', [-0.1, 50.1, ...nonNumbers], [0, 20.5, 50]],
+  ['dc_motor', { port: 'M1' }, 'speed', [-50.1, 50.1, ...nonNumbers], [-50, 0, 50]],
+  ...['move_forward', 'move_backward', 'dc_motor'].map(type =>
+    [type, type === 'dc_motor' ? { port: 'M1' } : {}, 'duration', [-0.1, 5.1, ...nonNumbers], [0, 0.5, 5]]),
+  ['servo', { port: 'S1' }, 'angle', [-0.1, 180.1, ...nonNumbers], [0, 90.5, 180]],
+  ['servo', { port: 'S1' }, 'speed', [-0.1, 0.1, ...nonNumbers], [0]],
+  ['display_text', { text: 'hello' }, 'size', [7, 33, ...nonNumbers], [8, 14.5, 32]],
+  ['display_text', {}, 'text', ['x'.repeat(129), '😀'.repeat(129), 123, false, null, { type: 'var_get', name: 'x' }], ['', 'x'.repeat(128), '😀'.repeat(128)]],
+  ['wait', {}, 'duration', [-0.1, 60.1, ...nonNumbers], [0, 0.5, 60]],
+  ...['turn_left', 'turn_right'].map(type => [type, {}, 'angle', [-0.1, 30.1, ...nonNumbers], [0, 15.5, 30]]),
+]) {
+  test(`motor-control literal ${type}.${field} matches the small runtime`, async () => {
+    await motorControl();
+    for (const value of invalid) {
+      await checkMotorBlock({ type, ...baseParams, [field]: value },
+        { type, ...baseParams, [field]: valid[0] });
+    }
+    for (const value of valid) {
+      const command = { type, params: { ...baseParams, [field]: value } };
+      assertPublished(await send('/command', { command }), '/command', command);
+    }
+  });
+}
+
+test('motor-control requires display text, LED color and literal actuator ports', async () => {
+  await motorControl();
+  for (const [invalid, valid] of [
+    [{ type: 'display_text' }, { type: 'display_text', text: '' }],
+    [{ type: 'set_led' }, { type: 'set_led', color: 'off' }],
+    ...['dc_motor', 'servo'].flatMap(type => [undefined, null, 1, true, '1', 'M0', 'M5', 'S0', 'S5', 'm1', 's1', 'ALL', { type: 'var_get', name: 'port' }]
+      .map(port => [{ type, ...(port === undefined ? {} : { port }) }, { type, port: type === 'servo' ? 'S1' : 'M1' }])),
+    [{ type: 'dc_motor', port: 'S1' }, { type: 'dc_motor', port: 'M1' }],
+    [{ type: 'servo', port: 'M1' }, { type: 'servo', port: 'S1' }],
+  ]) await checkMotorBlock(invalid, valid);
+  for (const type of ['dc_motor', 'servo']) {
+    for (const suffix of ['1', '2', '3', '4']) {
+      const command = { type, port: (type === 'servo' ? 'S' : 'M') + suffix };
+      assertPublished(await send('/command', { command }), '/command', command);
+    }
+  }
+});
+
+test('motor-control rejects unknown fields, nested bodies and unsupported build types even when advertised', async () => {
+  await motorControl({ capabilities: [...motorCapabilities, 'repeat', 'say', 'set_speed',
+    'dc_motor_position', 'set_variable', 'play_tone', 'play_sound', 'stop_sound', 'set_volume', 'display_animation'] });
+  for (const command of [
+    { type: 'wait', mystery: 0 }, { type: 'wait', do: [] },
+    { type: 'wait', then: [{ type: 'stop' }] }, { type: 'stop', duration: 0 },
+    { type: 'move_forward', angle: 0 }, { type: 'servo', port: 'S1', duration: 0 },
+    ...['turn_left', 'turn_right'].flatMap(type => [{ type, speed: 0 }, { type, duration: 0 }]),
+    { type: 'set_led', color: 'red', brightness: 0 },
+  ]) await checkMotorBlock(command, { type: 'wait', duration: 0 });
+  for (const type of ['repeat', 'say', 'set_speed', 'dc_motor_position', 'set_variable',
+    'play_tone', 'play_sound', 'stop_sound', 'set_volume', 'display_animation']) {
+    await checkMotorBlock({ type }, { type: 'stop' }, 422);
+  }
+  // Advertising a turn is necessary; support in the server is not sufficient.
+  await motorControl({ capabilities: motorCapabilities.filter(type => type !== 'turn_left') });
+  await checkMotorBlock({ type: 'turn_left', angle: 10 }, { type: 'turn_right', angle: 10 }, 422);
+});
+
+test('motor-control only permits actual editor and transport envelopes in their wire positions', async () => {
+  await motorControl();
+  const commands = [
+    { type: 'wait', _id: 'editor', run_id: 'sender', duration: 0 },
+    { type: 'wait', _id: 'editor', run_id: 'sender', params: { duration: 0 } },
+  ];
+  for (const command of commands) {
+    const result = await send('/command', { command: { ...command, timestamp: 123 } });
+    const { run_id, ...expected } = command; // HTTP assigns its own run ID.
+    assertPublished(result, '/command', expected);
+    assert.equal(result.published[0].payload.timestamp, 123);
+    assertPublished(await send('/program', { program: [command] }), '/program', [command]);
+  }
+  for (const command of [
+    { type: 'wait', params: { duration: 0, run_id: 'nested' } },
+    { type: 'wait', params: { duration: 0, timestamp: 123 } },
+    { type: 'wait', params: { duration: 0 }, mystery: 1 },
+    { type: 'wait', params: { duration: 0 }, duration: 0 },
+    { type: 'wait', params: { type: 'stop' } },
+    { type: 'wait', timestamp: { type: 'sensor_distance' } },
+  ]) {
+    const result = await send('/command', { command });
+    assert.equal(result.status, 400, JSON.stringify(command));
+    assert.deepEqual(result.published, []);
+    assertPublished(await send('/command', { command: { type: 'wait' } }), '/command', { type: 'wait' });
+  }
+  // Firmware strips timestamp from standalone commands, not program blocks.
+  for (const command of commands) {
+    const result = await send('/program', { program: [{ ...command, timestamp: 123 }] });
+    assert.equal(result.status, 400);
+    assert.deepEqual(result.published, []);
+    assertPublished(await send('/program', { program: [command] }), '/program', [command]);
+  }
+});
+
+test('motor-control runtime requests reject unexpected fields and unsupported get_status without disabling sensors', async () => {
+  await motorControl();
+  for (const type of ['read_sensors', 'status']) {
+    const result = await send('/command', { command: { type, speed: 0 } });
+    assert.equal(result.status, 400);
+    assert.deepEqual(result.published, []);
+    for (const command of [{ type }, { type, params: {} }]) {
+      assertPublished(await send('/command', { command }), '/command', command);
+    }
+    const programResult = await send('/program', { program: [{ type }] });
+    assert.equal(programResult.status, 422); // Runtime operations remain command-only.
+    assert.deepEqual(programResult.published, []);
+  }
+  const unknown = await send('/command', { command: { type: 'get_status' } });
+  assert.equal(unknown.status, 422);
+  assert.deepEqual(unknown.published, []);
+  assert.equal(mqtt.requestSensors(), true);
+  await mqtt.client.publishAsync(`${prefix}/barrier`, '{}', { qos: 1 });
+  assert.equal(packets.at(-1).payload.type, 'read_sensors');
+  assert.match(packets.at(-1).payload.run_id, uuid);
+});
+
+test('motor-control admission rejects empty programs and oversized UTF-8 wire payloads atomically', async () => {
+  await motorControl();
+  const empty = await send('/program', { program: [] });
+  assert.equal(empty.status, 400);
+  assert.deepEqual(empty.published, []);
+  assert.throws(() => mqtt.sendProgram([]), /1.*32|empty/i);
+  const oversized = Array.from({ length: 32 }, () => ({ type: 'display_text', text: '😀'.repeat(128) }));
+  const rejected = await send('/program', { program: oversized });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.body.error, /8192|payload/i);
+  assert.deepEqual(rejected.published, []);
+  const valid = oversized.map(block => ({ ...block, text: 'x'.repeat(128) }));
+  assertPublished(await send('/program', { program: valid }), '/program', valid);
+  const tooLargeCommand = await send('/command', { command: { type: 'wait', _id: 'x'.repeat(8192) } });
+  assert.equal(tooLargeCommand.status, 400);
+  assert.deepEqual(tooLargeCommand.published, []);
+  assertPublished(await send('/command', { command: { type: 'wait', _id: 'editor' } }),
+    '/command', { type: 'wait', _id: 'editor' });
+  await cooperative();
+  assertPublished(await send('/program', { program: oversized }), '/program', oversized);
+});
+
+test('motor-control preserves defaults, motion gates, raw turns and shared WebSocket admission', async () => {
+  await motorControl();
+  fs.writeFileSync(path.join(dataDir, 'robot-config.json'), JSON.stringify({ turnMultiplier: 9, additions: [] }));
+  const program = motorCapabilities.filter(type => !['status', 'read_sensors'].includes(type)).map(type => ({
+    type, ...(type === 'servo' ? { port: 'S1' } : type === 'dc_motor' ? { port: 'M1' }
+      : type === 'display_text' ? { text: '' } : type === 'set_led' ? { color: 'off' } : {}),
+  }));
+  assertPublished(await send('/program', { program }), '/program', program);
+  for (const flags of [{ motion_enabled: false, armed: true }, { motion_enabled: true, armed: false }]) {
+    await motorControl(flags);
+    const result = await send('/program', { program: [{ type: 'wait' }, { type: 'turn_left', angle: 30 }] });
+    assert.equal(result.status, 409);
+    assert.deepEqual(result.published, []);
+    assertPublished(await send('/command', { command: { type: 'stop' } }), '/command', { type: 'stop' });
+  }
+  await motorControl();
+  const rejected = await socketSend({ type: 'command', command: { type: 'move_forward', speed: 51 } });
+  assert.equal(rejected.body.type, 'error');
+  assert.deepEqual(rejected.published, []);
+  const command = { type: 'turn_left', angle: 30 };
+  const accepted = await socketSend({ type: 'command', command });
+  assert.equal(accepted.body.type, 'ack');
+  assert.equal(accepted.published.length, 1);
+  const { run_id, ...payload } = accepted.published[0].payload;
+  assert.match(run_id, uuid);
+  assert.equal(run_id, accepted.body.run_id);
+  assert.deepEqual(payload, command); // Never apply legacy chassis multipliers.
+  assert.deepEqual(mqtt.getHardwareStates(), {});
+});
+
 // COLORS and CAPS from firmware/robot_control.py, not the broader RobotEngine.
 for (const color of ['red', 'green', 'blue', 'yellow', 'cyan', 'purple', 'white', 'orange', 'off', 'magenta']) {
   test(`mbot-motor-control-v1 LED ${color} follows the runtime palette`, async () => {

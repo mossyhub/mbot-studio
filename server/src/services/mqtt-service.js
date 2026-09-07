@@ -14,6 +14,17 @@ const COOPERATIVE_REPORTERS = new Set(['var_get', 'sensor_distance', 'op_add',
   'op_sub', 'op_mul', 'op_div', 'op_gt', 'op_lt', 'op_eq', 'op_and', 'op_or', 'op_not']);
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+// robot_control.py is a different, smaller runtime than RobotEngine. This is
+// deliberately not derived from advertised CAPS: unverified AV extensions stay
+// unsupported even if a dirty firmware build advertises them.
+const MOTOR_CONTROL_FIELDS = {
+  move_forward: ['speed', 'duration'], move_backward: ['speed', 'duration'],
+  dc_motor: ['port', 'speed', 'duration'], servo: ['port', 'angle', 'speed'],
+  turn_left: ['angle'], turn_right: ['angle'], wait: ['duration'],
+  stop: [], display_text: ['text', 'size'], set_led: ['color'],
+};
+const MOTOR_CONTROL_RUNTIME_TYPES = new Set(['read_sensors', 'status']);
+
 function admissionError(message, status = 400, code = 'COOPERATIVE_INVALID') {
   return Object.assign(new Error(message), { status, code });
 }
@@ -141,12 +152,13 @@ export class MqttService {
    * Send a command to the robot
    */
   sendCommand(command) {
-    if (this.isCooperativeApp() && ['read_sensors', 'status', 'get_status'].includes(command?.type)) {
+    if (this.isCooperativeApp() && this.robotStatusMetadata.build !== 'mbot-motor-control-v1' &&
+        ['read_sensors', 'status', 'get_status'].includes(command?.type)) {
       // Runtime operations, not executable statement capabilities. An empty
       // program admission still enforces a fresh, online cooperative status.
       this.validateCooperativeProgram([]);
     } else {
-      this.validateCooperativeProgram([command]);
+      this.validateCooperativeProgram([command], { commandEnvelope: true });
     }
     if (!this.connected) {
       console.warn('MQTT not connected, command not sent');
@@ -156,6 +168,7 @@ export class MqttService {
     const topic = `${this.topicPrefix}/robot/command`;
     const payload = JSON.stringify(this.isCooperativeApp()
       ? { ...command, run_id: command.run_id || randomUUID() } : command);
+    this.validateCooperativePayload(payload);
     this.client.publish(topic, payload);
     console.log(`📤 Command sent: ${command.type}`);
     return true;
@@ -175,6 +188,7 @@ export class MqttService {
     const payload = JSON.stringify({ program, timestamp: Date.now(),
       ...(this.isCooperativeApp() ? { run_id: runId || randomUUID() } : {}),
     });
+    this.validateCooperativePayload(payload);
     this.client.publish(topic, payload);
     console.log(`📤 Program sent (${program.length} blocks)`);
     return true;
@@ -259,16 +273,30 @@ export class MqttService {
     return this.robotStatusMetadata.application === 'cooperative-v1';
   }
 
+  validateCooperativePayload(payload) {
+    // Control.put rejects the entire MQTT payload above 8192 bytes, including
+    // JSON escaping, UTF-8 and the server's timestamp/run_id envelope.
+    if (this.isCooperativeApp() && this.robotStatusMetadata.build === 'mbot-motor-control-v1' &&
+        Buffer.byteLength(payload, 'utf8') > 8192) {
+      throw admissionError('Motor-control MQTT payload exceeds 8192 bytes');
+    }
+  }
+
   /** Capability admission only: publishing never proves device execution. */
-  validateCooperativeProgram(program) {
+  validateCooperativeProgram(program, { commandEnvelope = false } = {}) {
     if (!this.isCooperativeApp()) return;
     if (!this.isRobotOnline() || !this.robotStatusLastSeen ||
         Date.now() - this.robotStatusLastSeen >= MqttService.ROBOT_TIMEOUT) {
       throw admissionError('Cooperative robot status is stale or offline', 503, 'COOPERATIVE_OFFLINE');
     }
+    const motorControl = this.robotStatusMetadata.build === 'mbot-motor-control-v1';
+    if (motorControl &&
+        (!Array.isArray(program) || program.length < 1 || program.length > 32)) {
+      throw admissionError('Motor-control program must contain 1..32 flat blocks');
+    }
     const capabilities = this.robotStatusMetadata.capabilities;
     // robot_control.py COLORS differs from the broader RobotEngine palette.
-    const ledColors = this.robotStatusMetadata.build === 'mbot-motor-control-v1'
+    const ledColors = motorControl
       ? ['red', 'green', 'blue', 'yellow', 'cyan', 'purple', 'white', 'orange', 'off']
       : ['red', 'green', 'blue', 'yellow', 'cyan', 'magenta', 'white', 'off'];
     let blockCount = 0;
@@ -289,7 +317,11 @@ export class MqttService {
       for (const block of blocks) {
         if (!isObject(block) || typeof block.type !== 'string') throw admissionError('Cooperative block.type is required');
         if (++blockCount > 256) throw admissionError('Cooperative program exceeds 256 blocks');
-        if (!COOPERATIVE_TYPES.has(block.type) || !Array.isArray(capabilities) || !capabilities.includes(block.type)) {
+        const supported = motorControl
+          ? Object.hasOwn(MOTOR_CONTROL_FIELDS, block.type) ||
+            (commandEnvelope && MOTOR_CONTROL_RUNTIME_TYPES.has(block.type))
+          : COOPERATIVE_TYPES.has(block.type);
+        if (!supported || !Array.isArray(capabilities) || !capabilities.includes(block.type)) {
           throw admissionError(`Unsupported cooperative command: ${block.type}`, 422, 'COOPERATIVE_UNSUPPORTED');
         }
         if (MOTION_TYPES.has(block.type)) {
@@ -308,8 +340,32 @@ export class MqttService {
           }
           params = block.params;
         }
-        // Literal bounds from RobotEngine._validate; no coercion or reporter
-        // evaluation here. Omitted fields retain the engine's defaults.
+        if (motorControl) {
+          const fields = MOTOR_CONTROL_FIELDS[block.type] || [];
+          const envelope = ['type', '_id', 'run_id', ...(commandEnvelope ? ['timestamp'] : [])];
+          const allowed = params === block ? [...envelope, ...fields] : fields;
+          if (Object.keys(params).some(key => !allowed.includes(key)) ||
+              (params !== block && Object.keys(block).some(key => ![...envelope, 'params'].includes(key)))) {
+            throw admissionError(`Unknown motor-control ${block.type} parameter`);
+          }
+          if ((Object.hasOwn(block, '_id') && typeof block._id !== 'string') ||
+              (Object.hasOwn(block, 'run_id') && (typeof block.run_id !== 'string' || [...block.run_id].length > 128)) ||
+              (Object.hasOwn(block, 'timestamp') && (typeof block.timestamp !== 'number' || !Number.isFinite(block.timestamp)))) {
+            throw admissionError('Invalid motor-control command envelope');
+          }
+          if (block.type === 'display_text' && !Object.hasOwn(params, 'text')) {
+            throw admissionError('Motor-control display_text text is required');
+          }
+          if (block.type === 'set_led' && !Object.hasOwn(params, 'color')) {
+            throw admissionError('Motor-control LED color is required');
+          }
+          if (['servo', 'dc_motor'].includes(block.type)) {
+            const ports = block.type === 'servo' ? ['S1', 'S2', 'S3', 'S4'] : ['M1', 'M2', 'M3', 'M4'];
+            if (!ports.includes(params.port)) throw admissionError(`Invalid motor-control ${block.type} port`);
+          }
+        }
+        // Literal bounds from RobotEngine._validate or the small build's
+        // robot_control.validate. No coercion; omissions keep device defaults.
         const boundedNumber = (key, low, high) => {
           if (Object.hasOwn(params, key) &&
               (typeof params[key] !== 'number' || !Number.isFinite(params[key]) ||
@@ -317,12 +373,25 @@ export class MqttService {
             throw admissionError(`Cooperative ${block.type} ${key} must be a number in ${low}..${high}`);
           }
         };
+        if (motorControl) {
+          if (['move_forward', 'move_backward', 'dc_motor'].includes(block.type)) {
+            boundedNumber('speed', block.type === 'dc_motor' ? -50 : 0, 50);
+            boundedNumber('duration', 0, 5);
+          }
+          if (block.type === 'servo') {
+            boundedNumber('angle', 0, 180);
+            boundedNumber('speed', 0, 0);
+          }
+          // Native driver angle, not calibrated chassis rotation.
+          if (['turn_left', 'turn_right'].includes(block.type)) boundedNumber('angle', 0, 30);
+        }
         if (block.type === 'wait') boundedNumber('duration', 0, 60);
         if (['display_text', 'say'].includes(block.type)) {
-          boundedNumber('size', 8, 64);
+          boundedNumber('size', 8, motorControl ? 32 : 64);
+          const maxText = motorControl ? 128 : 256;
           if (Object.hasOwn(params, 'text') &&
-              (typeof params.text !== 'string' || [...params.text].length > 256)) {
-            throw admissionError('Cooperative text must be a literal up to 256 characters');
+              (typeof params.text !== 'string' || [...params.text].length > maxText)) {
+            throw admissionError(`Cooperative text must be a literal up to ${maxText} characters`);
           }
         }
         if (block.type === 'repeat' && Object.hasOwn(params, 'times') &&
@@ -333,6 +402,9 @@ export class MqttService {
             !ledColors.includes(params.color)) {
           throw admissionError('Unsupported cooperative LED color');
         }
+        // Small-app fields are literals only, and its programs are flat. The
+        // strict field table above rejects all reporter and child-block slots.
+        if (motorControl) continue;
         for (const [key, value] of Object.entries(params)) {
           if (['do', 'then', 'else'].includes(key)) visit(value, depth + 1);
           else if (value !== null && typeof value === 'object') reporter(value);

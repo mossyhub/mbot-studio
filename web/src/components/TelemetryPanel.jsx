@@ -2,13 +2,23 @@ import React, { useState, useEffect } from 'react';
 import './TelemetryPanel.css';
 
 /**
- * TelemetryPanel — Live robot feedback dashboard
+ * TelemetryPanel — On-demand robot snapshot dashboard
  * Shows sensors, battery, orientation, actuators, alerts, and sparklines.
  * Receives telemetry via WebSocket (type: 'telemetry').
  */
 export default function TelemetryPanel({ wsRef, wsConnected, robotConnected }) {
-  const [telemetry, setTelemetry] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
+  const telemetry = snapshot?.data;
+  const [now, setNow] = useState(() => performance.now());
   const [expanded, setExpanded] = useState(true);
+
+  // Age the server cache locally, without polling or comparing wall clocks.
+  useEffect(() => {
+    if (!snapshot?.data?.timestamp) return;
+    setNow(performance.now());
+    const timer = setInterval(() => setNow(performance.now()), 1000);
+    return () => clearInterval(timer);
+  }, [snapshot]);
 
   // Listen for telemetry messages on the shared WebSocket
   useEffect(() => {
@@ -19,7 +29,7 @@ export default function TelemetryPanel({ wsRef, wsConnected, robotConnected }) {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'telemetry') {
-          setTelemetry(msg.data);
+          setSnapshot({ data: msg.data, receivedAt: performance.now() });
         }
       } catch { /* ignore */ }
     };
@@ -37,7 +47,10 @@ export default function TelemetryPanel({ wsRef, wsConnected, robotConnected }) {
       .then(r => r.json())
       .then(data => {
         if (!controller.signal.aborted && data.timestamp) {
-          setTelemetry(current => !current?.timestamp || data.timestamp >= current.timestamp ? data : current);
+          const received = { data, receivedAt: performance.now() };
+          // A delayed cache response (even the same snapshot) must not rewind
+          // the age or data already received through the socket.
+          setSnapshot(current => !current?.data?.timestamp || data.timestamp > current.data.timestamp ? received : current);
         }
       })
       .catch(() => {});
@@ -63,7 +76,11 @@ export default function TelemetryPanel({ wsRef, wsConnected, robotConnected }) {
   const actuators = telemetry?.actuators || {};
   const alerts = telemetry?.alerts || [];
   const history = telemetry?.history || {};
-  const stale = telemetry?.stale;
+  const age = Number.isFinite(telemetry?.age)
+    ? Math.max(0, telemetry.age) + Math.max(0, now - snapshot.receivedAt)
+    : null;
+  const stale = telemetry?.timestamp && (telemetry.stale || age === null || age > 10000);
+  const online = robotConnected && wsConnected;
 
   // Battery color logic
   const batteryColor = (level) => {
@@ -133,10 +150,14 @@ export default function TelemetryPanel({ wsRef, wsConnected, robotConnected }) {
       <div className="telemetry-header">
         <div className="telemetry-header-left">
           <span className="telemetry-title">📡 Robot Telemetry</span>
-          {!robotConnected && <span className="telemetry-offline">Offline</span>}
-          {stale && robotConnected && <span className="telemetry-stale-badge">Stale</span>}
-          {telemetry?.timestamp && !stale && (
-            <span className="telemetry-live">● Live</span>
+          {!online && <span className="telemetry-offline">Offline</span>}
+          {stale && online && <span className="telemetry-stale-badge">Stale</span>}
+          {online && s.sampling === true && <span className="telemetry-sampling">Sampling</span>}
+          {telemetry?.timestamp && online && !stale && s.sampling !== true && (
+            <span className="telemetry-live">● Snapshot</span>
+          )}
+          {telemetry?.timestamp && (
+            <span className="telemetry-age">{age === null ? 'Age: unknown' : `Age: ${Math.floor(age / 1000)}s`}</span>
           )}
         </div>
         <button onClick={refreshSensors} disabled={!robotConnected || !wsConnected}>Refresh sensors</button>
