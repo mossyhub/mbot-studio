@@ -39,6 +39,21 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
   const aiRequestController = useRef(null);
   const directQueueRef = useRef([]);
   const directQueueRunningRef = useRef(false);
+  const directQueueTimerRef = useRef(null);
+  const directQueueGenerationRef = useRef(0);
+
+  const cancelDirectQueue = useCallback(() => {
+    // Fence callbacks already ready to run as well as canceling the timer.
+    directQueueGenerationRef.current++;
+    if (directQueueTimerRef.current !== null) clearTimeout(directQueueTimerRef.current);
+    directQueueTimerRef.current = null;
+    directQueueRef.current = [];
+    directQueueRunningRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    if (!robotConnected) cancelDirectQueue();
+  }, [robotConnected, cancelDirectQueue]);
 
   const recordMissionEvent = useCallback((type, payload) => {
     const event = {
@@ -148,6 +163,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       };
 
       ws.onclose = () => {
+        cancelDirectQueue();
         setWsConnected(false);
         wsRef.current = null;
         addLog('system', '🔌 Disconnected from server');
@@ -169,6 +185,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
 
     return () => {
       // Abandon pending AI work before this Live Control instance goes away.
+      cancelDirectQueue();
       aiRequestController.current?.abort();
       aiRequestController.current = null;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
@@ -178,7 +195,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       }
       if (missionPlayTimer.current) clearInterval(missionPlayTimer.current);
     };
-  }, [addLog, recordMissionEvent]);
+  }, [addLog, recordMissionEvent, cancelDirectQueue]);
 
   const sendLiveCommand = async (voiceText) => {
     const text = voiceText || liveInput.trim();
@@ -258,23 +275,28 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     if (directQueueRunningRef.current) return;
     if (directQueueRef.current.length === 0) return;
     directQueueRunningRef.current = true;
+    const generation = directQueueGenerationRef.current;
 
     const runNext = () => {
+      if (generation !== directQueueGenerationRef.current) return;
+      directQueueTimerRef.current = null;
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        cancelDirectQueue();
+        return;
+      }
       const nextCommand = directQueueRef.current.shift();
       if (!nextCommand) {
         directQueueRunningRef.current = false;
         return;
       }
 
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'command', command: nextCommand }));
-      }
+      wsRef.current.send(JSON.stringify({ type: 'command', command: nextCommand }));
 
-      setTimeout(runNext, 120);
+      directQueueTimerRef.current = setTimeout(runNext, 120);
     };
 
     runNext();
-  }, []);
+  }, [cancelDirectQueue]);
 
   const enqueueDirectCommand = useCallback((command) => {
     if (!robotConnected) {
@@ -300,11 +322,10 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
   }, []);
 
   const handleStop = () => {
+    cancelDirectQueue();
     onStop();
     addLog('system', '🛑 EMERGENCY STOP!');
     recordMissionEvent('emergency_stop', { source: 'ui' });
-    directQueueRef.current = [];
-    directQueueRunningRef.current = false;
     if (aiRequestController.current) {
       aiRequestController.current.abort();
     }

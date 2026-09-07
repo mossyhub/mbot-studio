@@ -2,13 +2,15 @@
 
 ## Current application
 
+**Source is not proof of the installed feature set.** The published baseline described below is the motor/sensor app. Subsequent bench work confirmed a bounded native-turn candidate (`864b9ab86452bc913009484b18419e895980d5b62e13a9aeb69e49bfeccd959c`); local sound/animation work remains host-tested but device-unverified. Query a fresh device capability status before issuing commands. Do not flash the current working tree just because it builds. See [bench learning](bench-learning.md) for physical observations and their limits.
+
 Use `firmware/robot_control.py`, built with `tools/build-robot-control.py`. This is the small motor-capable application. The larger `robot_engine.py` / `robot_app.py` experiment is **not the installed motor runtime**; its builder explicitly disables motion.
 
 The resident OTA loader is unchanged. These updates replace a Python application file, not Makeblock/ESP32 vendor firmware. The loader brings up Wi-Fi; the application waits for Wi-Fi before opening its own MQTT client. It does not start motion, home the arm, or execute a saved program on startup.
 
 This is the owner's trusted-LAN design: no added authentication, signing keys, or remote REPL. Anyone able to publish commands to the broker can control the robot. Checksums, trial selection, confirmation, and rollback protect update reliability, not against a hostile publisher.
 
-## Supported commands
+## Published motor/sensor baseline commands
 
 - `move_forward`, `move_backward`: speed 0–50, duration 0–5 seconds. Zero duration never starts a motor.
 - `dc_motor`: M1–M4, power −50…50, duration 0–5 seconds.
@@ -17,7 +19,7 @@ This is the owner's trusted-LAN design: no added authentication, signing keys, o
 - `stop`, `display_text`, `set_led`, `read_sensors`, `status`.
 - Flat programs of at most 32 blocks; the entire program is validated before the first action.
 
-Turns, differential `set_speed`, loops, inferred claw positions, and slow-servo sweeps are not implemented in this small runtime. They must be rejected, not substituted with guessed movements. Servo/DC native calls are implemented from the old driver; only the wheel test below has physical confirmation so far.
+Turns, differential `set_speed`, loops, inferred claw positions, and slow-servo sweeps are not implemented in the published motor/sensor baseline. The later bench-only turn extension accepts a native angle argument up to 30 per call, rejects speed/duration, and does not promise that angle as measured chassis yaw. Servo/DC physical motion and object transfers were observed after initial commissioning; see [bench learning](bench-learning.md), rather than interpreting every driver completion as successful positioning.
 
 Status identifies the application build, selected digest, supported commands, and current boot. `armed` means the connected runtime is accepting explicit motion commands; it does not mean the motors are moving. There is no automatic motion or separate key-provisioning ceremony. The server skips all legacy automatic homing/position transformation for this runtime.
 
