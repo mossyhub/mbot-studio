@@ -38,6 +38,13 @@ function programError(error) {
 
 export const robotRoutes = Router();
 
+// Passive journal; unrelated to POST /diagnostic motor test.
+robotRoutes.get('/diagnostics', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (req.query.download === '1') res.attachment('robot-diagnostics.json');
+  res.json(MqttService.getInstance().getDiagnostics());
+});
+
 /**
  * Recursively resolve dc_motor_position blocks in a block tree to concrete dc_motor commands.
  * Tracks position per-port so sequential moves within a program accumulate correctly.

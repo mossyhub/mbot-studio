@@ -1,4 +1,5 @@
 import mqtt from 'mqtt';
+import { RobotDiagnostics } from './robot-diagnostics.js';
 import { randomUUID } from 'node:crypto';
 
 const MOTION_TYPES = new Set(['move_forward', 'move_backward', 'turn_left', 'turn_right',
@@ -63,7 +64,42 @@ export class MqttService {
     return MqttService.instance;
   }
 
+  constructor({ diagnostics } = {}) {
+    this.diagnostics = diagnostics || new RobotDiagnostics({ persist: false });
+    this.timeoutRecordedFor = null;
+  }
+
+  publishRecorded(topic, payload) {
+    const data = JSON.parse(payload);
+    const intentId = this.diagnostics.record('publish_intent', {
+      topic: topic.replace(`${this.topicPrefix}/`, ''), payload: data, identity: this.robotStatusMetadata,
+    });
+    try {
+      this.client.publish(topic, payload, { qos: 0, retain: false }, error => {
+        this.diagnostics.record('publish_result', { intentId, run_id: data.run_id ?? null,
+          outcome: error ? 'transport_error' : 'transport_callback', errorCode: error?.code ?? null });
+      });
+    } catch (error) {
+      this.diagnostics.record('publish_result', { intentId, outcome: 'publish_threw', errorCode: error.code ?? null });
+      throw error;
+    }
+  }
+
+  checkRobotTimeout() {
+    if (this.robotLastSeen && Date.now() - this.robotLastSeen >= MqttService.ROBOT_TIMEOUT && this.timeoutRecordedFor !== this.robotLastSeen) {
+      this.timeoutRecordedFor = this.robotLastSeen;
+      this.diagnostics.record('robot_timeout', { inferred: true, lastSeen: this.robotLastSeen,
+        thresholdMs: MqttService.ROBOT_TIMEOUT, brokerConnected: this.connected, cause: 'unknown' });
+    }
+  }
+
+  getDiagnostics() {
+    this.checkRobotTimeout();
+    return { ...this.diagnostics.snapshot(), current: this.getRobotStatus() };
+  }
+
   async connect() {
+    if (!this.diagnostics.persist) this.diagnostics = new RobotDiagnostics();
     const brokerUrl = process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883';
 
     return new Promise((resolve, reject) => {
@@ -76,6 +112,11 @@ export class MqttService {
 
       this.client.on('connect', () => {
         this.connected = true;
+        this.diagnostics.record('broker_connect');
+        if (!this.diagnosticTimer) {
+          this.diagnosticTimer = setInterval(() => this.checkRobotTimeout(), 1000);
+          this.diagnosticTimer.unref();
+        }
         console.log(`📡 Connected to MQTT broker at ${brokerUrl}`);
 
         // Subscribe to robot status topics
@@ -91,9 +132,19 @@ export class MqttService {
       this.client.on('message', (topic, message) => {
         const shortTopic = topic.replace(`${this.topicPrefix}/`, '');
         const payload = message.toString();
+        if (['robot/status', 'robot/sensors', 'robot/execution', 'robot/log'].includes(shortTopic)) {
+          let data;
+          try { data = JSON.parse(payload); } catch { data = { text: payload, malformedJson: true }; }
+          const previous = this.diagnostics.lastKnown.status?.payload;
+          if (shortTopic === 'robot/status' && data?.boot && previous?.boot && data.boot !== previous.boot) {
+            this.diagnostics.record('boot_change', { previousBoot: previous.boot, boot: data.boot, build: data.build, sha256: data.sha256 });
+          }
+          this.checkRobotTimeout();
+          this.diagnostics.record('incoming', { topic: shortTopic, payload: data });
+        }
 
         // Track robot presence — any message from the robot means it's alive
-        if (shortTopic === 'robot/status' || shortTopic === 'robot/sensors' || shortTopic === 'robot/log' || shortTopic === 'robot/repl/result') {
+        if (shortTopic === 'robot/status' || shortTopic === 'robot/sensors' || shortTopic === 'robot/log' || shortTopic === 'robot/repl/result' || shortTopic === 'robot/execution') {
           this.robotLastSeen = Date.now();
           // Parse robot state from status messages
           if (shortTopic === 'robot/status') {
@@ -137,11 +188,17 @@ export class MqttService {
 
       this.client.on('error', (err) => {
         this.connected = false;
+        this.diagnostics.record('broker_error', { code: err.code ?? null });
         reject(err);
       });
 
       this.client.on('offline', () => {
         this.connected = false;
+        this.diagnostics.record('broker_offline');
+      });
+      this.client.on('close', () => {
+        this.connected = false;
+        this.diagnostics.record('broker_close');
       });
 
       // Timeout after 5 seconds
@@ -175,7 +232,7 @@ export class MqttService {
     const payload = JSON.stringify(this.isCooperativeApp()
       ? { ...command, run_id: command.run_id || randomUUID() } : command);
     this.validateCooperativePayload(payload);
-    this.client.publish(topic, payload);
+    this.publishRecorded(topic, payload);
     console.log(`📤 Command sent: ${command.type}`);
     return true;
   }
@@ -195,7 +252,7 @@ export class MqttService {
       ...(this.isCooperativeApp() ? { run_id: runId || randomUUID() } : {}),
     });
     this.validateCooperativePayload(payload);
-    this.client.publish(topic, payload);
+    this.publishRecorded(topic, payload);
     console.log(`📤 Program sent (${program.length} blocks)`);
     return true;
   }
@@ -238,7 +295,7 @@ export class MqttService {
   requestSensors() {
     if (this.isCooperativeApp()) return this.sendCommand({ type: 'read_sensors' });
     if (!this.connected) return false;
-    this.client.publish(`${this.topicPrefix}/robot/command`, JSON.stringify({ type: 'read_sensors' }));
+    this.publishRecorded(`${this.topicPrefix}/robot/command`, JSON.stringify({ type: 'read_sensors' }));
     return true;
   }
 
@@ -253,8 +310,8 @@ export class MqttService {
     const stopCmd = JSON.stringify({ type: 'emergency_stop',
       ...(cooperative ? { run_id: randomUUID() } : {}),
     });
-    this.client.publish(`${this.topicPrefix}/robot/emergency`, stopCmd);
-    if (!cooperative) this.client.publish(`${this.topicPrefix}/robot/command`, stopCmd);
+    this.publishRecorded(`${this.topicPrefix}/robot/emergency`, stopCmd);
+    if (!cooperative) this.publishRecorded(`${this.topicPrefix}/robot/command`, stopCmd);
     console.log('🛑 EMERGENCY STOP sent');
     return true;
   }
@@ -550,6 +607,7 @@ export class MqttService {
    * Get detailed robot status for the API
    */
   getRobotStatus() {
+    this.checkRobotTimeout();
     return {
       ...this.robotStatusMetadata,
       mqttConnected: this.connected,

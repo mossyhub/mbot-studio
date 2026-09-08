@@ -14,6 +14,7 @@ import DebugTerminal from './components/DebugTerminal.jsx';
 import { playProgramSent, playSuccess, playError, playStop, playConnect, playDisconnect, playClick, playAchievement, playCelebration, isMuted, setMuted } from './services/sound-service';
 import { checkProgramAchievements, tryEarnBadge, incrementStat, getProgress, setAchievementsProfile } from './services/achievements';
 import './App.css';
+import RobotDiagnostics from './components/RobotDiagnostics.jsx';
 
 const TABS = {
   PROGRAM: 'program',
@@ -659,6 +660,7 @@ export default function App() {
                   <div className="panel-subtitle">Build a sequence, check it, then run it on your robot.</div>
                 </div>
                 <div className="panel-actions">
+                  <RobotDiagnostics onStop={handleStop} />
                   <button className="btn-secondary btn-small" aria-label="AI helper" aria-expanded={showHelper} onClick={() => setShowHelper(value => !value)}>💬 AI helper</button>
                   <button
                     className="btn-secondary btn-small"
