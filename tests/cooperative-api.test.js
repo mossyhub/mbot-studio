@@ -105,6 +105,33 @@ async function send(route, input) {
   return { ...result, published: packets.slice(start) };
 }
 
+test('passive diagnostics export records transport, device evidence, gaps and restart', async () => {
+  await cooperative();
+  await peer.publishAsync(`${prefix}/robot/sensors`, JSON.stringify({ battery: 50, sampling: false }), { qos: 1 });
+  await mqtt.client.publishAsync(`${prefix}/barrier`, '{}', { qos: 1 });
+  const result = await send('/command', { command: { type: 'wait', duration: 0 } });
+  assert.equal(result.status, 200);
+  await mqtt.diagnostics.flush();
+  const count = packets.length;
+  const response = await request('GET', '/diagnostics?download=1');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.lastKnown.sensors.payload.battery, 50);
+  const intent = response.body.events.find(e => e.kind === 'publish_intent' && e.data.payload?.run_id === result.body.run_id);
+  assert.ok(intent);
+  assert.ok(response.body.events.some(e => e.kind === 'publish_result' && e.data.intentId === intent.id));
+  assert.equal(packets.length, count, 'read-only export must not poll robot');
+  mqtt.robotLastSeen = Date.now() - 16000;
+  mqtt.getRobotStatus();
+  mqtt.getRobotStatus();
+  assert.equal(mqtt.diagnostics.snapshot().events.filter(e => e.kind === 'robot_timeout').length, 1);
+  await cooperative({ boot: 'second-boot' });
+  assert.ok(mqtt.diagnostics.snapshot().events.some(e => e.kind === 'boot_change'));
+  await peer.publishAsync(`${prefix}/robot/execution`, JSON.stringify({ run_id: result.body.run_id, event: 'started' }), { qos: 1 });
+  await mqtt.client.publishAsync(`${prefix}/barrier`, '{}', { qos: 1 });
+  await mqtt.diagnostics.flush();
+  assert.equal(mqtt.diagnostics.snapshot().lastKnown.execution.payload.run_id, result.body.run_id);
+});
+
 test('cooperative sensor requests are command-only and do not require a statement capability', async () => {
   assert.equal(mqtt.requestSensors(), true);
   await mqtt.client.publishAsync(`${prefix}/barrier`, '{}', { qos: 1 });
