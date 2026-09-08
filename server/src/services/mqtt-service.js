@@ -15,8 +15,8 @@ const COOPERATIVE_REPORTERS = new Set(['var_get', 'sensor_distance', 'op_add',
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 // robot_control.py is a different, smaller runtime than RobotEngine. This is
-// deliberately not derived from advertised CAPS: unverified AV extensions stay
-// unsupported even if a dirty firmware build advertises them.
+// deliberately not derived from advertised CAPS: AV extensions require the
+// validated AV build, never just a motor build advertising extra capabilities.
 const MOTOR_CONTROL_FIELDS = {
   move_forward: ['speed', 'duration'], move_backward: ['speed', 'duration'],
   dc_motor: ['port', 'speed', 'duration'], servo: ['port', 'angle', 'speed'],
@@ -24,6 +24,11 @@ const MOTOR_CONTROL_FIELDS = {
   stop: [], display_text: ['text', 'size'], set_led: ['color'],
 };
 const MOTOR_CONTROL_RUNTIME_TYPES = new Set(['read_sensors', 'status']);
+const AV_CONTROL_FIELDS = {
+  ...MOTOR_CONTROL_FIELDS,
+  play_tone: ['frequency', 'duration'], play_sound: ['sound'],
+  set_volume: ['volume'], stop_sound: [], display_animation: ['frames', 'interval'],
+};
 
 function admissionError(message, status = 400, code = 'COOPERATIVE_INVALID') {
   return Object.assign(new Error(message), { status, code });
@@ -152,7 +157,8 @@ export class MqttService {
    * Send a command to the robot
    */
   sendCommand(command) {
-    if (this.isCooperativeApp() && this.robotStatusMetadata.build !== 'mbot-motor-control-v1' &&
+    if (this.isCooperativeApp() &&
+        !['mbot-motor-control-v1', 'mbot-av-control-v1'].includes(this.robotStatusMetadata.build) &&
         ['read_sensors', 'status', 'get_status'].includes(command?.type)) {
       // Runtime operations, not executable statement capabilities. An empty
       // program admission still enforces a fresh, online cooperative status.
@@ -241,12 +247,14 @@ export class MqttService {
    */
   emergencyStop() {
     if (!this.connected) return false;
-    // Publish to both command and a dedicated emergency topic for priority
+    // Cooperative apps handle Stop only on the dedicated topic; a command-topic
+    // duplicate becomes an unsupported program and can cancel the next run.
+    const cooperative = this.isCooperativeApp();
     const stopCmd = JSON.stringify({ type: 'emergency_stop',
-      ...(this.isCooperativeApp() ? { run_id: randomUUID() } : {}),
+      ...(cooperative ? { run_id: randomUUID() } : {}),
     });
     this.client.publish(`${this.topicPrefix}/robot/emergency`, stopCmd);
-    this.client.publish(`${this.topicPrefix}/robot/command`, stopCmd);
+    if (!cooperative) this.client.publish(`${this.topicPrefix}/robot/command`, stopCmd);
     console.log('🛑 EMERGENCY STOP sent');
     return true;
   }
@@ -276,7 +284,8 @@ export class MqttService {
   validateCooperativePayload(payload) {
     // Control.put rejects the entire MQTT payload above 8192 bytes, including
     // JSON escaping, UTF-8 and the server's timestamp/run_id envelope.
-    if (this.isCooperativeApp() && this.robotStatusMetadata.build === 'mbot-motor-control-v1' &&
+    if (this.isCooperativeApp() &&
+        ['mbot-motor-control-v1', 'mbot-av-control-v1'].includes(this.robotStatusMetadata.build) &&
         Buffer.byteLength(payload, 'utf8') > 8192) {
       throw admissionError('Motor-control MQTT payload exceeds 8192 bytes');
     }
@@ -289,7 +298,9 @@ export class MqttService {
         Date.now() - this.robotStatusLastSeen >= MqttService.ROBOT_TIMEOUT) {
       throw admissionError('Cooperative robot status is stale or offline', 503, 'COOPERATIVE_OFFLINE');
     }
-    const motorControl = this.robotStatusMetadata.build === 'mbot-motor-control-v1';
+    const avControl = this.robotStatusMetadata.build === 'mbot-av-control-v1';
+    const motorControl = this.robotStatusMetadata.build === 'mbot-motor-control-v1' || avControl;
+    const controlFields = avControl ? AV_CONTROL_FIELDS : MOTOR_CONTROL_FIELDS;
     if (motorControl &&
         (!Array.isArray(program) || program.length < 1 || program.length > 32)) {
       throw admissionError('Motor-control program must contain 1..32 flat blocks');
@@ -300,6 +311,8 @@ export class MqttService {
       ? ['red', 'green', 'blue', 'yellow', 'cyan', 'purple', 'white', 'orange', 'off']
       : ['red', 'green', 'blue', 'yellow', 'cyan', 'magenta', 'white', 'off'];
     let blockCount = 0;
+    let expandedCount = 0;
+    let animationDuration = 0;
     let reporterCount = 0;
     const reporter = (value, depth = 1) => {
       if (depth > 8 || ++reporterCount > 256) throw admissionError('Cooperative reporter limit (256 nodes, depth 8)');
@@ -318,7 +331,7 @@ export class MqttService {
         if (!isObject(block) || typeof block.type !== 'string') throw admissionError('Cooperative block.type is required');
         if (++blockCount > 256) throw admissionError('Cooperative program exceeds 256 blocks');
         const supported = motorControl
-          ? Object.hasOwn(MOTOR_CONTROL_FIELDS, block.type) ||
+          ? Object.hasOwn(controlFields, block.type) ||
             (commandEnvelope && MOTOR_CONTROL_RUNTIME_TYPES.has(block.type))
           : COOPERATIVE_TYPES.has(block.type);
         if (!supported || !Array.isArray(capabilities) || !capabilities.includes(block.type)) {
@@ -341,7 +354,7 @@ export class MqttService {
           params = block.params;
         }
         if (motorControl) {
-          const fields = MOTOR_CONTROL_FIELDS[block.type] || [];
+          const fields = controlFields[block.type] || [];
           const envelope = ['type', '_id', 'run_id', ...(commandEnvelope ? ['timestamp'] : [])];
           const allowed = params === block ? [...envelope, ...fields] : fields;
           if (Object.keys(params).some(key => !allowed.includes(key)) ||
@@ -384,6 +397,34 @@ export class MqttService {
           }
           // Native driver angle, not calibrated chassis rotation.
           if (['turn_left', 'turn_right'].includes(block.type)) boundedNumber('angle', 0, 30);
+        }
+        if (avControl) {
+          let expanded = 1;
+          if (block.type === 'display_animation') {
+            if (!Array.isArray(params.frames) || params.frames.length < 1 || params.frames.length > 12 ||
+                params.frames.some(frame => typeof frame !== 'string' || [...frame].length > 128)) {
+              throw admissionError('AV animation requires 1..12 literal frames of at most 128 characters');
+            }
+            boundedNumber('interval', 0.15, 2);
+            animationDuration += params.frames.length * (params.interval ?? 0.5);
+            if (animationDuration > 12) throw admissionError('AV total animation duration exceeds 12 seconds');
+            // Firmware expands each frame into display_text + wait. Preserve the
+            // original wire blocks and device-reported expanded execution indices.
+            expanded = params.frames.length * 2;
+          }
+          expandedCount += expanded;
+          if (expandedCount > 32) throw admissionError('AV program exceeds 32 expanded blocks');
+          if (block.type === 'play_tone') {
+            boundedNumber('frequency', 100, 2000);
+            boundedNumber('duration', 0, 2);
+          }
+          if (block.type === 'play_sound' && !['hello', 'beeps', 'laugh', 'score'].includes(params.sound)) {
+            throw admissionError('Unsupported AV sound');
+          }
+          if (block.type === 'set_volume' &&
+              (!Number.isInteger(params.volume) || params.volume < 0 || params.volume > 60)) {
+            throw admissionError('AV volume must be an integer in 0..60');
+          }
         }
         if (block.type === 'wait') boundedNumber('duration', 0, 60);
         if (['display_text', 'say'].includes(block.type)) {

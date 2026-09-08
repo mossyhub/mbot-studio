@@ -18,7 +18,7 @@ test('catalog: every editor default generates a compilable Python artifact', () 
   const context = vm.createContext({});
   vm.runInContext(source + '\nthis.definitions = BLOCK_DEFS;', context, { timeout: 1000 });
   const definitions = Object.entries(context.definitions);
-  assert.equal(definitions.length, 70, 'review this sweep when the catalog changes');
+  assert.equal(definitions.length, 73, 'review this sweep when the catalog changes');
   const cases = definitions.map(([type, definition]) => {
     const block = { type };
     for (const slot of definition.slots || []) block[slot.key] = slot.default ?? null;

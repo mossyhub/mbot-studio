@@ -1,0 +1,14 @@
+.sound-screen-controls {
+  padding: 12px;
+  border-top: 1px solid var(--color-border);
+}
+.sound-screen-controls h3 { font-size: 13px; margin-bottom: 6px; }
+.sound-screen-controls .av-help { font-size: 11px; color: var(--color-text-light); margin: 6px 0; line-height: 1.4; }
+.sound-screen-controls fieldset { border: 1px solid var(--color-border); border-radius: 6px; margin: 10px 0; padding: 8px; min-width: 0; }
+.sound-screen-controls legend { font-size: 12px; font-weight: 600; padding: 0 4px; }
+.sound-screen-controls label { display: block; font-size: 11px; flex: 1; min-width: 0; }
+.sound-screen-controls input, .sound-screen-controls textarea, .sound-screen-controls select { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px; margin-top: 4px; }
+.sound-screen-controls textarea { resize: vertical; }
+.sound-screen-controls .av-row { display: flex; align-items: end; gap: 8px; margin-top: 6px; }
+.sound-screen-controls button { white-space: nowrap; }
+.sound-screen-controls fieldset:disabled { opacity: 0.6; }

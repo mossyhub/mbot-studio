@@ -385,6 +385,12 @@ function generateBlockCode(block, level, robotConfig) {
       return `${pad}distance = mbuild.ultrasonic2.get()\n`;
 
     // === Sound & Display ===
+    case 'set_volume':
+      return `${pad}cyberpi.audio.set_vol(${evalNum(block.volume, 30)})\n`;
+
+    case 'stop_sound':
+      return `${pad}cyberpi.audio.stop()\n`;
+
     case 'play_tone':
       return `${pad}cyberpi.audio.play_tone(${evalNum(block.frequency, 440)}, ${evalNum(block.duration, 0.5)})\n`;
 
@@ -402,6 +408,18 @@ function generateBlockCode(block, level, robotConfig) {
 
     case 'display_text':
       return `${pad}cyberpi.display.show_label(str(${evalString(block.text, 'Hello!')}), ${evalNum(block.size, 16)}, "center", index=0)\n`;
+
+    case 'display_animation': {
+      // Firmware animation is a bounded sequence of text labels, not graphics.
+      // Keep frames as literal strings: never evaluate identifiers or reporters.
+      if (!Array.isArray(block.frames) || block.frames.some(frame => typeof frame !== 'string')) {
+        throw new TypeError('display_animation frames must be an array of strings');
+      }
+      return block.frames.map(frame =>
+        `${pad}cyberpi.display.show_label(${JSON.stringify(frame)}, 24, "center", index=0)\n`
+        + `${pad}time.sleep(${evalNum(block.interval, 0.5)})\n`
+      ).join('');
+    }
 
     case 'display_image': {
       const images = {
