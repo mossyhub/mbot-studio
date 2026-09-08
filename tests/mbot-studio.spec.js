@@ -214,6 +214,7 @@ test.describe('Telemetry and sensor data', () => {
 test.describe('UI end-to-end', () => {
   test('homepage loads with chat panel and block editor', async ({ page }) => {
     await page.goto('/');
+    await page.getByRole('button', { name: 'AI helper', exact: true }).click();
     // Chat panel
     await expect(page.locator('.chat-panel')).toBeVisible();
     await expect(page.locator('.chat-input')).toBeVisible();
@@ -225,12 +226,14 @@ test.describe('UI end-to-end', () => {
 
   test('status bar shows robot online (simulator connected)', async ({ page, simulator }) => {
     await page.goto('/');
+    await page.getByRole('button', { name: 'AI helper', exact: true }).click();
     // Wait for status polling (every 5s, but first check is immediate)
     await expect(page.locator('.status-badge', { hasText: 'Robot Online' })).toBeVisible({ timeout: 10000 });
   });
 
   test('quick prompt generates blocks in the UI', async ({ page }) => {
     await page.goto('/');
+    await page.getByRole('button', { name: 'AI helper', exact: true }).click();
 
     // Click a quick prompt button
     await page.locator('.quick-prompt', { hasText: 'Draw a square' }).click();
@@ -251,6 +254,7 @@ test.describe('UI end-to-end', () => {
 
   test('typing a message generates blocks', async ({ page }) => {
     await page.goto('/');
+    await page.getByRole('button', { name: 'AI helper', exact: true }).click();
 
     const input = page.locator('.chat-input');
     await input.fill('go forward for 2 seconds');
@@ -262,6 +266,7 @@ test.describe('UI end-to-end', () => {
 
   test('send via MQTT button delivers program to simulator', async ({ page, simulator }) => {
     await page.goto('/');
+    await page.getByRole('button', { name: 'AI helper', exact: true }).click();
     simulator.clearLog();
 
     // Generate a program first
@@ -287,6 +292,7 @@ test.describe('UI end-to-end', () => {
 
   test('emergency stop button works from UI', async ({ page, simulator }) => {
     await page.goto('/');
+    await page.getByRole('button', { name: 'AI helper', exact: true }).click();
     simulator.clearLog();
 
     // Click the STOP button
@@ -303,6 +309,7 @@ test.describe('UI end-to-end', () => {
     test.setTimeout(45000);
 
     await page.goto('/');
+    await page.getByRole('button', { name: 'AI helper', exact: true }).click();
     simulator.clearLog();
 
     // Type a complex request

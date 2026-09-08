@@ -120,6 +120,7 @@ async function applyDraft(page) {
 
 test('U2 dismissed draft cannot change current preview, saved code or run blocks', async ({ page }) => {
   await page.goto('/');
+  await page.getByRole('button', { name: 'AI helper', exact: true }).click();
   await generateDraft(page, 'go forward for 2 seconds');
   const applied = await applyDraft(page);
   await page.getByRole('button', { name: 'Show Python' }).click();

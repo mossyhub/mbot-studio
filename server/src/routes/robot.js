@@ -5,6 +5,36 @@ import { TelemetryService } from '../services/telemetry-service.js';
 import { blocksToMicroPython, blockToMqttCommand, resolveDcMotorPosition, positionPercentToStateName } from '../services/code-generator.js';
 import { loadConfig } from './config.js';
 import { validateBlocks, validateCommand } from '../services/validation.js';
+import { lowerProgram } from '../services/program-lowering.js';
+
+function prepareFlatProgram(program, mqtt, run_id) {
+  const status = mqtt.getRobotStatus();
+  if (!status.mqttConnected || !status.robotOnline) {
+    throw Object.assign(new Error('Robot is offline; installed runtime cannot be verified'), { status: 503, code: 'COOPERATIVE_OFFLINE' });
+  }
+  if (!mqtt.isCooperativeApp() || status.build !== 'mbot-av-control-v1') {
+    throw Object.assign(new Error('Program lowering requires a confirmed mbot-av-control-v1 runtime'), { status: 422, code: 'PROGRAM_RUNTIME_UNSUPPORTED' });
+  }
+  const result = lowerProgram(program, { validateBlock: block => mqtt.validateCooperativeProgram([block]) });
+  if (result.compiledCount === 0) {
+    throw Object.assign(new Error('Program produces no executable instructions'), {
+      status: 400, code: 'PROGRAM_EMPTY', compiledCount: 0,
+    });
+  }
+  mqtt.validateCooperativeProgram(result.program);
+  const payload = JSON.stringify({ program: result.program, timestamp: Date.now(), run_id });
+  mqtt.validateCooperativePayload(payload);
+  return { ...result, expandedCount: result.compiledCount, wireBlockCount: result.program.length, wireBytes: Buffer.byteLength(payload, 'utf8') };
+}
+
+function programError(error) {
+  return { runnable: false, compiledCount: error.compiledCount ?? null,
+    expandedCount: error.compiledCount ?? null, wireBytes: null, error: error.message, errors: [{
+    code: error.code || 'PROGRAM_INVALID', message: error.message,
+    sourceId: error.sourceId ?? null, path: error.path ?? 'program',
+  }] };
+}
+
 
 export const robotRoutes = Router();
 
@@ -101,6 +131,17 @@ robotRoutes.post('/command', (req, res) => {
   res.json({ sent, command: mqttCmd });
 });
 
+/** Read-only admission preview. Never creates a run or publishes a packet. */
+robotRoutes.post('/program/validate', (req, res) => {
+  const mqtt = MqttService.getInstance();
+  try {
+    const { program, ...result } = prepareFlatProgram(req.body.program, mqtt, randomUUID());
+    return res.json({ runnable: true, error: null, errors: [], ...result });
+  } catch (error) {
+    return res.json(programError(error));
+  }
+});
+
 /**
  * POST /api/robot/program
  * Send a full program to the robot for execution
@@ -125,6 +166,20 @@ robotRoutes.post('/program', (req, res) => {
   // or inject legacy S1/S2 home commands into its programs.
   if (mqtt.isCooperativeApp()) {
     const run_id = randomUUID();
+    if (mqtt.getRobotStatus().build === 'mbot-av-control-v1') {
+      try {
+        const { program: lowered, ...result } = prepareFlatProgram(programValidation.value, mqtt, run_id);
+        const sent = mqtt.sendProgram(lowered, run_id);
+        return res.json({ sent, blockCount: lowered.length, run_id, ...result });
+      } catch (error) {
+        // Preserve the existing Run admission contract; detailed compiler codes
+        // remain available in errors[] and the read-only validation response.
+        const code = error.code?.startsWith('PROGRAM_')
+          ? (error.status === 422 ? 'COOPERATIVE_UNSUPPORTED' : 'COOPERATIVE_INVALID')
+          : error.code;
+        return res.status(error.status || 400).json({ code, ...programError(error) });
+      }
+    }
     const sent = mqtt.sendProgram(programValidation.value, run_id);
     return res.json({ sent, blockCount: programValidation.value.length, run_id });
   }

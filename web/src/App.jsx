@@ -84,8 +84,41 @@ function saveCurrentProjectId(profileId, id) {
 export default function App() {
   const [activeTab, setActiveTab] = useState(TABS.PROGRAM);
   const [blocks, setBlocks] = useState([]);
-  const [pythonCode, setPythonCode] = useState('');
+  const [preview, setPreview] = useState(null);
+  const restoredPreview = useRef(null);
+  const pythonCode = preview?.blocks === blocks && preview.status === 'ready' ? preview.code : '';
+  const restoreBlocks = useCallback((loadedBlocks, code = '') => {
+    const restored = { blocks: loadedBlocks, code: typeof code === 'string' ? code : '', status: 'ready' };
+    restoredPreview.current = restored;
+    setBlocks(loadedBlocks);
+    setPreview(restored);
+  }, []);
+  useEffect(() => {
+    // Saved source belongs to these exact loaded blocks; editing invalidates it.
+    if (restoredPreview.current?.blocks === blocks) return;
+    restoredPreview.current = null;
+    if (!blocks.length) { setPreview({ blocks, code: '', status: 'ready' }); return; }
+    const controller = new AbortController();
+    let current = true;
+    setPreview({ blocks, code: '', status: 'pending' });
+    fetch('/api/ai/blocks-to-code', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blocks }), signal: controller.signal,
+    }).then(response => response.json().then(data => ({ response, data })))
+      .then(({ response, data }) => {
+        if (!response.ok || data?.error || typeof data?.code !== 'string') {
+          throw new Error(data?.error || (!response.ok ? `HTTP ${response.status}` : 'Generator returned no Python code.'));
+        }
+        if (current) setPreview({ blocks, code: data.code, status: 'ready' });
+      }).catch(error => {
+        if (current) setPreview({ blocks, code: '', status: 'error',
+          error: `Python generation failed: ${error.message || 'Server unavailable.'}` });
+      });
+    return () => { current = false; controller.abort(); };
+  }, [blocks]);
   const [showCode, setShowCode] = useState(false);
+  const [showHelper, setShowHelper] = useState(false);
+  const [programCheck, setProgramCheck] = useState(null);
   const [showTemplates, setShowTemplates] = useState(false);
   const [robotConfig, setRobotConfig] = useState(null);
   const [robotStatus, setRobotStatus] = useState({ connected: false, mqttConnected: false, robotOnline: false, robotState: 'unknown' });
@@ -110,6 +143,36 @@ export default function App() {
     activeRun.current?.dispose();
     activeRun.current = null;
   }, []);
+
+  const checkRuntime = robotStatus.build === 'mbot-av-control-v1';
+  // Heartbeat timestamps are deliberately excluded: typing triggers a read-only
+  // check, not one request per heartbeat. Admission is repeated by Run on server.
+  const checkIdentity = JSON.stringify([robotStatus.build, robotStatus.boot, robotStatus.robotOnline,
+    robotStatus.mqttConnected, robotStatus.armed, robotStatus.motion_enabled, robotStatus.capabilities]);
+  useEffect(() => {
+    if (!checkRuntime || !blocks.length) { setProgramCheck(null); return; }
+    const controller = new AbortController();
+    let current = true;
+    setProgramCheck({ blocks, identity: checkIdentity, checking: true, runnable: false });
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch('/api/robot/program/validate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ program: blocks }), signal: controller.signal,
+        });
+        const result = await response.json();
+        if (current) setProgramCheck({ ...result, blocks, identity: checkIdentity,
+          checking: false, runnable: response.ok && result.runnable === true,
+          error: result.error || (!response.ok ? `Validation HTTP ${response.status}` : undefined) });
+      } catch (error) {
+        if (current) setProgramCheck({ blocks, identity: checkIdentity, checking: false,
+          runnable: false, error: 'Cannot check this program — server unavailable.' });
+      }
+    }, 250);
+    return () => { current = false; clearTimeout(timer); controller.abort(); };
+  }, [blocks, checkRuntime, checkIdentity]);
+  const checkIsCurrent = programCheck?.blocks === blocks && programCheck?.identity === checkIdentity;
+  const programBlocked = checkRuntime && (!robotStatus.robotOnline || !checkIsCurrent || !programCheck?.runnable);
 
   const commitBlocks = useCallback((newBlocks) => {
     setBlocks(newBlocks);
@@ -158,9 +221,10 @@ export default function App() {
       if (proj) {
         setProjectId(proj.id);
         setProjectName(proj.name);
-        setBlocks(proj.blocks || []);
-        resetBlockHistory(proj.blocks || []);
-        setPythonCode(proj.pythonCode || '');
+        const loadedBlocks = proj.blocks || [];
+        restoreBlocks(loadedBlocks, proj.pythonCode);
+        resetBlockHistory(loadedBlocks);
+        setPendingSuggestion(null);
         setMessages(proj.messages && proj.messages.length > 0 ? proj.messages : [DEFAULT_WELCOME]);
         return;
       }
@@ -168,13 +232,13 @@ export default function App() {
 
     setProjectId(null);
     setProjectName('Untitled Project');
-    setBlocks([]);
-    resetBlockHistory([]);
-    setPythonCode('');
+    const emptyBlocks = [];
+    restoreBlocks(emptyBlocks);
+    resetBlockHistory(emptyBlocks);
     setMessages([DEFAULT_WELCOME]);
     setPendingSuggestion(null);
     saveCurrentProjectId(currentProfileId, null);
-  }, [currentProfileId, resetBlockHistory]);
+  }, [currentProfileId, resetBlockHistory, restoreBlocks]);
 
   // Load robot config and active AI model on startup
   useEffect(() => {
@@ -203,6 +267,8 @@ export default function App() {
           motion_enabled: s.motion_enabled,
           armed: s.armed,
           build: s.build,
+          boot: s.boot,
+          capabilities: s.capabilities,
         }))
         .catch(() => setRobotStatus({ connected: false, mqttConnected: false, robotOnline: false, robotState: 'unknown' }));
     };
@@ -245,15 +311,6 @@ export default function App() {
   const handleBlocksChange = useCallback((newBlocks) => {
     commitBlocks(newBlocks);
     setPendingSuggestion(null);
-    // Regenerate Python code when blocks change
-    fetch('/api/ai/blocks-to-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks: newBlocks }),
-    })
-      .then(r => r.json())
-      .then(data => setPythonCode(data.code))
-      .catch(console.error);
   }, [commitBlocks]);
 
   const handleApplySuggestion = useCallback(() => {
@@ -263,14 +320,6 @@ export default function App() {
       : pendingSuggestion.program;
     commitBlocks(merged);
     setPendingSuggestion(null);
-    fetch('/api/ai/blocks-to-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks: merged }),
-    })
-      .then(r => r.json())
-      .then(data => setPythonCode(data.code))
-      .catch(console.error);
   }, [pendingSuggestion, applyMode, blocks, commitBlocks]);
 
   const handleDiscardSuggestion = useCallback(() => {
@@ -284,14 +333,6 @@ export default function App() {
     setHistoryIndex(nextIndex);
     setBlocks(prevBlocks);
     setPendingSuggestion(null);
-    fetch('/api/ai/blocks-to-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks: prevBlocks }),
-    })
-      .then(r => r.json())
-      .then(data => setPythonCode(data.code))
-      .catch(console.error);
   }, [historyIndex, blockHistory]);
 
   const handleRedo = useCallback(() => {
@@ -301,18 +342,10 @@ export default function App() {
     setHistoryIndex(nextIndex);
     setBlocks(nextBlocks);
     setPendingSuggestion(null);
-    fetch('/api/ai/blocks-to-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks: nextBlocks }),
-    })
-      .then(r => r.json())
-      .then(data => setPythonCode(data.code))
-      .catch(console.error);
   }, [historyIndex, blockHistory]);
 
   const handleRunProgram = useCallback(async () => {
-    if (blocks.length === 0 || activeRun.current) return;
+    if (blocks.length === 0 || activeRun.current || programBlocked) return;
     const run = { id: null, events: [], controller: new AbortController() };
     activeRun.current = run;
     setProgramLifecycle({ text: 'Submitting program…', pending: true });
@@ -408,7 +441,7 @@ export default function App() {
       playError();
       setErrorToast('Error sending program: ' + err.message);
     }
-  }, [blocks, robotStatus.application]);
+  }, [blocks, robotStatus.application, programBlocked]);
 
   const handleStop = useCallback(async () => {
     playStop();
@@ -475,25 +508,25 @@ export default function App() {
 
     setProjectId(proj.id);
     setProjectName(proj.name);
-    setBlocks(proj.blocks || []);
-    resetBlockHistory(proj.blocks || []);
-    setPythonCode(proj.pythonCode || '');
+    const loadedBlocks = proj.blocks || [];
+    restoreBlocks(loadedBlocks, proj.pythonCode);
+    resetBlockHistory(loadedBlocks);
     setMessages(proj.messages && proj.messages.length > 0 ? proj.messages : [DEFAULT_WELCOME]);
     setPendingSuggestion(null);
     saveCurrentProjectId(currentProfileId, proj.id);
-  }, [currentProfileId, resetBlockHistory]);
+  }, [currentProfileId, resetBlockHistory, restoreBlocks]);
 
   const handleProjectNew = useCallback(() => {
     if (!currentProfileId) return;
     setProjectId(null);
     setProjectName('Untitled Project');
-    setBlocks([]);
-    resetBlockHistory([]);
-    setPythonCode('');
+    const emptyBlocks = [];
+    restoreBlocks(emptyBlocks);
+    resetBlockHistory(emptyBlocks);
     setMessages([DEFAULT_WELCOME]);
     setPendingSuggestion(null);
     saveCurrentProjectId(currentProfileId, null);
-  }, [currentProfileId, resetBlockHistory]);
+  }, [currentProfileId, resetBlockHistory, restoreBlocks]);
 
   const handleProfileSwitch = useCallback((profileId) => {
     setCurrentProfileId(profileId);
@@ -571,15 +604,6 @@ export default function App() {
     commitBlocks(templateBlocks);
     setPendingSuggestion(null);
     setProjectName(templateName || 'Template Program');
-    // Regenerate code
-    fetch('/api/ai/blocks-to-code', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks: templateBlocks }),
-    })
-      .then(r => r.json())
-      .then(data => setPythonCode(data.code))
-      .catch(console.error);
     setShowTemplates(false);
     playClick();
   }, [commitBlocks]);
@@ -619,7 +643,7 @@ export default function App() {
       <div className="app-content">
         {activeTab === TABS.PROGRAM && (
           <div className="program-layout">
-            <div className="panel chat-panel-container">
+            <div className="panel chat-panel-container" hidden={!showHelper}>
               <ChatPanel
                 messages={messages}
                 setMessages={setMessages}
@@ -632,9 +656,10 @@ export default function App() {
               <div className="panel-header">
                 <div>
                   <h2>🧩 Block Program</h2>
-                  <div className="panel-subtitle">Your blocks will be sent to the robot when you click Run.</div>
+                  <div className="panel-subtitle">Build a sequence, check it, then run it on your robot.</div>
                 </div>
                 <div className="panel-actions">
+                  <button className="btn-secondary btn-small" aria-label="AI helper" aria-expanded={showHelper} onClick={() => setShowHelper(value => !value)}>💬 AI helper</button>
                   <button
                     className="btn-secondary btn-small"
                     onClick={handleUndo}
@@ -674,15 +699,25 @@ export default function App() {
                   <button
                     className="btn-primary"
                     onClick={handleRunProgram}
-                    disabled={blocks.length === 0 || programLifecycle?.pending}
+                    disabled={blocks.length === 0 || programLifecycle?.pending || programBlocked}
                   >
                     ▶️ Run Program
                   </button>
                 </div>
               </div>
 
+              <div className={`program-readiness ${programBlocked ? 'needs-attention' : ''}`} role="status" data-testid="program-readiness">
+                {!blocks.length ? 'Start here: add a block from the library.' : checkRuntime ? (
+                  !robotStatus.robotOnline ? 'Robot offline — you can keep editing.' :
+                  !checkIsCurrent || programCheck?.checking ? 'Checking this program…' :
+                  programCheck?.runnable ? `Ready to run · ${programCheck.expandedCount ?? programCheck.compiledCount ?? '?'} / 32 robot steps` :
+                  `Needs attention: ${programCheck?.error || 'This program cannot run on the connected robot.'}`
+                ) : 'Program support depends on the connected robot runtime.'}
+              </div>
+              {showCode && <div className="program-preview-note">Python is a source preview. Run sends the checked block program, not this Python file.</div>}
+
               {programLifecycle && (
-                <div role="status" data-testid="program-lifecycle">{programLifecycle.text}</div>
+                <div className="program-lifecycle" role="status" data-testid="program-lifecycle">{programLifecycle.text}</div>
               )}
 
               {pendingSuggestion && (
@@ -708,12 +743,17 @@ export default function App() {
               )}
 
               {showCode ? (
-                <CodePreview code={pythonCode} blocks={blocks} />
+                preview?.blocks === blocks && preview.status === 'error' ? (
+                  <div role="alert">{preview.error}</div>
+                ) : blocks.length > 0 && (preview?.blocks !== blocks || preview.status === 'pending') ? (
+                  <div role="status">Generating Python preview…</div>
+                ) : <CodePreview code={pythonCode} blocks={blocks} />
               ) : (
                 <BlocklyEditor
                   blocks={blocks}
                   onBlocksChange={handleBlocksChange}
                   robotConfig={robotConfig}
+                  robotStatus={robotStatus}
                 />
               )}
             </div>

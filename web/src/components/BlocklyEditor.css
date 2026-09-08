@@ -58,6 +58,18 @@
 }
 
 /* ── Palette ──────────────────────────────────────────────────────────── */
+.se-palette-controls { display: grid; gap: 7px; padding: 8px; background: white; }
+.se-palette-controls > div { display: flex; gap: 4px; }
+.se-palette-controls button { flex: 1; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 2px; cursor: pointer; font-size: 11px; }
+.se-palette-controls button[aria-pressed="true"] { background: #e0edff; color: #174b88; border-color: #4c97ff; }
+.se-palette-controls input { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px; border: 1px solid #cbd5e1; border-radius: 5px; }
+.se-palette-controls small { font-size: 10px; color: #475569; }
+.se-palette-entry { max-width: 100%; }
+.se-unavailable { display: block; white-space: normal; font-size: 10px; line-height: 1.4; color: #713f12; background: #fff8df; border-radius: 4px; padding: 4px; margin-top: 4px; }
+.se-palette-entry [role="button"] { cursor: pointer; }
+.se-palette-entry [role="button"]:focus-visible { outline: 3px solid #174b88; outline-offset: 3px; }
+.se-prim:invalid { outline: 2px solid #b45309; }
+
 .se-palette {
   display: flex;
   flex-direction: column;
@@ -254,6 +266,11 @@
 .se-block-shape:active { cursor: grabbing; }
 .se-block-shape:hover { filter: brightness(1.05); }
 .se-block-shape.editing { outline: 2px solid #ffd95e; outline-offset: 2px; }
+/* Draw focus inside puzzle shapes so clip-path cannot hide it. */
+.se-block-shape:focus-visible > .se-block-row {
+  outline: 2px solid #172554;
+  outline-offset: -2px;
+}
 
 /* Apply ONE drop-shadow to the program/mouth as a whole, so the puzzle
    pieces' bumps don't get shadow halos at every interface. */
