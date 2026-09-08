@@ -129,6 +129,22 @@ async function motorControl(overrides = {}) {
     motion_enabled: true, armed: true, ...overrides });
 }
 
+const avTypes = ['play_tone', 'play_sound', 'set_volume', 'stop_sound', 'display_animation'];
+async function avControl(overrides = {}) {
+  await motorControl({ build: 'mbot-av-control-v1',
+    capabilities: [...motorCapabilities, ...avTypes], ...overrides });
+}
+
+test('AV build preserves strict small-runtime motor admission and palette', async () => {
+  await avControl();
+  await checkMotorBlock({ type: 'move_forward', speed: 51 }, { type: 'move_forward', speed: 50 });
+  await checkMotorBlock({ type: 'set_led', color: 'magenta' }, { type: 'set_led', color: 'purple' });
+  for (const color of ['red', 'green', 'blue', 'yellow', 'cyan', 'purple', 'white', 'orange', 'off']) {
+    const command = { type: 'set_led', color };
+    assertPublished(await send('/command', { command }), '/command', command);
+  }
+});
+
 function assertPublished(result, route, value) {
   assert.equal(result.status, 200);
   assert.equal(result.body.sent, true);
@@ -173,7 +189,177 @@ async function checkMotorBlock(invalid, valid, expected = 400) {
   }
 }
 
+test('AV audio admission matches literal firmware bounds in both HTTP wire forms', async () => {
+  await avControl();
+  for (const [type, field, invalid, valid] of [
+    ['play_tone', 'frequency', [99, 2001, '440', true, null, { type: 'var_get' }], [100, 440.5, 2000]],
+    ['play_tone', 'duration', [-0.1, 2.1, '1', false, null, { type: 'sensor_distance' }], [0, 0.5, 2]],
+    ['play_sound', 'sound', [undefined, 'Hello', 'alarm', 1, true, null, { type: 'var_get' }], ['hello', 'beeps', 'laugh', 'score']],
+    ['set_volume', 'volume', [undefined, -1, 61, 0.5, '30', true, null, { type: 'sensor_distance' }], [0, 30, 60]],
+  ]) {
+    for (const value of invalid) await checkMotorBlock({ type, [field]: value }, { type, [field]: valid[0] });
+    for (const value of valid) {
+      const command = { type, params: { [field]: value } };
+      assertPublished(await send('/command', { command }), '/command', command);
+    }
+  }
+  for (const type of ['play_tone', 'play_sound', 'set_volume', 'stop_sound']) {
+    const command = { type, ...(type === 'play_sound' ? { sound: 'hello' }
+      : type === 'set_volume' ? { volume: 30 } : {}) };
+    await checkMotorBlock({ ...command, mystery: 0 }, command);
+    const program = [command];
+    assertPublished(await send('/program', { program }), '/program', program);
+  }
+  await avControl({ capabilities: motorCapabilities });
+  for (const type of avTypes.slice(0, 4)) await checkMotorBlock({ type }, { type: 'stop' }, 422);
+});
+
+test('AV animation admission validates frames, interval and expanded budgets without transforming payloads', async () => {
+  await avControl();
+  const animation = { type: 'display_animation', frames: ['a', 'b'], interval: 0.5 };
+  for (const frames of [undefined, [], Array(13).fill('x'), 'abc', null, [false], [123], [null],
+    [{ type: 'var_get' }], ['x'.repeat(129)], ['😀'.repeat(129)]]) {
+    await checkMotorBlock({ ...animation, frames }, animation);
+  }
+  for (const interval of [0, 0.149, 2.01, '0.5', true, null, { type: 'sensor_distance' }]) {
+    await checkMotorBlock({ ...animation, interval }, animation);
+  }
+  await checkMotorBlock({ ...animation, duration: 1 }, animation);
+  for (const command of [
+    { type: 'display_animation', frames: [''] },
+    { ...animation, frames: ['x'.repeat(128), '😀'.repeat(128)], interval: 0.15 },
+    { ...animation, frames: Array(12).fill('frame'), interval: 1 },
+    { ...animation, frames: Array(6).fill('frame'), interval: 2 },
+  ]) for (const wrapped of [false, true]) {
+    const { type, ...params } = command;
+    const block = wrapped ? { type, _id: 'animation', params } : command;
+    assertPublished(await send('/command', { command: block }), '/command', block);
+    assertPublished(await send('/program', { program: [block] }), '/program', [block]);
+  }
+  // Two display/wait statements per frame, plus every ordinary block.
+  const frames12 = { ...animation, frames: Array(12).fill('f') };
+  const expanded32 = [frames12, ...Array.from({ length: 8 }, () => ({ type: 'stop_sound' }))];
+  for (const [invalid, valid] of [
+    [[...expanded32, { type: 'stop' }], expanded32],
+    [[frames12, { ...frames12, frames: Array(5).fill('f') }],
+      [frames12, { ...frames12, frames: Array(4).fill('f') }]],
+    [[{ ...frames12, interval: 1 }, { ...animation, frames: ['f'], interval: 0.15 }],
+      [{ ...frames12, interval: 1 }]],
+    [[{ ...frames12, interval: 1.01 }], [{ ...frames12, interval: 1 }]],
+  ]) {
+    const result = await send('/program', { program: invalid });
+    assert.equal(result.status, 400);
+    assert.deepEqual(result.published, []);
+    assertPublished(await send('/program', { program: valid }), '/program', valid);
+  }
+  await avControl({ capabilities: motorCapabilities });
+  await checkMotorBlock(animation, { type: 'stop' }, 422);
+});
+
+test('AV runtime command and sensor routes retain strict command-only admission', async () => {
+  await avControl();
+  for (const type of ['read_sensors', 'status']) {
+    for (const command of [{ type }, { type, params: {} }]) {
+      assertPublished(await send('/command', { command }), '/command', command);
+    }
+    for (const command of [{ type, speed: 0 }, { type, params: { mystery: true } }]) {
+      const rejected = await send('/command', { command });
+      assert.equal(rejected.status, 400);
+      assert.deepEqual(rejected.published, []);
+    }
+    const rejected = await send('/program', { program: [{ type }] });
+    assert.equal(rejected.status, 422);
+    assert.deepEqual(rejected.published, []);
+  }
+  const unknown = await send('/command', { command: { type: 'get_status' } });
+  assert.equal(unknown.status, 422);
+  assert.deepEqual(unknown.published, []);
+  const start = packets.length;
+  assert.equal(mqtt.requestSensors(), true);
+  await mqtt.client.publishAsync(`${prefix}/barrier`, '{}', { qos: 1 });
+  assert.equal(packets.length, start + 1);
+  assert.equal(packets.at(-1).payload.type, 'read_sensors');
+  assert.match(packets.at(-1).payload.run_id, uuid);
+});
+
+test('AV wire admission includes UTF-8, escaping and the complete 8192-byte envelope', async () => {
+  await avControl();
+  for (const frames of [Array(12).fill('\u0001'.repeat(128))]) {
+    const command = { type: 'display_animation', frames };
+    for (const route of ['/command', '/program']) {
+      const input = route === '/command' ? { command } : { program: [command] };
+      const rejected = await send(route, input);
+      assert.equal(rejected.status, 400);
+      assert.match(rejected.body.error, /8192|payload/i);
+      assert.deepEqual(rejected.published, []);
+      const valid = { ...command, frames: ['😀'.repeat(128)] };
+      assertPublished(await send(route, route === '/command' ? { command: valid } : { program: [valid] }), route,
+        route === '/command' ? valid : [valid]);
+    }
+  }
+  const program = [
+    { type: 'display_animation', frames: Array(12).fill('😀'.repeat(128)) },
+    { type: 'display_animation', frames: Array(4).fill('😀'.repeat(128)) },
+  ];
+  const oversized = await send('/program', { program });
+  assert.equal(oversized.status, 400);
+  assert.deepEqual(oversized.published, []);
+  const valid = [program[0], { ...program[1], frames: program[1].frames.slice(0, 3) }];
+  assertPublished(await send('/program', { program: valid }), '/program', valid);
+  const envelopeBytes = Buffer.byteLength(JSON.stringify({ type: 'stop_sound', _id: '', run_id: '0'.repeat(36) }));
+  const command = { type: 'stop_sound', _id: 'x'.repeat(8192 - envelopeBytes) };
+  const accepted = await send('/command', { command });
+  assertPublished(accepted, '/command', command);
+  assert.equal(Buffer.byteLength(JSON.stringify(accepted.published[0].payload)), 8192);
+  const rejected = await send('/command', { command: { ...command, _id: command._id + 'x' } });
+  assert.equal(rejected.status, 400);
+  assert.deepEqual(rejected.published, []);
+  assertPublished(await send('/command', { command }), '/command', command);
+});
+
+test('AV shared WebSocket admission preserves strict fields, motion gates and freshness', async () => {
+  await avControl();
+  const command = { type: 'display_animation', _id: 'frames', params: { frames: ['first', 'second'], interval: 0.15 } };
+  for (const invalid of [
+    { ...command, mystery: true },
+    { ...command, params: { ...command.params, run_id: 'nested' } },
+    { ...command, params: { ...command.params, type: 'stop' } },
+    { ...command, params: { ...command.params, do: [] } },
+    { ...command, params: { ...command.params, interval: null } },
+    { type: 'servo', port: 'S1', duration: 0 },
+    { type: 'dc_motor', port: 'S1' },
+  ]) {
+    const rejected = await socketSend({ type: 'command', command: invalid });
+    assert.equal(rejected.body.type, 'error');
+    assert.deepEqual(rejected.published, []);
+    const permitted = await socketSend({ type: 'command', command });
+    assert.equal(permitted.body.type, 'ack');
+    assert.equal(permitted.published.length, 1);
+    const { run_id, ...payload } = permitted.published[0].payload;
+    assert.match(run_id, uuid);
+    assert.equal(run_id, permitted.body.run_id);
+    assert.deepEqual(payload, command);
+  }
+  for (const flags of [{ motion_enabled: false }, { armed: false }]) {
+    await avControl(flags);
+    const rejected = await send('/command', { command: { type: 'servo', port: 'S1', angle: 0 } });
+    assert.equal(rejected.status, 409);
+    assert.deepEqual(rejected.published, []);
+    assertPublished(await send('/command', { command }), '/command', command);
+  }
+  mqtt.robotStatusLastSeen = Date.now() - 16000;
+  for (const stale of [command, { type: 'read_sensors' }]) {
+    const rejected = await send('/command', { command: stale });
+    assert.equal(rejected.status, 503);
+    assert.deepEqual(rejected.published, []);
+  }
+  await avControl();
+  assertPublished(await send('/command', { command }), '/command', command);
+  assert.deepEqual(mqtt.getHardwareStates(), {});
+});
+
 const nonNumbers = ['20', true, null, { type: 'sensor_distance' }];
+for (const [build, control] of [['motor-control', motorControl], ['AV', avControl]])
 for (const [type, baseParams, field, invalid, valid] of [
   ['move_forward', {}, 'speed', [-0.1, 50.1, ...nonNumbers], [0, 20.5, 50]],
   ['move_backward', {}, 'speed', [-0.1, 50.1, ...nonNumbers], [0, 20.5, 50]],
@@ -187,8 +373,8 @@ for (const [type, baseParams, field, invalid, valid] of [
   ['wait', {}, 'duration', [-0.1, 60.1, ...nonNumbers], [0, 0.5, 60]],
   ...['turn_left', 'turn_right'].map(type => [type, {}, 'angle', [-0.1, 30.1, ...nonNumbers], [0, 15.5, 30]]),
 ]) {
-  test(`motor-control literal ${type}.${field} matches the small runtime`, async () => {
-    await motorControl();
+  test(`${build} literal ${type}.${field} matches the small runtime`, async () => {
+    await control();
     for (const value of invalid) {
       await checkMotorBlock({ type, ...baseParams, [field]: value },
         { type, ...baseParams, [field]: valid[0] });
@@ -506,7 +692,7 @@ async function socketSend(message) {
       const timeout = setTimeout(() => reject(new Error('No explicit WebSocket response')), 1500);
       ws.on('message', bytes => {
         const data = JSON.parse(bytes.toString());
-        if (['ack', 'error', 'pong', 'repl_ack'].includes(data.type)) {
+        if (['ack', 'error', 'pong', 'repl_ack', 'emergency_stop'].includes(data.type)) {
           clearTimeout(timeout);
           resolve(data);
         }
@@ -572,6 +758,43 @@ test('admission bounds recursive trees and rejects unknown capabilities and wrap
   assert.deepEqual(control.published[0].payload.program, valid);
 });
 
+for (const [build, control] of [['cooperative', cooperative], ['motor-control', motorControl], ['AV', avControl]]) {
+  test(`${build} emergency stop publishes only the dedicated topic and permits the next READY command`, async () => {
+    await control();
+    for (const transport of ['HTTP', 'WebSocket']) {
+      const stopped = transport === 'HTTP'
+        ? await send('/stop', {}) : await socketSend({ type: 'emergency_stop' });
+      if (transport === 'HTTP') assert.equal(stopped.status, 200);
+      else assert.equal(stopped.body.type, 'emergency_stop');
+      // Both helpers fence publications on the server's MQTT socket before
+      // asserting that no unsupported command-topic duplicate was queued.
+      assert.deepEqual(stopped.published.map(item => item.topic), [`${prefix}/robot/emergency`]);
+      const { run_id, ...payload } = stopped.published[0].payload;
+      assert.match(run_id, uuid);
+      assert.deepEqual(payload, { type: 'emergency_stop' });
+      await control();
+      const ready = { type: 'display_text', text: 'READY' };
+      const next = await send('/command', { command: ready });
+      assertPublished(next, '/command', ready);
+      assert.notEqual(next.body.run_id, run_id);
+    }
+  });
+}
+
+test('legacy emergency stop retains both topic publications and its original payload', async () => {
+  await status({ application: 'legacy', status: 'ready' });
+  for (const transport of ['HTTP', 'WebSocket']) {
+    const stopped = transport === 'HTTP'
+      ? await send('/stop', {}) : await socketSend({ type: 'emergency_stop' });
+    if (transport === 'HTTP') assert.equal(stopped.status, 200);
+    else assert.equal(stopped.body.type, 'emergency_stop');
+    assert.deepEqual(stopped.published, [
+      { topic: `${prefix}/robot/emergency`, payload: { type: 'emergency_stop' } },
+      { topic: `${prefix}/robot/command`, payload: { type: 'emergency_stop' } },
+    ]);
+  }
+});
+
 test('expired cooperative status cannot be revived by telemetry; stop remains available and a fresh status recovers', async () => {
   mqtt.robotStatusLastSeen = Date.now() - 16000;
   mqtt.robotLastSeen = Date.now(); // Other robot messages are not fresh capability evidence.
@@ -582,9 +805,10 @@ test('expired cooperative status cannot be revived by telemetry; stop remains av
     assert.deepEqual(rejected.published, []);
   }
   const stopped = await send('/stop', {});
-  assert.deepEqual(stopped.published.map(item => item.topic), [`${prefix}/robot/emergency`, `${prefix}/robot/command`]);
+  assert.equal(stopped.status, 200);
+  assert.deepEqual(stopped.published.map(item => item.topic), [`${prefix}/robot/emergency`]);
   assert.match(stopped.published[0].payload.run_id, uuid);
-  assert.equal(stopped.published[0].payload.run_id, stopped.published[1].payload.run_id);
+  assert.equal(stopped.published[0].payload.type, 'emergency_stop');
   await cooperative();
   const control = await send('/command', { command: { type: 'wait', duration: 0.1 } });
   assert.equal(control.body.sent, true);

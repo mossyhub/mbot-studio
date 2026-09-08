@@ -39,7 +39,7 @@ async function setup(page) {
     if (url.pathname === '/queue-fixture') {
       return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' });
     }
-    if (url.pathname === '/api/robot/telemetry') return route.fulfill({ json: {} });
+    if (url.pathname === '/api/robot/telemetry' || url.pathname === '/api/robot/status') return route.fulfill({ json: {} });
     unexpected.push(url.href);
     return route.abort();
   });

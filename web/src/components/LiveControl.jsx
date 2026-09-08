@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import TelemetryPanel from './TelemetryPanel';
+import SoundScreenControls from './SoundScreenControls';
 import './LiveControl.css';
 
 const MAX_MISSION_EVENTS = 500;
@@ -26,6 +27,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
   const [log, setLog] = useState([]);
   const [sensorData, setSensorData] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [avStatus, setAvStatus] = useState(null);
   const [missionEvents, setMissionEvents] = useState([]);
   const [missionCursor, setMissionCursor] = useState(0);
   const [missionPlaying, setMissionPlaying] = useState(false);
@@ -114,6 +116,8 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
 
   // WebSocket connection with auto-reconnect
   useEffect(() => {
+    let statusController;
+    let statusRevision = 0;
     function connect() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -123,6 +127,15 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
 
       ws.onopen = () => {
         setWsConnected(true);
+        // Bootstrap on each socket connection; a newer WS status always wins.
+        const revision = statusRevision;
+        statusController = new AbortController();
+        fetch('/api/robot/status', { signal: statusController.signal })
+          .then(response => response.ok ? response.json() : null)
+          .then(status => {
+            if (wsRef.current === ws && ws.readyState === WebSocket.OPEN && revision === statusRevision) setAvStatus(status);
+          })
+          .catch(() => {}); // Unknown status stays disabled; never infer support.
         reconnectAttempts.current = 0;
         addLog('system', '🔌 Connected to server');
         recordMissionEvent('ws_open', { connected: true });
@@ -135,6 +148,9 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
             setSensorData(msg.data);
             recordMissionEvent('telemetry', msg.data);
           } else if (msg.type === 'mqtt' && msg.topic === 'robot/status') {
+            statusRevision++;
+            setAvStatus(msg.data);
+            if (msg.data?.status === 'offline' || msg.data?.state === 'offline' || msg.data?.robotOnline === false) cancelDirectQueue();
             addLog('robot', `Robot: ${JSON.stringify(msg.data)}`);
             recordMissionEvent('robot_status', msg.data);
           } else if (msg.type === 'mqtt' && msg.topic === 'robot/log') {
@@ -163,6 +179,9 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       };
 
       ws.onclose = () => {
+        statusController?.abort();
+        statusRevision++;
+        setAvStatus(null);
         cancelDirectQueue();
         setWsConnected(false);
         wsRef.current = null;
@@ -185,6 +204,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
 
     return () => {
       // Abandon pending AI work before this Live Control instance goes away.
+      statusController?.abort();
       cancelDirectQueue();
       aiRequestController.current?.abort();
       aiRequestController.current = null;
@@ -493,6 +513,12 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
             </div>
           ))}
         </div>
+        <SoundScreenControls
+          status={avStatus}
+          connected={robotConnected && wsConnected && !!avStatus && avStatus.robotOnline !== false && avStatus.status !== 'offline' && avStatus.state !== 'offline' && avStatus.robotState !== 'offline'}
+          onCommand={enqueueDirectCommand}
+          onStop={handleStop}
+        />
       </div>
 
       {/* Right: Activity Log */}

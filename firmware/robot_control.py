@@ -5,9 +5,10 @@ except ImportError:
   import json
 
 OTA_APP_PROTOCOL=1
-OTA_BUILD_ID='mbot-motor-control-v1'
+OTA_BUILD_ID='mbot-av-control-v1'
 CAPS=('move_forward','move_backward','dc_motor','servo','wait',
-    'stop','display_text','set_led','read_sensors','status')
+    'stop','display_text','set_led','read_sensors','status','turn_left','turn_right',
+    'play_tone','play_sound','set_volume','stop_sound','display_animation')
 COLORS=('red','green','blue','yellow','cyan','purple','white','orange','off')
 
 def number(p,key,default,low,high):
@@ -20,6 +21,7 @@ def validate(blocks):
   if type(blocks) is not list or not 1<=len(blocks)<=32:
     raise ValueError('blocks')
   out=[]
+  animation_duration=0
   for b in blocks:
     if type(b) is not dict:
       raise ValueError('block')
@@ -41,15 +43,41 @@ def validate(blocks):
         if p.get('port') not in ('M1','M2','M3','M4'):
           raise ValueError('port')
         allowed += ('port',)
+    elif t in ('turn_left','turn_right'):
+      # Native turn may block; cap each command. Speed/duration are unavailable.
+      number(p,'angle',0,0,30)
+      allowed += ('angle',)
     elif t=='servo':
       if p.get('port') not in ('S1','S2','S3','S4'):
         raise ValueError('port')
       number(p,'angle',90,0,180)
       number(p,'speed',0,0,0)
       allowed += ('port','angle','speed')
+    elif t=='play_tone':
+      number(p,'frequency',440,100,2000)
+      number(p,'duration',0.5,0,2)
+      allowed += ('frequency','duration')
+    elif t=='play_sound':
+      if p.get('sound') not in ('hello','beeps','laugh','score'):
+        raise ValueError('sound')
+      allowed += ('sound',)
+    elif t=='set_volume':
+      if type(p.get('volume')) is not int or not 0<=p['volume']<=60:
+        raise ValueError('volume')
+      allowed += ('volume',)
     elif t=='wait':
       number(p,'duration',1,0,60)
       allowed += ('duration',)
+    elif t=='display_animation':
+      frames=p.get('frames')
+      if type(frames) is not list or not 1<=len(frames)<=12:
+        raise ValueError('frames')
+      if any(type(frame) is not str or len(frame)>128 for frame in frames):
+        raise ValueError('frames')
+      number(p,'interval',0.5,0.15,2)
+      animation_duration += len(frames)*p['interval']
+      if animation_duration>12:raise ValueError('animation_duration')
+      allowed += ('frames','interval')
     elif t=='display_text':
       if type(p.get('text')) is not str or len(p['text'])>128:
         raise ValueError('text')
@@ -59,11 +87,17 @@ def validate(blocks):
       if p.get('color') not in COLORS:
         raise ValueError('color')
       allowed += ('color',)
-    elif t not in ('stop','status','read_sensors'):
+    elif t not in ('stop','status','read_sensors','stop_sound'):
       raise ValueError('unsupported')
     if any(k not in allowed for k in p):
       raise ValueError('parameter')
-    out.append(p)
+    if t=='display_animation':
+      # Expand during whole-program validation, never during native dispatch.
+      for frame in p['frames']:
+        out.append({'type':'display_text','text':frame,'size':24})
+        out.append({'type':'wait','duration':p['interval']})
+    else:out.append(p)
+    if len(out)>32:raise ValueError('blocks')
   return out
 
 class Control:
@@ -81,7 +115,7 @@ class Control:
     self.action=None
     self.sensor_index=None
     self.outgoing=[]
-    self.io.stop()
+    self.initial_stop=True
 
   def put(self,topic,payload):
     if topic==(self.prefix+'emergency').encode():
@@ -213,7 +247,7 @@ class Control:
         if t=='stop':self.action=('stop',None)
         elif t=='status':self.status()
         elif t=='read_sensors':self.action=('sensors',None)
-        elif t!='wait' and (not motor or duration>0):self.action=('execute',b)
+        elif t!='wait' and (t!='play_tone' or duration>0) and (not motor or duration>0):self.action=('execute',b)
         if duration>0:
           self.timer=(self.clock.ticks_ms(),int(duration*1000),motor)
         else:self.complete()
@@ -261,7 +295,9 @@ def native():
   class IO:
     def stop(self):
       try:mbot2.EM_stop()
-      finally:mbot2.starter_shield.dc_motor_stop()
+      finally:
+        try:mbot2.starter_shield.dc_motor_stop()
+        finally:cyberpi.audio.stop()
     def execute(self,b):
       t=b['type']
       if t=='move_forward':mbot2.forward(b['speed'])
@@ -269,6 +305,14 @@ def native():
       elif t=='dc_motor':mbot2.starter_shield.dc_motor_set_power(int(b['port'][1]),b['speed'])
       elif t=='servo':mbot2.starter_shield.servo_set_angle(int(b['port'][1]),b['angle'])
       elif t=='display_text':cyberpi.display.show_label(b['text'],b['size'],'center',index=0)
+      elif t=='play_tone':
+        # Vendor call may block for duration (at most 2s); Stop cannot preempt it.
+        if b['duration']>0:cyberpi.audio.play_tone(b['frequency'],b['duration'])
+      elif t=='play_sound':cyberpi.audio.play(b['sound'])
+      elif t=='set_volume':cyberpi.audio.set_vol(b['volume'])
+      elif t=='stop_sound':cyberpi.audio.stop()
+      elif t in ('turn_left','turn_right'):
+        if b['angle']>0:mbot2.turn(-b['angle'] if t=='turn_left' else b['angle'])
       elif b['color']=='off':cyberpi.led.off()
       else:cyberpi.led.show(' '.join([b['color']]*5))
     def sensors(self,index=0):
@@ -327,6 +371,9 @@ def ota_step(context):
     _app.io.stop()
     raise ValueError('identity')
   try:
+    if _app.initial_stop:
+      _app.io.stop()
+      _app.initial_stop=False
     _app.step()
     action,_app.action=_app.action,None
     if _app.client is None or (action is not None and action[0]!='sensors'):
@@ -343,7 +390,8 @@ def ota_step(context):
           _app.sensor_index=_app.sensor_index+1 if data.get('sampling') else None
         else:
           _app.io.execute(action[1])
-          if _app.timer is not None:
+          # Tone's native duration already consumes its scheduler deadline.
+          if _app.timer is not None and action[1]['type']!='play_tone':
             _,duration,motor=_app.timer
             _app.timer=(_app.clock.ticks_ms(),duration,motor)
       except Exception as error:
@@ -353,7 +401,8 @@ def ota_step(context):
           if item[1].get('type')=='program' and item[1].get('event')=='canceled']
         _app.cancel()
         _app.action=None
-        _app.io.stop()
+        try:_app.io.stop()
+        except Exception:pass
         _app.event('failed',error=error)
     for _ in range(8):
       if _app.client is None or not _app.outgoing:break

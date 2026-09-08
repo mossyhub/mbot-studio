@@ -112,6 +112,9 @@ const BLOCK_DEFS = {
     format: (b) => fmt(b.sensor) },
 
   // ── Sound (magenta) ──
+  set_volume: { cat: 'sound', shape: 'stack', icon: '🔉', label: 'set volume',
+    slots: [{ key: 'volume', kind: NUM, control: 'number', min: 0, max: 60, step: 1, default: 30, label: '%' }] },
+  stop_sound: { cat: 'sound', shape: 'stack', icon: '🔇', label: 'stop sound' },
   play_tone: { cat: 'sound', shape: 'stack', icon: '🎵', label: 'play tone',
     slots: [
       { key: 'frequency', kind: NUM, control: 'number', min: 100, max: 2000, step: 10, default: 440, label: 'Hz' },
@@ -130,6 +133,11 @@ const BLOCK_DEFS = {
     format: (b) => fmt(b.melody) },
 
   // ── Display & Lights (purple) ──
+  display_animation: { cat: 'display', shape: 'stack', icon: '🎞️', label: 'animate text',
+    slots: [
+      { key: 'frames', kind: 'string[]', control: 'frames', default: ['Hello!', 'mBot'], label: 'frames' },
+      { key: 'interval', kind: NUM, control: 'number', min: 0.15, max: 2, step: 0.05, default: 0.5, label: 'sec/frame' },
+    ] },
   display_text: { cat: 'display', shape: 'stack', icon: '📝', label: 'show text',
     slots: [
       { key: 'text', kind: STR, control: 'text', default: 'Hello!', label: 'text' },
@@ -1759,6 +1767,12 @@ function SlotInline({ slot, value, parentId, ctx }) {
 }
 
 function SlotBody({ slot, value, parentId, ctx, onDragOver, onDrop, active }) {
+  // Array slots are literal-only, never reporter sockets. Each frame has its
+  // own textarea so imported newlines remain part of a frame, not separators.
+  if (slot.control === 'frames') {
+    return <PrimitiveInput slot={slot} value={value}
+      onChange={(v) => ctx.handleSetPrimitive(parentId, slot.key, v)} />;
+  }
   const dataProps = {
     'data-reporter-slot': '1',
     'data-target-parent': parentId,
@@ -1796,6 +1810,29 @@ function SlotBody({ slot, value, parentId, ctx, onDragOver, onDrop, active }) {
 
 function PrimitiveInput({ slot, value, onChange }) {
   const v = value === undefined || value === null ? (slot.default ?? '') : value;
+  if (slot.control === 'frames') {
+    const frames = Array.isArray(v) ? v : [];
+    return (
+      <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}
+        onClick={(e) => e.stopPropagation()} onDragStart={(e) => e.stopPropagation()}>
+        {!Array.isArray(v) && <span role="alert">Frames must be a text array; add a frame to replace this value.</span>}
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+          {frames.map((frame, i) => (
+            <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <textarea className="se-prim txt" aria-label={`Frame ${i + 1}`} rows={2} maxLength={128}
+                style={{ width: 180, resize: 'vertical' }} value={typeof frame === 'string' ? frame : ''}
+                onChange={(e) => onChange(frames.map((item, index) => index === i ? e.target.value : item))} />
+              <button type="button" className="se-iconbtn" aria-label={`Remove frame ${i + 1}`}
+                disabled={frames.length <= 1} onClick={() => onChange(frames.filter((_, index) => index !== i))}>×</button>
+            </span>
+          ))}
+        </span>
+        <button type="button" className="se-prim" disabled={frames.length >= 12}
+          onClick={() => onChange([...frames, ''])}>Add frame</button>
+        <span style={{ fontSize: 10 }}>Text only · 1–12 frames · 128 characters/frame</span>
+      </span>
+    );
+  }
   if (slot.control === 'select') {
     return (
       <select className="se-prim" value={v} onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()}>
