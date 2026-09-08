@@ -4,12 +4,24 @@
  */
 
 function escapePyString(value) {
-  return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\0/g, '\\x00');
 }
 
+// Reserve Python keywords and every global used by emitted code. Underscore
+// names belong to compiler temporaries; escape that namespace consistently too.
+const RESERVED_IDENTIFIERS = new Set([
+  'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
+  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally',
+  'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal',
+  'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield',
+  'cyberpi', 'mbot2', 'time', 'mbuild', 'sys', 'str', 'int', 'bool', 'len',
+  'range', 'abs', 'round', 'SystemExit',
+]);
 function sanitizeIdentifier(name) {
   const s = String(name ?? 'my_var').replace(/[^a-zA-Z0-9_]/g, '_');
-  return /^[a-zA-Z_]/.test(s) ? s : '_' + s;
+  const identifier = /^[a-zA-Z_]/.test(s) ? s : '_' + s;
+  return RESERVED_IDENTIFIERS.has(identifier) || identifier.startsWith('_')
+    ? '_user_' + identifier : identifier;
 }
 
 const ALLOWED_OPS = new Set(['>', '<', '>=', '<=', '==', '!=', '+', '-', '*', '/']);
@@ -330,12 +342,17 @@ function generateBlockCode(block, level, robotConfig) {
       return `${pad}mbot2.EM_stop()\n`;
 
     case 'set_speed': {
-      const left = Number(block.left || 0);
-      const right = Number(block.right || 0);
-      const avg = Math.round((left + right) / 2);
-      if (avg === 0) return `${pad}mbot2.EM_stop()\n`;
-      if (avg > 0) return `${pad}mbot2.forward(${Math.abs(avg)})\n`;
-      return `${pad}mbot2.backward(${Math.abs(avg)})\n`;
+      // Only the existing straight-drive APIs are established here. Never
+      // approximate unequal wheel powers (including turns) with an average.
+      const left = block.left ?? 0;
+      const right = block.right ?? 0;
+      if (typeof left !== 'number' || typeof right !== 'number'
+          || !Number.isFinite(left) || !Number.isFinite(right) || left !== right) {
+        throw new TypeError('set_speed unsupported: requires equal finite literal wheel speeds; independent wheels have no verified preview API');
+      }
+      if (left === 0) return `${pad}mbot2.EM_stop()\n`;
+      if (left > 0) return `${pad}mbot2.forward(${left})\n`;
+      return `${pad}mbot2.backward(${Math.abs(left)})\n`;
     }
 
     // === Sensors ===
@@ -492,7 +509,8 @@ function generateBlockCode(block, level, robotConfig) {
     case 'stop_all': {
       const what = block.what || 'all';
       if (what === 'this script') {
-        return `${pad}return\n`;
+        // The preview is one module-level script, including nested suites.
+        return `${pad}import sys\n${pad}sys.exit()\n`;
       }
       return `${pad}mbot2.EM_stop()\n${pad}cyberpi.audio.stop()\n${pad}import sys\n${pad}sys.exit()\n`;
     }

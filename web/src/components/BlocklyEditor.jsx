@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './BlocklyEditor.css';
+import { AV_PROGRAM_BUILD, getProgramPalette, getProgramBlockDefinition } from '../services/program-capabilities';
+
+// Exact static subset in server/src/services/program-lowering.js, not the
+// helper's larger candidate inventory. Runtime sensors are never folded.
+const LOWERED_TYPES = ['say', 'repeat', 'set_variable', 'change_variable', 'if_predicate', 'if_else_predicate',
+  'var_get', 'op_add', 'op_sub', 'op_mul', 'op_div', 'op_mod', 'op_abs', 'op_round',
+  'op_gt', 'op_lt', 'op_eq', 'op_and', 'op_or', 'op_not'];
 
 /**
  * Scratch-style block editor with reporter blocks (slot-based expressions).
@@ -42,26 +49,32 @@ import './BlocklyEditor.css';
 const NUM = 'number', STR = 'string', BOOL = 'boolean';
 
 const BLOCK_DEFS = {
+  // `av` overrides apply only to the identified installed AV runtime. Keep
+  // base definitions broad for legacy editors; never rewrite stored blocks.
   // ── Movement (blue) ──
   move_forward: { cat: 'movement', shape: 'stack', icon: '⬆️', label: 'move forward',
+    av: { slots: { speed: { min: 0, max: 50 }, duration: { min: 0, max: 5 } } },
     slots: [
       { key: 'speed', kind: NUM, control: 'range', min: 0, max: 100, step: 5, default: 50, label: 'speed' },
       { key: 'duration', kind: NUM, control: 'number', min: 0.1, max: 30, step: 0.1, default: 1, label: 'for sec' },
     ],
     format: (b) => `${fmt(b.speed)}% · ${fmt(b.duration)}s` },
   move_backward: { cat: 'movement', shape: 'stack', icon: '⬇️', label: 'move backward',
+    av: { slots: { speed: { min: 0, max: 50 }, duration: { min: 0, max: 5 } } },
     slots: [
       { key: 'speed', kind: NUM, control: 'range', min: 0, max: 100, step: 5, default: 50, label: 'speed' },
       { key: 'duration', kind: NUM, control: 'number', min: 0.1, max: 30, step: 0.1, default: 1, label: 'for sec' },
     ],
     format: (b) => `${fmt(b.speed)}% · ${fmt(b.duration)}s` },
   turn_left: { cat: 'movement', shape: 'stack', icon: '↩️', label: 'turn left',
+    av: { slots: { speed: null, angle: { min: 0, max: 30, default: 30, label: 'native angle' } } },
     slots: [
       { key: 'speed', kind: NUM, control: 'range', min: 0, max: 100, step: 5, default: 50, label: 'speed' },
       { key: 'angle', kind: NUM, control: 'number', min: 1, max: 360, step: 1, default: 90, label: 'angle' },
     ],
     format: (b) => `${fmt(b.angle)}°` },
   turn_right: { cat: 'movement', shape: 'stack', icon: '↪️', label: 'turn right',
+    av: { slots: { speed: null, angle: { min: 0, max: 30, default: 30, label: 'native angle' } } },
     slots: [
       { key: 'speed', kind: NUM, control: 'range', min: 0, max: 100, step: 5, default: 50, label: 'speed' },
       { key: 'angle', kind: NUM, control: 'number', min: 1, max: 360, step: 1, default: 90, label: 'angle' },
@@ -73,7 +86,8 @@ const BLOCK_DEFS = {
       { key: 'right', kind: NUM, control: 'range', min: -100, max: 100, step: 5, default: 50, label: 'right' },
     ],
     format: (b) => `L:${fmt(b.left)} R:${fmt(b.right)}` },
-  stop: { cat: 'movement', shape: 'cap', icon: '🛑', label: 'stop motors' },
+  stop: { cat: 'movement', shape: 'cap', icon: '🛑', label: 'stop motors',
+    av: { shape: 'stack', label: 'stop motors & sound' } },
 
   // ── Sensing (orange) ── conditional statement blocks ──
   if_obstacle: { cat: 'sensor', shape: 'e', icon: '👀', label: 'if obstacle within', hidden: true,
@@ -101,9 +115,7 @@ const BLOCK_DEFS = {
       { key: 'max', kind: NUM, control: 'number', min: 0, max: 400, step: 1, default: 30, label: 'max' },
     ],
     format: (b) => `${fmt(b.sensor)} ∈ [${fmt(b.min)},${fmt(b.max)}]` },
-  if_predicate: { cat: 'sensor', shape: 'e', icon: '🧪', label: 'if',
-    mouths: [{ key: 'then' }, { key: 'else' }],
-    slots: [{ key: 'cond', kind: BOOL, control: null, default: null, label: '' }] },
+
   display_value: { cat: 'sensor', shape: 'stack', icon: '📊', label: 'show sensor value',
     slots: [
       { key: 'sensor', kind: STR, control: 'select', options: ['distance','line','brightness','loudness','angle'], default: 'distance', label: 'sensor' },
@@ -116,12 +128,14 @@ const BLOCK_DEFS = {
     slots: [{ key: 'volume', kind: NUM, control: 'number', min: 0, max: 60, step: 1, default: 30, label: '%' }] },
   stop_sound: { cat: 'sound', shape: 'stack', icon: '🔇', label: 'stop sound' },
   play_tone: { cat: 'sound', shape: 'stack', icon: '🎵', label: 'play tone',
+    av: { slots: { duration: { min: 0, max: 2 } } },
     slots: [
       { key: 'frequency', kind: NUM, control: 'number', min: 100, max: 2000, step: 10, default: 440, label: 'Hz' },
       { key: 'duration', kind: NUM, control: 'number', min: 0.1, max: 5, step: 0.1, default: 0.5, label: 'sec' },
     ],
     format: (b) => `${fmt(b.frequency)}Hz` },
   play_sound: { cat: 'sound', shape: 'stack', icon: '🔊', label: 'play sound',
+    av: { slots: { sound: { options: ['hello', 'beeps', 'laugh', 'score'] } } },
     slots: [{ key: 'sound', kind: STR, control: 'select',
       options: ['hello','hi','bye','yeah','wow','laugh','hum','sad','sigh','annoyed','angry','surprised','yummy','curious','embarrassed','ready','sprint','sleepy','meow','start','switch','beeps','buzzing','explosion','jump','laser','level-up','low-energy','prompt-tone','right','wrong','ring','score','wake','warning','metal-clash','shot','glass-clink','inflator','running-water','clockwork','click','current','wood-hit','iron','drop','bubble','wave','magic','spitfire','heartbeat','load'],
       default: 'laugh', label: 'sound' }],
@@ -139,6 +153,7 @@ const BLOCK_DEFS = {
       { key: 'interval', kind: NUM, control: 'number', min: 0.15, max: 2, step: 0.05, default: 0.5, label: 'sec/frame' },
     ] },
   display_text: { cat: 'display', shape: 'stack', icon: '📝', label: 'show text',
+    av: { slots: { size: { max: 32 }, text: { maxCodePoints: 128 } } },
     slots: [
       { key: 'text', kind: STR, control: 'text', default: 'Hello!', label: 'text' },
       { key: 'size', kind: NUM, control: 'number', min: 8, max: 48, step: 2, default: 16, label: 'size' },
@@ -227,6 +242,7 @@ const BLOCK_DEFS = {
 
   // ── Hardware (green) ──
   dc_motor: { cat: 'hardware', shape: 'stack', icon: '⚡', label: 'DC motor',
+    av: { slots: { speed: { min: -50, max: 50 }, duration: { min: 0, max: 5 } } },
     slots: [
       { key: 'port', kind: STR, control: 'select', options: ['M1','M2','M3','M4'], default: 'M3', label: 'port' },
       { key: 'speed', kind: NUM, control: 'range', min: -100, max: 100, step: 5, default: 50, label: 'speed' },
@@ -234,6 +250,7 @@ const BLOCK_DEFS = {
     ],
     format: (b) => `${fmt(b.port)} · ${fmt(b.speed)}% · ${fmt(b.duration)}s` },
   servo: { cat: 'hardware', shape: 'stack', icon: '🦾', label: 'move servo',
+    av: { slots: { speed: { key: 'speed', kind: NUM, control: 'number', min: 0, max: 0, step: 1, default: 0, label: 'native speed' } } },
     slots: [
       { key: 'port', kind: STR, control: 'select', options: ['S1','S2','S3','S4'], default: 'S1', label: 'port' },
       { key: 'angle', kind: NUM, control: 'number', min: 0, max: 180, step: 1, default: 90, label: 'angle' },
@@ -395,6 +412,8 @@ function hydrate(blocks) {
 function hydrateOne(b) {
   if (!b || typeof b !== 'object' || !b.type) return b;
   const out = { ...b };
+  // Legacy catalog used this type for two mouths. Preserve both branches.
+  if (out.type === 'if_predicate' && Array.isArray(out.else)) out.type = 'if_else_predicate';
   if (!out._id) out._id = genId();
   // Mouth arrays (then/else/do)
   for (const k of ['then', 'else', 'do']) {
@@ -526,7 +545,16 @@ function descendantIds(block) {
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robotConfig }) {
+export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robotConfig, robotStatus }) {
+  const [allBlocks, setAllBlocks] = useState(false);
+  const [search, setSearch] = useState('');
+  const definitionFor = type => getProgramBlockDefinition(type, BLOCK_DEFS[type], robotStatus);
+  const palette = getProgramPalette(BLOCK_DEFS, robotStatus, { includeUnavailable: true, loweredTypes: LOWERED_TYPES })
+    .map(row => row.type === 'say' && robotStatus?.build === AV_PROGRAM_BUILD
+      ? { ...row, capability: robotStatus.capabilities?.includes('display_text')
+        ? { supported: true, status: 'server-lowered', reason: 'Server lowers literal say text to display_text at size 14; this is display output, not speech.' }
+        : { supported: false, status: 'requires-runtime', reason: 'The connected runtime does not advertise display_text required by say.' } } : row)
+    .filter(row => allBlocks || row.capability.supported || row.capability.status === 'unknown');
   const [activeCat, setActiveCat] = useState('movement');
   const [editingId, setEditingId] = useState(null);
   const [zoom, setZoom] = useState(1);
@@ -535,8 +563,8 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
   const [isDragging, setIsDragging] = useState(false);
   // The current snap candidate during a drag. We don't put it in React state
   // because mutating DOM classes/styles directly each mousemove is faster and
-  // doesn't cause re-renders. We do still track it in a ref so dragend can
-  // synthesize a drop on it (the "grace buffer" snap-on-release).
+  // doesn't cause re-renders. A real canvas drop commits this candidate;
+  // dragend only clears it, so canceled drags never change the program.
   const snapTargetRef = useRef(null);
   const clearSnapTarget = () => {
     const t = snapTargetRef.current;
@@ -669,18 +697,22 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
   //     dragShape: 'stack'|'cap'|'c'|'e'|'reporter'|'predicate',
   //     measuredWidth?: number,   // pixel width of the source element (for slot-grow)
   //     measuredHeight?: number,
-  //     dropped?: boolean         // set true by an actual slot drop; if still false
-  //                               //   on dragend we trigger snap-on-release
+  //     dropped?: boolean         // set true by an accepted drop
   //   }
-  const startDragNew = (e, type) => {
-    const def = BLOCK_DEFS[type];
+  const newBlock = (type) => {
+    const def = definitionFor(type);
     const block = { type, _id: genId() };
     if (def.slots) {
       for (const s of def.slots) {
-        if (s.default !== undefined && s.default !== null) block[s.key] = s.default;
+        if (s.default !== undefined && s.default !== null) block[s.key] = structuredClone(s.default);
       }
     }
     if (def.mouths) for (const m of def.mouths) block[m.key] = [];
+    return block;
+  };
+  const startDragNew = (e, type) => {
+    const def = definitionFor(type);
+    const block = newBlock(type);
     const sourceEl = e.currentTarget;
     const rect = sourceEl?.getBoundingClientRect();
     dragRef.current = {
@@ -742,13 +774,24 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
     clearSnapTarget();
   };
 
+  const canDropReporter = (parentId, key, slotKind) => {
+    const drag = dragRef.current;
+    if (!drag) return false;
+    const block = drag.kind === 'new' ? drag.block : findAnywhere(drag.sourceId)?.loc.block;
+    if (!isReporter(block)) return false;
+    if (slotKind === BOOL && BLOCK_DEFS[block.type].shape !== 'predicate') return false;
+    if (descendantIds(block).has(parentId)) return false;
+    const parent = findAnywhere(parentId)?.loc.block;
+    // Never silently replace an occupied expression subtree.
+    return !!parent && !isReporter(parent[key]);
+  };
+
   // ── Snap detection (Phase 2) ──────────────────────────────────────────
   // While a drag is active, scan all drop targets every dragover and pick
   // the closest compatible one within a tolerance. Highlight it; for empty
   // reporter sockets, animate their min-width up to the dragged reporter's
-  // size so kids see "this fits here" before letting go. On dragend with
-  // no real drop, synthesize a drop on the current snap target — this is
-  // the "grace buffer": releasing near a slot still snaps in.
+  // size so kids see "this fits here" before letting go. A canvas drop
+  // commits the candidate even within the target's near-miss buffer.
   useEffect(() => {
     if (!isDragging) return;
     const SNAP_TOLERANCE = 28; // px
@@ -783,11 +826,8 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
         const sockets = document.querySelectorAll('.se-canvas [data-reporter-slot]');
         sockets.forEach((s) => {
           const slotKind = s.getAttribute('data-target-kind');
-          // Bool slot only accepts a predicate; val slot accepts both.
-          if (slotKind === 'bool' && drag.dragShape !== 'predicate') return;
-          // Don't snap into a slot that already contains a non-empty reporter
-          // (the user has to remove it first).
-          if (s.querySelector('.se-block-shape')) return;
+          if (!canDropReporter(s.dataset.targetParent, s.dataset.targetKey,
+              slotKind === 'bool' ? BOOL : NUM)) return;
           const r = s.getBoundingClientRect();
           const dx = cx - (r.left + r.right) / 2;
           const dy = cy - (r.top + r.bottom) / 2;
@@ -825,46 +865,9 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
       }
     };
 
-    const onDragEnd = () => {
-      const drag = dragRef.current;
-      const snap = snapTargetRef.current;
-      // Schedule cleanup after potential drop fires (drop fires before dragend
-      // when it does fire; dragRef.current is cleared by drop's call to endDrag).
-      if (drag && !drag.dropped && snap) {
-        // Synthesize a drop on the current snap target.
-        if (snap.kind === 'arr') {
-          const target = {
-            kind: snap.el.getAttribute('data-target-kind'),
-            scriptId: snap.el.getAttribute('data-target-script') || undefined,
-            parentId: snap.el.getAttribute('data-target-parent') || undefined,
-            mouthKey: snap.el.getAttribute('data-target-mouth') || undefined,
-            index: parseInt(snap.el.getAttribute('data-target-index'), 10),
-          };
-          if (!target.scriptId) delete target.scriptId;
-          if (!target.parentId) delete target.parentId;
-          if (!target.mouthKey) delete target.mouthKey;
-          dropOnArrSlot(target);
-        } else {
-          const parentId = snap.el.getAttribute('data-target-parent');
-          const key = snap.el.getAttribute('data-target-key');
-          const slotKind = snap.el.getAttribute('data-target-kind');
-          dropOnReporterSlot(parentId, key, slotKind === 'bool' ? BOOL : NUM);
-        }
-      }
-      // Always cleanup visual state.
-      clearSnapTarget();
-      // If we synthesized a drop the handlers already ran endDrag(); if not,
-      // ensure state is fully reset.
-      if (dragRef.current) {
-        endDrag();
-      }
-    };
-
     window.addEventListener('dragover', onDragOver);
-    window.addEventListener('dragend', onDragEnd);
     return () => {
       window.removeEventListener('dragover', onDragOver);
-      window.removeEventListener('dragend', onDragEnd);
       clearSnapTarget();
     };
   }, [isDragging]);
@@ -950,6 +953,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
   };
 
   const dropOnReporterSlot = (parentId, key, slotKind) => {
+    if (!canDropReporter(parentId, key, slotKind)) { endDrag(); return; }
     const drag = dragRef.current;
     if (drag) drag.dropped = true;
     endDrag();
@@ -966,6 +970,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
     // Locate which script the parent (slot host) is in.
     const parentLoc = findAnywhere(parentId);
     if (!parentLoc) return;
+
 
     if (drag.kind === 'new') {
       if (parentLoc.source === 'main') {
@@ -1041,22 +1046,39 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
 
   // Drop a NEW block from the palette onto the empty canvas at (x, y),
   // creating a new floating script there.
-  // Only fires when no snap target was found (the snap effect won the drop
-  // already if it did). For existing-block moves dropped on bare canvas,
-  // we move the script's anchor position instead of cloning.
+  // A highlighted target connects first. Otherwise existing statements
+  // detach into a floating script and new statements create one.
   const dropOnCanvas = (e) => {
     const drag = dragRef.current;
     if (!drag) return false;
-    // If the snap detector found a target, let it handle the drop on dragend.
-    if (snapTargetRef.current) return false;
+    // Commit the highlighted connection on a real, accepted canvas drop.
+    // dragend also fires on Escape/cancel and must never mutate the program.
+    const snap = snapTargetRef.current;
+    if (snap) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (snap.kind === 'arr') {
+        dropOnArrSlot({
+          kind: snap.el.dataset.targetKind,
+          scriptId: snap.el.dataset.targetScript || undefined,
+          parentId: snap.el.dataset.targetParent || undefined,
+          mouthKey: snap.el.dataset.targetMouth || undefined,
+          index: Number(snap.el.dataset.targetIndex),
+        });
+      } else {
+        dropOnReporterSlot(snap.el.dataset.targetParent, snap.el.dataset.targetKey,
+          snap.el.dataset.targetKind === 'bool' ? BOOL : NUM);
+      }
+      return true;
+    }
     if (e && (e.target.closest('.se-slot') || e.target.closest('.se-slot-host'))) return false;
 
-    const canvasEl = canvasRef.current;
-    const rect = canvasEl ? canvasEl.getBoundingClientRect() : { left: 0, top: 0 };
-    const scrollLeft = canvasEl ? canvasEl.scrollLeft : 0;
-    const scrollTop = canvasEl ? canvasEl.scrollTop : 0;
-    const x = (e?.clientX ?? rect.left + 80) - rect.left + scrollLeft - 12;
-    const y = (e?.clientY ?? rect.top + 80) - rect.top + scrollTop - 8;
+    // The board's viewport rect already includes canvas padding and scroll.
+    // Script positions are board-space coordinates, before the CSS scale.
+    const board = canvasRef.current?.querySelector('.se-canvas-board');
+    const rect = board?.getBoundingClientRect() || { left: 0, top: 0 };
+    const x = ((e?.clientX ?? rect.left + 80) - rect.left) / zoom - 12;
+    const y = ((e?.clientY ?? rect.top + 80) - rect.top) / zoom - 8;
 
     if (drag.kind === 'new') {
       const def = BLOCK_DEFS[drag.block.type];
@@ -1120,8 +1142,8 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
     const move = (ev) => {
       const d = scriptDragRef.current;
       if (!d) return;
-      const dx = ev.clientX - d.startX;
-      const dy = ev.clientY - d.startY;
+      const dx = (ev.clientX - d.startX) / zoom;
+      const dy = (ev.clientY - d.startY) / zoom;
       const nx = Math.max(0, d.initX + dx);
       const ny = Math.max(0, d.initY + dy);
       if (d.scriptId === 'main') {
@@ -1369,22 +1391,33 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
       </div>
 
       <div className="se-palette">
+        <div className="se-palette-controls">
+          <div><button aria-pressed={!allBlocks} onClick={() => setAllBlocks(false)}>Robot-ready</button>
+            <button aria-pressed={allBlocks} onClick={() => setAllBlocks(true)}>All blocks</button></div>
+          <input type="search" aria-label="Search blocks" placeholder="Search blocks" value={search} onChange={e => setSearch(e.target.value)} />
+          <small>{robotStatus?.build === AV_PROGRAM_BUILD ? 'Type support only; Run validates values and limits.' : 'Runtime unverified — full catalog for editing.'}</small>
+        </div>
         <div className="se-palette-title">{activeCat === 'my_robot' ? 'My Robot' : (CATEGORIES.find(c => c.id === activeCat)?.label || '')}</div>
         <div className="se-palette-list">
           {activeCat === 'my_robot'
             ? hardwareItems.map((it) => (
                 <PaletteCustom key={it.id} item={it} onDragStart={(e) => startDragCustomBlock(e, it.block)} onDragEnd={endDrag} />
               ))
-            : Object.entries(BLOCK_DEFS)
-                .filter(([, def]) => def.cat === activeCat && !def.hidden)
-                .map(([type, def]) => (
+            : palette
+                .filter(({ type, definition: def }) => search.trim()
+                  ? `${type} ${def.label || ''} ${def.cat}`.toLowerCase().includes(search.trim().toLowerCase()) : def.cat === activeCat)
+                .map(({ type, definition: def, capability }) => (
+                  <div key={type} className="se-palette-entry" data-capability={capability.status} title={capability.reason}>
                   <PaletteEntry
                     key={type}
                     type={type}
                     def={def}
                     onDragStart={(e) => startDragNew(e, type)}
                     onDragEnd={endDrag}
+                    onAdd={() => commit([...internal, newBlock(type)])}
                   />
+                  {!capability.supported && capability.status !== 'unknown' && <small className="se-unavailable">{capability.reason}</small>}
+                  </div>
                 ))}
         </div>
       </div>
@@ -1443,8 +1476,8 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
                     topIndex={idx}
                     parentId={null}
                     scriptId="main"
-                    ctx={{ editingId, setEditingId, dropHint, setDropHint,
-                      dropOnArrSlot, dropOnReporterSlot,
+                    ctx={{ robotStatus, editingId, setEditingId, dropHint, setDropHint,
+                      dropOnArrSlot, dropOnReporterSlot, canDropReporter,
                       startDragExisting, endDrag,
                       handleDuplicate, handleSetPrimitive,
                       openContextMenu,
@@ -1484,8 +1517,8 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
                         topIndex={idx}
                         parentId={null}
                         scriptId={scriptId}
-                        ctx={{ editingId, setEditingId, dropHint, setDropHint,
-                          dropOnArrSlot, dropOnReporterSlot,
+                        ctx={{ robotStatus, editingId, setEditingId, dropHint, setDropHint,
+                          dropOnArrSlot, dropOnReporterSlot, canDropReporter,
                           startDragExisting, endDrag,
                           handleDuplicate, handleSetPrimitive,
                           openContextMenu,
@@ -1591,7 +1624,7 @@ function countAll(blocks) {
 // Palette tiles
 // ─────────────────────────────────────────────────────────────────────────────
 
-function PaletteEntry({ type, def, onDragStart, onDragEnd }) {
+function PaletteEntry({ type, def, onDragStart, onDragEnd, onAdd }) {
   const color = CAT_COLOR[def.cat] || '#888';
   if (def.shape === 'reporter' || def.shape === 'predicate') {
     return (
@@ -1607,6 +1640,8 @@ function PaletteEntry({ type, def, onDragStart, onDragEnd }) {
   const previewSlots = (def.slots || []).slice(0, 2);
   return (
     <div className={`se-block-shape ${def.shape} palette`} style={{ '--cat': color }}
+      role="button" tabIndex={0} aria-label={`Add ${def.label}`} onClick={onAdd}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAdd(); } }}
       draggable onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="se-block-row">
         {def.icon && <span className="se-block-icon">{def.icon}</span>}
@@ -1668,7 +1703,9 @@ function ReporterPreview({ type, def }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function BlockNode({ block, topIndex, parentId, scriptId, ctx }) {
-  const def = BLOCK_DEFS[block.type] || { cat: 'movement', shape: 'stack', icon: '❓', label: block.type };
+  const base = BLOCK_DEFS[block.type];
+  const def = getProgramBlockDefinition(block.type, base, ctx.robotStatus) || { cat: 'movement', shape: 'stack', icon: '❓', label: block.type };
+  const removedSlots = (base?.slots || []).filter(s => !(def.slots || []).some(next => next.key === s.key) && Object.hasOwn(block, s.key));
   const color = CAT_COLOR[def.cat] || '#64748b';
   const isEditing = ctx.editingId === block._id;
 
@@ -1696,22 +1733,32 @@ function BlockNode({ block, topIndex, parentId, scriptId, ctx }) {
 
   return (
     <div className={`se-block-shape ${def.shape} ${isEditing ? 'editing' : ''}`} style={{ '--cat': color }}
+      role="group" aria-label={`${def.label || def.infix || block.type} block`} tabIndex={0}
+      onFocus={(e) => {
+        if (e.target === e.currentTarget && e.currentTarget.matches(':focus-visible')) ctx.setEditingId(block._id);
+      }}
       draggable onDragStart={(e) => ctx.startDragExisting(e, block._id)} onDragEnd={ctx.endDrag}
       onContextMenu={(e) => ctx.openContextMenu && ctx.openContextMenu(e, block._id)}>
-      <div className="se-block-row" onClick={() => ctx.setEditingId(isEditing ? null : block._id)}>
+      <div className="se-block-row" onClick={(e) => {
+        e.stopPropagation();
+        ctx.setEditingId(isEditing ? null : block._id);
+      }}>
         {def.icon && <span className="se-block-icon">{def.icon}</span>}
         <span className="se-block-text">{def.label}</span>
 
-        {def.slots && def.slots.map((s) => (
-          <SlotInline
-            key={s.key}
-            slot={s}
-            value={block[s.key]}
-            parentId={block._id}
-            ctx={ctx}
-          />
+        {def.slots && def.slots.map((s, i) => (
+          <React.Fragment key={s.key}>
+            {def.infix && i > 0 && <span className="se-rep-infix">{def.infix}</span>}
+            <SlotInline
+              slot={s}
+              value={block[s.key]}
+              parentId={block._id}
+              ctx={ctx}
+            />
+          </React.Fragment>
         ))}
 
+        {removedSlots.map(s => <span key={s.key} className="se-unavailable" role="alert">Unsupported parameter {s.key}: {fmt(block[s.key])} (preserved)</span>)}
         <span className="se-block-actions" onClick={(e) => e.stopPropagation()}>
           <button className="se-iconbtn" title="Duplicate" onClick={() => ctx.handleDuplicate(block._id)}>📋</button>
         </span>
@@ -1734,9 +1781,9 @@ function BlockNode({ block, topIndex, parentId, scriptId, ctx }) {
  */
 function SlotInline({ slot, value, parentId, ctx }) {
   const onDragOver = (e) => {
-    if (!isReporterDrag(ctx)) return;
-    e.preventDefault();
     e.stopPropagation();
+    if (!ctx.canDropReporter(parentId, slot.key, slot.kind)) return;
+    e.preventDefault();
     ctx.setDropHint({ kind: 'reporter', parentId, key: slot.key });
   };
   const onDrop = (e) => {
@@ -1795,7 +1842,7 @@ function SlotBody({ slot, value, parentId, ctx, onDragOver, onDrop, active }) {
     return (
       <span className={`se-slot-host bool empty ${active ? 'active' : ''}`}
         {...dataProps}
-        onDragOver={onDragOver} onDrop={onDrop} onDragLeave={() => ctx.setDropHint(null)} />
+        onDragOver={onDragOver} onDrop={onDrop} onDragLeave={() => ctx.setDropHint(null)}>{value === undefined || value === null ? '' : String(value)}</span>
     );
   }
   // Primitive control inside slot oval
@@ -1836,6 +1883,7 @@ function PrimitiveInput({ slot, value, onChange }) {
   if (slot.control === 'select') {
     return (
       <select className="se-prim" value={v} onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()}>
+        {!slot.options.includes(v) && <option value={v}>Unavailable: {String(v)}</option>}
         {slot.options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
     );
@@ -1854,9 +1902,6 @@ function PrimitiveInput({ slot, value, onChange }) {
   );
 }
 
-function isReporterDrag(ctx) {
-  return ctx.draggingExisting || true; // we accept drops; type-check at drop time
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Array drop slot (between/inside stack chains and mouths)
