@@ -6,6 +6,7 @@ except ImportError:
 
 OTA_APP_PROTOCOL=1
 OTA_BUILD_ID='mbot-av-control-v1'
+DIAGNOSTIC_REVISION='native-boundary-v1'
 CAPS=('move_forward','move_backward','dc_motor','servo','wait',
     'stop','display_text','set_led','read_sensors','status','turn_left','turn_right',
     'play_tone','play_sound','set_volume','stop_sound','display_animation')
@@ -113,9 +114,12 @@ class Control:
     self.stop_pending=None
     self.run_id,self.index=None,0
     self.action=None
+    self.native_pending=None
     self.sensor_index=None
     self.outgoing=[]
     self.initial_stop=True
+    self.reset_cause={'raw':None,'constants':{}}
+    self.battery_snapshot=None
 
   def put(self,topic,payload):
     if topic==(self.prefix+'emergency').encode():
@@ -156,13 +160,22 @@ class Control:
 
   def status(self):
     self.publish('status',{'status':'running' if self.blocks else 'ready',
+      'diagnostic_revision':DIAGNOSTIC_REVISION,'uptime_ms':self.clock.ticks_ms(),
+      'reset_cause':self.reset_cause,
       'application':'cooperative-v1','capabilities':list(CAPS),
       'motion_enabled':True,'armed':self.client is not None,
       'self_managed_homing':True,'device':self.ctx.device,
       'boot':self.ctx.boot,'sha256':self.ctx.sha256,'build':OTA_BUILD_ID})
     self.reported=self.clock.ticks_ms()
 
+  def diagnostic(self,event):
+    return {'event':event,'diagnostic_revision':DIAGNOSTIC_REVISION,
+      'boot':self.ctx.boot,'sha256':self.ctx.sha256,'build':OTA_BUILD_ID,
+      'uptime_ms':self.clock.ticks_ms(),'run_id':self.run_id,'block_path':[self.index],
+      'battery_snapshot':self.battery_snapshot}
+
   def cancel(self):
+    self.native_pending=None
     self.pending=self.blocks=self.timer=None
     self.stop_pending=None
     self.action=('stop',None)
@@ -209,6 +222,7 @@ class Control:
         if self.blocks is not None:self.event('canceled')
         self.cancel()
         self.pending=payload
+      if self.native_pending is not None:return
       if self.timer is not None:
         start,duration,motor=self.timer
         if self.clock.ticks_diff(now,start)>=duration:
@@ -247,7 +261,9 @@ class Control:
         if t=='stop':self.action=('stop',None)
         elif t=='status':self.status()
         elif t=='read_sensors':self.action=('sensors',None)
-        elif t!='wait' and (t!='play_tone' or duration>0) and (not motor or duration>0):self.action=('execute',b)
+        elif t!='wait' and (t!='play_tone' or duration>0) and (not motor or duration>0):
+          self.action=('execute',b)
+          return
         if duration>0:
           self.timer=(self.clock.ticks_ms(),int(duration*1000),motor)
         else:self.complete()
@@ -374,8 +390,29 @@ def ota_step(context):
     if _app.initial_stop:
       _app.io.stop()
       _app.initial_stop=False
+      try:
+        import machine
+        for name in ('PWRON_RESET','HARD_RESET','WDT_RESET','DEEPSLEEP_RESET','SOFT_RESET'):
+          value=getattr(machine,name,None)
+          if value is not None:_app.reset_cause['constants'][name]=value
+        _app.reset_cause['raw']=machine.reset_cause()
+      except Exception as error:_app.reset_cause['error']=str(error)[:128]
+      diagnostic=_app.diagnostic('boot')
+      diagnostic['reset_cause']=_app.reset_cause
+      _app.publish('log',diagnostic)
+    prepared=_app.native_pending
     _app.step()
     action,_app.action=_app.action,None
+    if prepared is not None and _app.native_pending is prepared and prepared[2]:
+      action=prepared[0]
+      _app.native_pending=None
+    elif action is not None and action[0]=='execute':
+      diagnostic=_app.diagnostic('native_before')
+      diagnostic['command']=dict(action[1])
+      _app.native_pending=[action,diagnostic,False]
+      _app.publish('log',diagnostic)
+      _app.sensor_index=None
+      action=None
     if _app.client is None or (action is not None and action[0]!='sensors'):
       _app.sensor_index=None
     if action is None and _app.sensor_index is not None:
@@ -386,16 +423,35 @@ def ota_step(context):
         elif action[0]=='sensors':
           if _app.sensor_index is None:_app.sensor_index=0
           data=_app.io.sensors(_app.sensor_index)
+          if _app.sensor_index==1 and 'battery' in data:
+            _app.battery_snapshot={'value':data['battery'],'ticks_ms':_app.clock.ticks_ms()}
           _app.publish('sensors',data)
           _app.sensor_index=_app.sensor_index+1 if data.get('sampling') else None
         else:
+          started=_app.clock.ticks_ms()
           _app.io.execute(action[1])
-          # Tone's native duration already consumes its scheduler deadline.
-          if _app.timer is not None and action[1]['type']!='play_tone':
-            _,duration,motor=_app.timer
-            _app.timer=(_app.clock.ticks_ms(),duration,motor)
+          diagnostic=dict(prepared[1])
+          diagnostic['event']='native_after'
+          diagnostic['elapsed_ms']=_app.clock.ticks_diff(_app.clock.ticks_ms(),started)
+          diagnostic['uptime_ms']=_app.clock.ticks_ms()
+          _app.publish('log',diagnostic)
+          b=action[1]
+          duration=int(b.get('duration',0)*1000)
+          if duration>0:
+            _app.timer=(started if b['type']=='play_tone' else _app.clock.ticks_ms(),duration,
+              b['type'] in ('move_forward','move_backward','dc_motor'))
+          else:_app.complete()
       except Exception as error:
         _app.sensor_index=None
+        if action[0]=='execute':
+          diagnostic=dict(prepared[1])
+          diagnostic.update({'event':'native_exception','error':str(error)[:128],
+            'error_type':type(error).__name__,'uptime_ms':_app.clock.ticks_ms(),
+            'elapsed_ms':_app.clock.ticks_diff(_app.clock.ticks_ms(),started)})
+          try:
+            _app.client.sock.settimeout(1)
+            _app.client.publish((_app.prefix+'log').encode(),json.dumps(diagnostic).encode(),retain=False,qos=0)
+          except Exception:pass
         # Drop speculative completions, not the preempted run's terminal event.
         _app.outgoing=[item for item in _app.outgoing
           if item[1].get('type')=='program' and item[1].get('event')=='canceled']
@@ -411,6 +467,8 @@ def ota_step(context):
         _app.client.sock.settimeout(1)
         _app.client.publish((_app.prefix+suffix).encode(),json.dumps(data).encode(),retain=False,qos=0)
         _app.outgoing.pop(0)
+        if _app.native_pending is not None and data is _app.native_pending[1]:
+          _app.native_pending[2]=True
       except Exception:
         if _app.run_id is None:_app.run_id=data.get('run_id')
         _app.disconnect(_app.clock.ticks_ms())

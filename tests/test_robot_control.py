@@ -60,6 +60,15 @@ def send(client, value, topic='command'):
     import json
     client.callback(('mbot-studio/robot/'+topic).encode(), json.dumps(value).encode())
 
+def dispatch_prepared(m, ctx):
+    pending = m._app.native_pending
+    assert pending is not None and pending[2], 'native_before must already be published'
+    diag = pending[1]
+    assert diag['block_path'] == [m._app.index]
+    assert not any(d.get('run_id') == diag['run_id'] and d.get('block_path') == diag['block_path']
+                   and d.get('event') == 'completed' for _, d in m._app.client.events)
+    m.ota_step(ctx)
+
 @pytest.mark.parametrize('failed', [None, 'motor_stop', 'dc_stop', 'audio_stop'])
 @pytest.mark.parametrize('command', ['move_forward', 'read_sensors'])
 def test_startup_native_stop_is_shallow_before_network_and_actions(monkeypatch, failed, command):
@@ -119,8 +128,11 @@ def test_startup_native_stop_is_shallow_before_network_and_actions(monkeypatch, 
         faults.clear()
         calls.clear()
     m.ota_step(ctx)
-    assert calls == stops + ['network', 'factory', 'connected', 'check_msg',
-                             'motion' if command == 'move_forward' else 'read']
+    assert calls == stops + ['network', 'factory', 'connected', 'check_msg'] + (
+        [] if command == 'move_forward' else ['read'])
+    if command == 'move_forward':
+        dispatch_prepared(m, ctx)
+        assert calls[-2:] == ['check_msg', 'motion']
     assert stacks
     for stack in stacks:
         assert stack[1:3] == ['stop', 'ota_step']
@@ -142,6 +154,7 @@ def test_cooperative_run_wrap_zero_and_events():
     assert io.calls == [('stop',)]
     send(client, {'run_id':'r1','blocks':[{'type':'move_forward','speed':10,'duration':0.1}, {'type':'dc_motor','port':'M1','duration':0}]}, 'program')
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
     assert io.calls[-1][0] == 'move_forward'
     clock.now = 30
     m.ota_step(ctx)
@@ -168,6 +181,7 @@ def test_failures_cancel_and_stop(failure):
     elif failure == 'network': client.fail = True
     else: io.fail = True
     m.ota_step(ctx)
+    if failure == 'hardware': dispatch_prepared(m, ctx)
     assert io.calls[-1] == ('stop',)
     assert m._app.pending is None and m._app.blocks is None
     if failure == 'network':
@@ -245,6 +259,7 @@ def test_ota_protocol_and_actual_server_envelopes():
     assert any(e.get('event')=='completed' and e.get('run_id')=='real' and e.get('type')=='program' for _,e in client.events)
     send(client, {'run_id':'wrapped','command':{'type':'move_forward','duration':0.1,'speed':10}})
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
     assert io.calls[-1][0]=='move_forward'
     send(client, {}, 'emergency'); m.ota_step(ctx)
     assert any(e.get('event')=='canceled' and e.get('run_id')=='wrapped' for _,e in client.events)
@@ -311,6 +326,7 @@ def test_validated_stop_preempts_shallow(kind, wrapped):
     m, ctx, clock, io, client = setup()
     send(client, {'run_id': 'active', 'type': kind, 'duration': 5})
     m.ota_step(ctx)
+    if kind == 'move_forward': dispatch_prepared(m, ctx)
     def checked_stop():
         assert not any(f.function in ('put', 'step', 'cancel', 'disconnect') for f in inspect.stack())
         io.calls.append(('stop',))
@@ -359,6 +375,7 @@ def test_embedded_stop_remains_sequential():
     m.ota_step(ctx)
     assert io.calls == [('stop',), ('stop',)]
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
     assert io.calls[-1][0] == 'move_forward'
 
 
@@ -384,6 +401,8 @@ def test_command_stop_preempts_active_motor():
     m, ctx, clock, io, client = setup()
     send(client, {'run_id': 'moving', 'type': 'move_forward', 'duration': 5})
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
+    assert io.calls[-1][0] == 'move_forward'
     send(client, {'run_id': 'stop-request', 'type': 'stop'})
     m.ota_step(ctx)
     assert io.calls[-1] == ('stop',), 'standalone stop remains pending behind active five-second motor timer'
@@ -414,6 +433,7 @@ def test_final_native_failure_retains_run_id(kind):
     send(client, request)
     m.ota_step(ctx)
     if kind == 'move_forward':
+        dispatch_prepared(m, ctx)
         original_stop = io.stop
         attempts = []
         def fail_first_stop():
@@ -424,6 +444,7 @@ def test_final_native_failure_retains_run_id(kind):
         io.stop = fail_first_stop
         clock.now = (clock.now + 101) % 65536
         m.ota_step(ctx)
+    if kind == 'servo': dispatch_prepared(m, ctx)
     failures = [event for _, event in client.events if event.get('event') == 'failed']
     assert len(failures) == 1
     assert failures[0]['run_id'] == 'native-failure', failures
@@ -704,6 +725,7 @@ def test_native_turn_sign_zero_shallow_completion_and_failure_stop(monkeypatch, 
     m._app.io = m.native()['io']
     send(client, {'run_id': 'turn-test', 'type': kind, 'angle': angle})
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
     if angle == 0:
         assert calls == [], 'zero angle must not call any native actuator'
         failure = False
@@ -800,6 +822,7 @@ def test_native_audio_exact_args_shallow(monkeypatch, block, expected):
     m, ctx, clock, client, calls, _ = native_av_setup(monkeypatch)
     send(client, dict(block, run_id='audio'))
     m.ota_step(ctx)
+    if expected: dispatch_prepared(m, ctx)
     assert calls == expected
     clock.now = (clock.now + 501) % 65536
     m.ota_step(ctx)
@@ -833,6 +856,7 @@ def test_audio_native_failure_cleanup_keeps_original_error(monkeypatch, block, f
     failures.update({failed: True, 'audio_stop': True})
     send(client, {'run_id': 'audio-fault', 'program': [block, {'type': 'play_sound', 'sound': 'score'}]}, 'program')
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
     assert {'motor_stop', 'dc_stop', 'audio_stop'}.issubset(c[0] for c in calls)
     assert m._app.blocks is None and m._app.timer is None
     terminal = [e for _, e in client.events if e.get('type') == 'program' and e.get('event') in ('failed', 'completed')]
@@ -878,6 +902,7 @@ def test_animation_native_frame_order_timing_and_chronological_events(monkeypatc
     send(client, {'run_id': 'frames', 'program': [
         {'type': 'display_animation', 'frames': ['A', 'B'], 'interval': 0.15}]}, 'program')
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
     assert calls == [('display', ('A', 24, 'center'), {'index': 0})]
     m.ota_step(ctx)  # first frame hold
     clock.now = (clock.now + 149) % 65536
@@ -886,11 +911,12 @@ def test_animation_native_frame_order_timing_and_chronological_events(monkeypatc
     clock.now = (clock.now + 1) % 65536
     m.ota_step(ctx)  # first hold completes
     m.ota_step(ctx)  # next frame
+    dispatch_prepared(m, ctx)
     assert calls[-1] == ('display', ('B', 24, 'center'), {'index': 0})
     m.ota_step(ctx)
     clock.now = (clock.now + 150) % 65536
     m.ota_step(ctx)
-    events = [(e['type'], e['event'], e.get('path')) for _, e in client.events if e.get('run_id') == 'frames']
+    events = [(e['type'], e['event'], e.get('path')) for t, e in client.events if t.endswith(b'/execution') and e.get('run_id') == 'frames']
     assert events == [('program', 'started', None)] + [
         ('block', event, [i]) for i in range(4) for event in ('started', 'completed')
     ] + [('program', 'completed', None)]
@@ -905,6 +931,7 @@ def test_animation_cancels_remaining_frames_and_cleans_up(monkeypatch, interrupt
     send(client, {'run_id': 'frames', 'program': [
         {'type': 'display_animation', 'frames': ['A', 'B', 'C'], 'interval': 0.15}]}, 'program')
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
     assert calls[0] == ('display', ('A', 24, 'center'), {'index': 0})
     if interruption != 'display_failure':
         m.ota_step(ctx)
@@ -931,6 +958,7 @@ def test_blocking_tone_does_not_add_a_second_duration(monkeypatch):
     sys.modules['cyberpi'].audio.play_tone = blocking_tone
     send(client, {'run_id': 'blocking-tone', 'type': 'play_tone', 'frequency': 440, 'duration': 2})
     m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
     m.ota_step(ctx)
     assert m._app.timer is None and m._app.blocks is None
     assert calls == [('tone', (440, 2), {})]
