@@ -73,15 +73,16 @@ def test_reset_sample_once_after_startup_stop(monkeypatch, mode):
     assert calls.count('reset') == (1 if mode in ('ok', 'error') else 0)
 
 
-def test_exception_published_before_recovery_stop_even_if_stop_blocks():
+def test_turn_exception_is_queued_before_stop_but_never_networked_before_stop():
     m, ctx, clock, io, client = setup()
     class Blocked(BaseException): pass
     def execute(b):
         clock.now = (clock.now + 13) % 65536
         raise RuntimeError('driver fault')
     def stop():
-        diag = logs(client)[-1]
-        assert diag['event'] == 'native_exception'
+        assert logs(client)[-1]['event'] == 'native_before'
+        diag = next(data for suffix, data in m._app.outgoing if data.get('event') == 'native_exception')
+        assert m._app.motor_stop_needed
         assert diag['error'] == 'driver fault' and diag['error_type'] == 'RuntimeError'
         assert diag['elapsed_ms'] == 13 and diag['block_path'] == [0]
         assert diag['run_id'] == 'fault'

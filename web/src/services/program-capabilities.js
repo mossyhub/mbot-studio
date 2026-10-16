@@ -1,4 +1,5 @@
 /** Program palette metadata, not execution admission or saved-program migration. */
+import {canUseRecordings} from './voice-recording.js';
 export const AV_PROGRAM_BUILD = 'mbot-av-control-v1';
 
 const FLAT_TYPES = new Set([
@@ -10,6 +11,8 @@ const FLAT_TYPES = new Set([
 // Every catalog type has a reviewed classification. A lowering candidate is not
 // enabled until the caller supplies the server's verified loweredTypes subset.
 const GROUPS = [
+  { types: ['play_recording'], mode: 'requires-runtime',
+    reason: 'Requires installed recorded_audio_v1 support; the server resolves the saved asset and trusted duration.' },
   { types: [...FLAT_TYPES], mode: 'flat',
     reason: 'Supported with bounded literal parameters; Run still validates the program and motion arming.' },
   { types: ['repeat'], mode: 'server-lowered',
@@ -50,6 +53,12 @@ export const PROGRAM_BLOCK_INVENTORY = Object.freeze(Object.fromEntries(
 
 /** Type-level guidance only: Run must still validate values, budgets and arming. */
 export function getProgramBlockCapability(type, runtimeStatus, { loweredTypes = [] } = {}) {
+  if (type === 'play_recording') {
+    const supported = canUseRecordings(runtimeStatus);
+    return {supported, status:supported ? 'supported' : 'requires-runtime',
+      reason:supported ? 'Saved clip ID; Run verifies the asset, duration and installed playback support.'
+        : 'Unavailable — waiting for installed recorded-audio support and an online robot.'};
+  }
   if (runtimeStatus?.build !== AV_PROGRAM_BUILD) {
     return { status: 'unknown', supported: false,
       reason: 'Runtime support is unverified. The full legacy catalog remains available for editing.' };
@@ -88,8 +97,8 @@ export function getProgramPalette(catalog, runtimeStatus, { includeUnavailable =
 
 /** Resolve controls/defaults only. Never pass stored block values for rewriting. */
 export function getProgramBlockDefinition(type, definition, runtimeStatus) {
-  if (runtimeStatus?.build !== AV_PROGRAM_BUILD || !definition?.av) return definition;
-  const { slots: overrides = {}, ...properties } = definition.av;
+  if (runtimeStatus?.build !== AV_PROGRAM_BUILD || !definition) return definition;
+  const { slots: overrides = {}, ...properties } = definition.av || {};
   const slots = (definition.slots || [])
     .filter(slot => overrides[slot.key] !== null)
     .map(slot => ({ ...slot, ...overrides[slot.key] }));
@@ -108,5 +117,27 @@ export function getProgramBlockDefinition(type, definition, runtimeStatus) {
     const angle = slots.find(slot => slot.key === 'angle');
     if (angle) Object.assign(angle, { min: 0, max: 360 });
   }
-  return { ...definition, ...properties, slots };
+  if (type === 'repeat') {
+    const times = slots.find(slot => slot.key === 'times');
+    if (times) Object.assign(times, { min: 0, max: runtimeStatus.capabilities?.includes('program_indexed_v1') ? 1024 : 50, default: 3 });
+  }
+  if (['display_text', 'say'].includes(type)) {
+    const text = slots.find(slot => slot.key === 'text');
+    if (text) text.maxCodePoints = 128;
+  }
+  if (type === 'set_led') {
+    const color = slots.find(slot => slot.key === 'color');
+    if (color) color.options = [...new Set([...color.options, 'cyan', 'orange'])];
+  }
+  // Device omission defaults are NOT the palette's new-block defaults.
+  const defaults = {
+    move_forward: { speed: 20, duration: 1 }, move_backward: { speed: 20, duration: 1 },
+    dc_motor: { speed: 20, duration: 1 }, turn_left: { angle: 0 }, turn_right: { angle: 0 },
+    servo: { angle: 90, speed: 0 }, play_tone: { frequency: 440, duration: 0.5 },
+    wait: { duration: 1 }, display_text: { size: 16 }, display_animation: { interval: 0.5 },
+  };
+  for (const slot of slots) {
+    if (slot.kind === 'string' || slot.kind === 'string[]' || (type === 'repeat' && slot.key === 'times')) slot.literalOnly = true;
+  }
+  return { ...definition, ...properties, slots, effectiveDefaults: defaults[type] || {} };
 }

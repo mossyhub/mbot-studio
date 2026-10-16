@@ -104,6 +104,21 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
   };
 
   const handleSave = async () => {
+    // Preserve imported calibration until an explicit valid edit; never clamp it.
+    for (const addition of additions) {
+      for (const action of addition.actions || []) {
+        const bounds = addition.type === 'dc_motor'
+          ? { speed: [0, 100], duration: [0, 5] }
+          : addition.type === 'servo' ? { angle: [0, 180] } : {};
+        for (const [key, [min, max]] of Object.entries(bounds)) {
+          const value = action[key];
+          if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max)) {
+            setSaveStatus(`${addition.label || addition.port}: ${action.name} ${key} must be ${min}..${max}. Edit the action before saving.`);
+            return;
+          }
+        }
+      }
+    }
     const incomplete = additions
       .map((addition, index) => ({
         index,
@@ -216,11 +231,11 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
     let command = null;
     if (homeAction) {
       if (addition.type === 'servo') {
-        command = { type: 'servo', port: addition.port, angle: homeAction.angle || 90 };
+        command = { type: 'servo', port: addition.port, angle: homeAction.angle ?? 90 };
       } else {
         const dir = homeAction.motorDirection || 'forward';
-        const spd = homeAction.speed || 50;
-        command = { type: 'dc_motor', port: addition.port, speed: dir === 'reverse' ? -spd : spd, duration: homeAction.duration || 1 };
+        const spd = homeAction.speed ?? 50;
+        command = { type: 'dc_motor', port: addition.port, speed: dir === 'reverse' ? -spd : spd, duration: homeAction.duration ?? 1 };
       }
     }
 
@@ -616,10 +631,10 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                                 type="number"
                                 min="0"
                                 max="100"
-                                value={action.speed || 50}
+                                value={action.speed ?? 50}
                                 onChange={(e) => {
                                   const acts = [...(addition.actions || [])];
-                                  acts[ai] = { ...acts[ai], speed: parseInt(e.target.value) || 50 };
+                                  acts[ai] = { ...acts[ai], speed: e.target.value === '' ? '' : Number(e.target.value) };
                                   updateAddition(index, 'actions', acts);
                                 }}
                               />
@@ -628,13 +643,13 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                               <label>Duration:</label>
                               <input
                                 type="number"
-                                min="0.1"
-                                max="10"
+                                min="0"
+                                max="5"
                                 step="0.1"
-                                value={action.duration || 0.5}
+                                value={action.duration ?? 0.5}
                                 onChange={(e) => {
                                   const acts = [...(addition.actions || [])];
-                                  acts[ai] = { ...acts[ai], duration: parseFloat(e.target.value) || 0.5 };
+                                  acts[ai] = { ...acts[ai], duration: e.target.value === '' ? '' : Number(e.target.value) };
                                   updateAddition(index, 'actions', acts);
                                 }}
                               />
@@ -651,10 +666,10 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                                 type="number"
                                 min="0"
                                 max="180"
-                                value={action.angle || 90}
+                                value={action.angle ?? 90}
                                 onChange={(e) => {
                                   const acts = [...(addition.actions || [])];
-                                  acts[ai] = { ...acts[ai], angle: parseInt(e.target.value) || 90 };
+                                  acts[ai] = { ...acts[ai], angle: e.target.value === '' ? '' : Number(e.target.value) };
                                   updateAddition(index, 'actions', acts);
                                 }}
                               />

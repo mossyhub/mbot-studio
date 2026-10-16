@@ -20,3 +20,10 @@ Thumbs.db
 # IDE
 .vscode
 .idea
+
+# Local investigation artifacts are not production build inputs.
+audit
+design
+test-results
+playwright-report
+.hermes

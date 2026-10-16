@@ -54,7 +54,7 @@ test('AV catalog defaults compile alongside all unchanged legacy block defaults'
   vm.runInContext(source + '\nthis.definitions = BLOCK_DEFS;', context, { timeout: 1000 });
   const definitions = context.definitions;
   const newTypes = ['set_volume', 'stop_sound', 'display_animation'];
-  assert.equal(Object.keys(definitions).filter(type => !newTypes.includes(type)).length, 70);
+  assert.equal(Object.keys(definitions).filter(type => !newTypes.includes(type)).length, 71); // Saved voice adds one catalog entry.
   assert.equal(definitions.play_tone.slots.find(slot => slot.key === 'duration').max, 5);
   assert.ok(definitions.play_sound.slots[0].options.includes('magic'), 'legacy options remain available');
   assert.ok(Array.isArray(definitions.display_animation.slots[0].default));
@@ -69,5 +69,5 @@ test('AV catalog defaults compile alongside all unchanged legacy block defaults'
   const result = spawnSync('python3', [helper], { input: JSON.stringify(cases), encoding: 'utf8', timeout: 10000 });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).filter(item => item.compiled).length, 73);
+  assert.equal(JSON.parse(result.stdout).filter(item => item.compiled).length, 74);
 });

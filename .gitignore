@@ -14,3 +14,5 @@ test-results/
 playwright-report/
 server/public/
 tests/.harness-state.json
+# Local audit tools, private firmware candidates and test evidence.
+audit/

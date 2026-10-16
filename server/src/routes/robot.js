@@ -7,7 +7,7 @@ import { loadConfig } from './config.js';
 import { validateBlocks, validateCommand } from '../services/validation.js';
 import { lowerProgram } from '../services/program-lowering.js';
 
-function prepareFlatProgram(program, mqtt, run_id) {
+function prepareProgram(program, mqtt, run_id) {
   const status = mqtt.getRobotStatus();
   if (!status.mqttConnected || !status.robotOnline) {
     throw Object.assign(new Error('Robot is offline; installed runtime cannot be verified'), { status: 503, code: 'COOPERATIVE_OFFLINE' });
@@ -15,20 +15,22 @@ function prepareFlatProgram(program, mqtt, run_id) {
   if (!mqtt.isCooperativeApp() || status.build !== 'mbot-av-control-v1') {
     throw Object.assign(new Error('Program lowering requires a confirmed mbot-av-control-v1 runtime'), { status: 422, code: 'PROGRAM_RUNTIME_UNSUPPORTED' });
   }
-  const result = lowerProgram(program, { validateBlock: block => mqtt.validateCooperativeProgram([block]) });
+  const result = lowerProgram(program, { profile: mqtt.getProgramProfile(), resolveRecording: id => mqtt.resolveRecording(id),
+    validateBlock: block => mqtt.validateCooperativeProgram([block]) });
   if (result.compiledCount === 0) {
     throw Object.assign(new Error('Program produces no executable instructions'), {
       status: 400, code: 'PROGRAM_EMPTY', compiledCount: 0,
     });
   }
-  mqtt.validateCooperativeProgram(result.program);
-  const payload = JSON.stringify({ program: result.program, timestamp: Date.now(), run_id });
-  mqtt.validateCooperativePayload(payload);
-  return { ...result, expandedCount: result.compiledCount, wireBlockCount: result.program.length, wireBytes: Buffer.byteLength(payload, 'utf8') };
+  const timestamp = Date.now();
+  const { payload, ...encoded } = mqtt.prepareProgram(result.program, run_id, timestamp, result.sourceMap);
+  return { ...result, ...encoded, timestamp };
 }
 
-function programError(error) {
-  return { runnable: false, compiledCount: error.compiledCount ?? null,
+function programError(error, mqtt) {
+  const { encoding, limits } = mqtt.getProgramProfile();
+  return { runnable: false, encoding, limits, uniqueCount: null, uniqueCommandCount: null,
+    compiledCount: error.compiledCount ?? null,
     expandedCount: error.compiledCount ?? null, wireBytes: null, error: error.message, errors: [{
     code: error.code || 'PROGRAM_INVALID', message: error.message,
     sourceId: error.sourceId ?? null, path: error.path ?? 'program',
@@ -142,10 +144,10 @@ robotRoutes.post('/command', (req, res) => {
 robotRoutes.post('/program/validate', (req, res) => {
   const mqtt = MqttService.getInstance();
   try {
-    const { program, ...result } = prepareFlatProgram(req.body.program, mqtt, randomUUID());
+    const { program, ...result } = prepareProgram(req.body.program, mqtt, randomUUID());
     return res.json({ runnable: true, error: null, errors: [], ...result });
   } catch (error) {
-    return res.json(programError(error));
+    return res.json(programError(error, mqtt));
   }
 });
 
@@ -174,18 +176,28 @@ robotRoutes.post('/program', (req, res) => {
   if (mqtt.isCooperativeApp()) {
     const run_id = randomUUID();
     if (mqtt.getRobotStatus().build === 'mbot-av-control-v1') {
-      try {
-        const { program: lowered, ...result } = prepareFlatProgram(programValidation.value, mqtt, run_id);
-        const sent = mqtt.sendProgram(lowered, run_id);
-        return res.json({ sent, blockCount: lowered.length, run_id, ...result });
-      } catch (error) {
+      const reject = error => {
         // Preserve the existing Run admission contract; detailed compiler codes
         // remain available in errors[] and the read-only validation response.
         const code = error.code?.startsWith('PROGRAM_')
           ? (error.status === 422 ? 'COOPERATIVE_UNSUPPORTED' : 'COOPERATIVE_INVALID')
           : error.code;
-        return res.status(error.status || 400).json({ code, ...programError(error) });
-      }
+        return res.status(error.status || 400).json({ code, ...programError(error, mqtt) });
+      };
+      try {
+        const { program: lowered, ...result } = prepareProgram(programValidation.value, mqtt, run_id);
+        const sent = mqtt.sendProgram(lowered, run_id, result.timestamp);
+        const respond = sent => res.json({ sent, blockCount: result.wireBlockCount, run_id, ...result });
+        // Express 4 only catches synchronous handlers: contain the optional
+        // asset preparation promise here without changing legacy error paths.
+        if (!sent?.then) return respond(sent);
+        const session = mqtt.recordingTransfer.active;
+        const disconnected = () => {
+          if (!res.writableEnded && mqtt.recordingTransfer.active === session) mqtt.recordingTransfer.invalidate('Program request disconnected');
+        };
+        res.once?.('close', disconnected);
+        return sent.then(respond, reject).finally(() => res.off?.('close', disconnected));
+      } catch (error) { return reject(error); }
     }
     const sent = mqtt.sendProgram(programValidation.value, run_id);
     return res.json({ sent, blockCount: programValidation.value.length, run_id });
@@ -446,6 +458,6 @@ robotRoutes.post('/telemetry/reset', (req, res) => {
 // Admission failures from the shared send boundary must stay explicit JSON,
 // including older routes (diagnostic/test-action/upload) that use that boundary.
 robotRoutes.use((err, req, res, next) => {
-  if (!err.code?.startsWith('COOPERATIVE_')) return next(err);
+  if (!err.code?.startsWith('COOPERATIVE_') && !err.code?.startsWith('RECORDING_')) return next(err);
   res.status(err.status).json({ error: err.message, code: err.code });
 });

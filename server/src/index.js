@@ -10,6 +10,8 @@ import { aiRoutes } from './routes/ai.js';
 import { robotRoutes } from './routes/robot.js';
 import { configRoutes } from './routes/config.js';
 import { MqttService } from './services/mqtt-service.js';
+import { RecordingService } from './services/recording-service.js';
+import { createRecordingRoutes } from './routes/recordings.js';
 import { setupWebSocket } from './services/websocket.js';
 import { initializeModelSelection } from './services/ai-service.js';
 
@@ -20,9 +22,13 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const mqttService = MqttService.getInstance();
+const recordings = new RecordingService({ syncAdapter: mqttService.recordingTransfer });
 
 // Middleware
 app.use(cors());
+// Raw uploads own their parser, ahead of JSON and the generic robot router.
+app.use('/api/robot/recordings', createRecordingRoutes({ service: recordings }));
 app.use(express.json({ limit: '10mb' }));
 
 // Health check
@@ -81,7 +87,6 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 setupWebSocket(wss);
 
 // Initialize MQTT service
-const mqttService = MqttService.getInstance();
 mqttService.connect().then(() => {
   console.log('📡 MQTT service ready');
 }).catch(err => {
@@ -92,6 +97,9 @@ mqttService.connect().then(() => {
 const HOST = process.env.HOST || '0.0.0.0';
 
 async function startServer() {
+  // Load and integrity-check persisted assets before accepting HTTP/WS work.
+  await recordings.initialize();
+  mqttService.setRecordingRegistry(recordings);
   initializeModelSelection();
 
   server.listen(PORT, HOST, () => {

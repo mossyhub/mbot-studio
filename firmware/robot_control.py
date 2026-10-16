@@ -3,6 +3,10 @@ try:
   import ujson as json
 except ImportError:
   import json
+try:
+  import ubinascii as binascii
+except ImportError:
+  import binascii
 
 OTA_APP_PROTOCOL=1
 OTA_BUILD_ID='mbot-av-control-v1'
@@ -10,8 +14,11 @@ DIAGNOSTIC_REVISION='native-boundary-v1'
 CAPS=('move_forward','move_backward','dc_motor','servo','wait',
     'stop','display_text','set_led','read_sensors','status','turn_left','turn_right',
     'play_tone','play_sound','set_volume','stop_sound','display_animation','drive_hold',
-    'drive_tap','motor_power_100','turn_angle_360')
+    'drive_tap','motor_power_100','turn_angle_360','program_indexed_v1')
 COLORS=('red','green','blue','yellow','cyan','purple','white','orange','off')
+
+def asset_id(value):
+  return type(value) is str and len(value)==64 and all(c in '0123456789abcdef' for c in value)
 
 def number(p,key,default,low,high):
   v=p.get(key,default)
@@ -60,6 +67,10 @@ def validate(blocks):
       number(p,'frequency',440,100,2000)
       number(p,'duration',0.5,0,2)
       allowed += ('frequency','duration')
+    elif t=='play_recording':
+      if not asset_id(p.get('recording')):raise ValueError('recording')
+      number(p,'duration',None,0.001,3)
+      allowed += ('recording','duration')
     elif t=='play_sound':
       if p.get('sound') not in ('hello','beeps','laugh','score'):
         raise ValueError('sound')
@@ -103,7 +114,263 @@ def validate(blocks):
     if len(out)>32:raise ValueError('blocks')
   return out
 
-class Control:
+def validate_indexed(program):
+  if (type(program) is not dict or len(program)!=3
+      or any(k not in ('format','commands','order') for k in program)
+      or program.get('format')!='indexed-v1'):
+    raise ValueError('format')
+  source=program['commands']
+  if type(source) is not list or not 1<=len(source)<=32:
+    raise ValueError('commands')
+  if any(type(b) is not dict or b.get('type') in ('display_animation','status','read_sensors')
+      or any(k in b for k in ('params','_id','run_id')) for b in source):
+    raise ValueError('primitive')
+  order=program['order']
+  if type(order) is not str or not 2<=len(order)<=2048 or len(order)%2:
+    raise ValueError('order')
+  try:tape=binascii.unhexlify(order)
+  except Exception:raise ValueError('order')
+  if max(tape)>=len(source):raise ValueError('index')
+  commands=validate(source)
+  for command in commands:command.pop('run_id',None)
+  # Match server compensated admission; never round an over-budget hold down
+  # or retain an expanded list of command dictionaries.
+  holds=correction=0
+  for index in tape:
+    value=commands[index].get('duration',0)-correction
+    total=holds+value
+    correction=(total-holds)-value
+    holds=total
+    if holds>120:raise ValueError('duration')
+  return commands,tape
+
+class Recordings:
+  """Pure phase scheduler; only outer ota_step may dispatch filesystem IO."""
+  def __init__(self,root='/flash/mbot_voice'):
+    self.root=root
+    self.assets={}
+    self.ids=[]
+    self.transfer=None
+    self.last=None
+    self.ready=False
+    self.error=None
+    self.error_stage='operation'
+    self.job=self.initialize()
+    self.request=None
+    self.reply_id=''
+    self.cleanup=False
+    self.at=None
+    self.action=self.io_result=self.io_error=None
+
+  def path(self,name):
+    return self.root+'/'+name
+
+  def metadata(self,value):
+    if (type(value) is not dict or len(value)!=4 or
+        any(k not in ('id','sha256','size','duration_ms') for k in value) or
+        not asset_id(value.get('id')) or value.get('sha256')!=value['id'] or
+        type(value.get('size')) is not int or not 1<=value['size']<=24576 or
+        type(value.get('duration_ms')) is not int or not 1<=value['duration_ms']<=3000):
+      raise ValueError('metadata')
+    return value
+
+  def verify(self,meta,name):
+    import hashlib
+    digest=hashlib.sha256()
+    offset=0
+    while offset<meta['size']:
+      yield ('read',self.path(name),'rb',offset,min(512,meta['size']-offset))
+      data=self.io_result
+      if not data:raise ValueError('size')
+      digest.update(data)
+      offset+=len(data)
+    yield ('stat',self.path(name))
+    if self.io_result[6]!=meta['size']:raise ValueError('size')
+    if binascii.hexlify(digest.digest()).decode()!=meta['sha256']:raise ValueError('sha256')
+
+  def initialize(self):
+    try:yield ('mkdir',self.root)
+    except OSError:
+      yield ('stat',self.root)
+      if not self.io_result[0]&0x4000:raise
+    yield ('listdir',self.root)
+    names=self.io_result
+    self.ids=[name[:-4] for name in names if name.endswith('.mp3') and asset_id(name[:-4])]
+    if len(self.ids)>8:raise ValueError('quota')
+    for name in ('upload.part','metadata.part'):
+      if name in names:
+        yield ('remove',self.path(name))
+    for ident in self.ids:
+      try:
+        yield ('read',self.path(ident+'.json'),'r',0,513)
+        meta=self.metadata(json.loads(self.io_result))
+        if meta['id']!=ident:raise ValueError('metadata')
+        for action in self.verify(meta,ident+'.mp3'):yield action
+        self.assets[ident]=meta
+      except (OSError,ValueError):pass
+    self.ready=True
+
+  def cancel(self):
+    # No disk IO here: invoked from MQTT cancellation paths too.
+    self.transfer=self.last=self.request=None
+    self.job=None
+    self.cleanup=True
+    self.at=None
+    self.action=self.io_result=self.io_error=None
+
+  def clean(self):
+    for name in ('upload.part','metadata.part'):
+      try:yield ('remove',self.path(name))
+      except OSError as error:
+        if error.args[0]!=2:raise
+    self.cleanup=False
+
+  def operation(self,r):
+    op=r['op']
+    ident=r.get('id')
+    if op=='begin':
+      # Already validated at the outer admission boundary.
+      meta={k:r[k] for k in ('id','sha256','size','duration_ms')}
+      if ident in self.assets and self.assets[ident]!=meta:raise ValueError('metadata_conflict')
+      if self.transfer is not None:
+        if self.transfer['transfer_id']!=r['transfer_id'] or self.transfer['meta']!=meta:raise ValueError('busy')
+        return
+      if ident not in self.ids and len(self.ids)>=8:raise ValueError('quota')
+      yield ('statvfs',self.root)
+      space=self.io_result
+      if space[1]*space[4]<262144+meta['size']+2*space[1]:raise ValueError('space')
+      yield ('create',self.path('upload.part'))
+      self.transfer={'transfer_id':r['transfer_id'],'meta':meta,'offset':0,'last_chunk':None}
+      self.last=None
+    elif op in ('status','delete'):
+      if self.transfer is not None:raise ValueError('busy')
+      if op=='status':
+        meta=self.assets.get(ident)
+        if meta is None:raise ValueError('missing')
+        for action in self.verify(meta,ident+'.mp3'):yield action
+      else:
+        if ident not in self.ids and ident not in self.assets:raise ValueError('missing')
+        self.assets.pop(ident,None)
+        for extension in ('.json','.mp3'):
+          try:yield ('remove',self.path(ident+extension))
+          except OSError as error:
+            if error.args[0]!=2:raise
+        if ident in self.ids:self.ids.remove(ident)
+        self.last=None
+    elif op=='abort':
+      if self.transfer is not None and self.transfer['transfer_id']!=r['transfer_id']:raise ValueError('owner')
+      self.transfer=self.last=None
+      # IO errors are thrown into this generator on the following tick.
+      for name in ('upload.part','metadata.part'):
+        try:yield ('remove',self.path(name))
+        except OSError as error:
+          if error.args[0]!=2:raise
+      self.cleanup=False
+    elif op=='finish' and self.transfer is None and self.last is not None and self.last['transfer_id']==r['transfer_id']:
+      return
+    else:
+      transfer=self.transfer
+      if transfer is None or transfer['transfer_id']!=r['transfer_id']:raise ValueError('owner')
+      meta=transfer['meta']
+      if op=='chunk':
+        data=binascii.unhexlify(r['data'])
+        if r['offset']!=transfer['offset']:
+          if transfer['last_chunk']==(r['offset'],data):return
+          raise ValueError('offset')
+        if transfer['offset']+len(data)>meta['size']:raise ValueError('size')
+        yield ('write',self.path('upload.part'),'r+b',transfer['offset'],data)
+        transfer['offset']+=len(data)
+        transfer['last_chunk']=(r['offset'],data)
+      elif op=='finish':
+        if transfer['offset']!=meta['size']:raise ValueError('size')
+        for action in self.verify(meta,'upload.part'):yield action
+        yield ('write',self.path('metadata.part'),'w',0,json.dumps(meta))
+        # Metadata is the commit marker. Both renames stay in our directory.
+        yield ('rename',self.path('upload.part'),self.path(meta['id']+'.mp3'),meta['id'])
+        yield ('rename',self.path('metadata.part'),self.path(meta['id']+'.json'))
+        self.assets[meta['id']]=meta
+        self.last=transfer
+        self.transfer=None
+
+  def ack(self,r,error=None):
+    transfer=self.transfer or self.last
+    ident=r.get('id',transfer['meta']['id'] if transfer else self.reply_id)
+    offset=transfer['offset'] if transfer and transfer['transfer_id']==r['transfer_id'] else 0
+    if r['op']=='status' and error is None:offset=self.assets[ident]['size']
+    if r['op']=='delete':offset=0
+    data={'op':r['op'],'transfer_id':r['transfer_id'],'boot':r['boot'],
+      'ok':error is None,'offset':offset,'id':ident}
+    if error is not None:
+      data['error']=str(error)[:64]
+      data['error_stage']=self.error_stage[:16]
+    return data
+
+  def step(self):
+    self.action=None
+    if self.cleanup and self.job is None:self.job=self.clean()
+    if self.job is None:return None
+    error,self.io_error=self.io_error,None
+    try:
+      if error is not None:self.action=self.job.throw(error)
+      else:
+        self.error_stage='operation'
+        self.action=next(self.job)
+    except StopIteration:
+      self.job=None
+      request,self.request=self.request,None
+      if request is not None:return self.ack(request)
+      if not self.ready and not self.cleanup and self.error is None:self.job=self.initialize()
+    except Exception as error:
+      request,self.request=self.request,None
+      self.job=None
+      if request is None:
+        self.error=str(error)[:64]
+        return None
+      ack=self.ack(request,error)
+      if request['op'] in ('begin','chunk','finish') and str(error) not in ('busy','owner','offset','quota','metadata_conflict'):
+        self.cancel()
+      return ack
+
+  def execute(self,action):
+    # Native filesystem entry points must be as shallow as IO.execute: no
+    # scheduler/generator frames remain. Exactly one bounded phase per tick.
+    import os
+    op,path=action[0],action[1]
+    if op=='mkdir':return os.mkdir(path)
+    if op=='stat':return os.stat(path)
+    if op=='statvfs':return os.statvfs(path)
+    if op=='listdir':return os.listdir(path)
+    if op=='remove':return os.remove(path)
+    if op=='rename':
+      os.rename(path,action[2])
+      # Account the committed data before a Stop can discard the next phase.
+      if len(action)>3:
+        if action[3] not in self.ids:self.ids.append(action[3])
+        self.assets.pop(action[3],None)
+      return
+    if op=='create':
+      with open(path,'wb'):pass
+    elif op in ('read','write'):
+      with open(path,action[2]) as stream:
+        stream.seek(action[3])
+        if op=='read':return stream.read(action[4])
+        if stream.write(action[4])!=len(action[4]):raise OSError('short_write')
+    else:raise ValueError('disk_action')
+
+class AssetProtocol:
+  def asset_busy(self):
+    store=self.recordings
+    return self.asset_pending is not None or (store is not None and (store.transfer is not None or store.request is not None or store.cleanup))
+
+  def expire_asset(self):
+    store=self.recordings
+    if (store is not None and store.at is not None and
+        (store.transfer is not None or store.request is not None or store.cleanup)):
+      if self.clock.ticks_diff(self.clock.ticks_ms(),store.at)>=10000:
+        self.asset_pending=None
+        store.cancel()
+
+class Control(AssetProtocol):
   def __init__(self,ctx,a):
     self.ctx,self.io,self.clock=ctx,a['io'],a['clock']
     self.identity=(ctx.device,ctx.boot,ctx.sha256)
@@ -112,6 +379,8 @@ class Control:
     self.prefix=ROBOT_TOPIC_PREFIX+'/robot/'
     self.ota_topic=(ROBOT_TOPIC_PREFIX+'/ota/'+ROBOT_DEVICE+'/request').encode()
     self.client=self.pending=self.blocks=self.timer=None
+    self.tape=self.program_started=None
+    self.indexed_run=False
     self.retry=self.reported=None
     self.lost=False
     self.emergency=False
@@ -128,16 +397,38 @@ class Control:
     self.drive_at=None
     self.drive_started=False
     self.drive_stopping=None
+    # Independent of Program/timer ownership; only successful Stop clears it.
+    self.motor_stop_needed=False
+    self.asset_pending=None
+    self.recordings=Recordings() if getattr(self.io,'recording_available',False) else None
 
   def put(self,topic,payload):
     # Observe loader requests only to fail closed; never interpret/execute OTA.
     if topic==self.ota_topic:
-      if self.drive is not None or self.drive_stopping is not None:self.cancel('ota')
+      self.asset_pending=None
+      if self.recordings is not None:self.recordings.cancel()
+      recording=(getattr(self.io,'recording_buffer',None) is not None or
+        (self.native_pending is not None and self.native_pending[0][1].get('type')=='play_recording'))
+      if self.drive is not None or self.drive_stopping is not None or recording:
+        self.cancel('ota')
+        if recording:self.event('canceled',error='ota')
       return
     if topic==(self.prefix+'emergency').encode():
+      self.asset_pending=None
       self.emergency=True
       return
     if self.emergency:return
+    if topic==(self.prefix+'asset').encode():
+      # One bounded raw slot; no JSON, schema, metadata or replies on MQTT stack.
+      # Drop saturation/oversize and work received under another owner, never
+      # queue it for execution after that owner releases native IO.
+      if (type(payload) is bytes and len(payload)<=1600 and self.asset_pending is None
+          and not self.initial_stop and self.client is not None and self.blocks is None
+          and self.pending is None and self.native_pending is None and self.timer is None
+          and self.action is None and self.stop_pending is None and self.sensor_index is None
+          and not self.motor_stop_needed and self.drive is None and self.drive_stopping is None):
+        self.asset_pending=payload
+      return
     if topic==(self.prefix+'drive').encode():
       self.drive_request(payload)
       return
@@ -162,6 +453,8 @@ class Control:
       except Exception:pass
     # Live drive owns all native IO. Never leave work for after release.
     if self.drive is not None or self.drive_stopping is not None:return
+    if self.motor_stop_needed and self.timer is None:return
+    if self.asset_busy():return
     if self.pending is None and self.stop_pending is None:
       if topic in ((self.prefix+'command').encode(),(self.prefix+'program').encode()):
         self.pending=payload if len(payload)<=8192 else b'null'
@@ -206,7 +499,8 @@ class Control:
       self.drive_event({'hold_id':hold_id,'boot':self.ctx.boot},'rejected','malformed')
       return
     if op in ('start','tap'):
-      if (self.initial_stop or self.client is None or self.drive is not None or self.drive_stopping is not None
+      if (self.asset_busy() or self.initial_stop or self.client is None or self.drive is not None or self.drive_stopping is not None
+          or self.motor_stop_needed
           or self.blocks is not None or self.pending is not None or self.native_pending is not None
           or self.timer is not None or self.action is not None or self.stop_pending is not None
           or self.sensor_index is not None):
@@ -234,6 +528,7 @@ class Control:
         self.cancel('tap_completed' if tap else 'expired')
 
   def drive_stopped(self):
+    self.motor_stop_needed=False
     stopped,self.drive_stopping=self.drive_stopping,None
     if stopped is not None:self.drive_event(stopped[0],'stopped',stopped[1])
 
@@ -250,10 +545,14 @@ class Control:
     self.publish('execution',d)
 
   def status(self):
+    capabilities=list(CAPS)
+    if (getattr(self.io,'recording_available',False) and self.recordings is not None
+        and self.recordings.ready and self.recordings.error is None):
+      capabilities+=['play_recording','recorded_audio_v1']
     self.publish('status',{'status':'running' if self.blocks else 'ready',
       'diagnostic_revision':DIAGNOSTIC_REVISION,'uptime_ms':self.clock.ticks_ms(),
       'reset_cause':self.reset_cause,
-      'application':'cooperative-v1','capabilities':list(CAPS),
+      'application':'cooperative-v1','capabilities':capabilities,
       'motion_enabled':True,'armed':self.client is not None,
       'self_managed_homing':True,'device':self.ctx.device,
       'boot':self.ctx.boot,'sha256':self.ctx.sha256,'build':OTA_BUILD_ID})
@@ -266,7 +565,11 @@ class Control:
       'battery_snapshot':self.battery_snapshot}
 
   def cancel(self,reason='canceled'):
+    self.asset_pending=None
+    if self.recordings is not None:self.recordings.cancel()
     self.sensor_index=None
+    if self.indexed_run:self.motor_stop_needed=True
+    self.indexed_run=False
     if self.drive is not None:
       self.drive_stopping=(self.drive,reason)
       self.drive=None
@@ -274,14 +577,47 @@ class Control:
       self.drive_started=False
     self.native_pending=None
     self.pending=self.blocks=self.timer=None
+    self.tape=self.program_started=None
     self.stop_pending=None
     self.action=('stop',None)
 
+  def expire_program(self):
+    if (self.program_started is not None and
+        self.clock.ticks_diff(self.clock.ticks_ms(),self.program_started)>=300000):
+      self.cancel('elapsed')
+      self.motor_stop_needed=True
+      self.event('failed',error='elapsed')
+      return True
+    return False
+
+  def expire_motor(self):
+    if self.timer is not None and self.timer[2]:
+      if self.clock.ticks_diff(self.clock.ticks_ms(),self.timer[0])>=self.timer[1]:
+        self.timer=None
+        self.action=('stop',True)
+        return True
+    return False
+
+  def reject_busy(self):
+    if self.blocks is None or self.pending is None:return
+    try:request=json.loads(self.pending)
+    except Exception:request=None
+    compact=type(request) is dict and type(request.get('program')) is dict
+    if self.tape is None and not compact:return
+    self.pending=None
+    run_id=request.get('run_id') if type(request) is dict else None
+    if type(run_id) is not str or len(run_id)>128:run_id=None
+    self.publish('execution',{'type':'program','event':'failed','run_id':run_id,
+      'boot':self.ctx.boot,'build':OTA_BUILD_ID,'block_path':[],
+      'error':'busy','details':{'error':'busy'}})
+
   def complete(self):
+    if self.expire_program():return
     self.event('completed','block')
     self.index += 1
-    if self.index==len(self.blocks):
+    if self.index==len(self.tape if self.tape is not None else self.blocks):
       self.blocks=None
+      self.tape=self.program_started=None
       self.event('completed')
       self.status()
 
@@ -297,7 +633,7 @@ class Control:
           port=globals().get('ROBOT_MQTT_PORT',1883),keepalive=30)
         self.client.set_callback(self.put)
         self.client.connect(clean_session=True)
-        for name in ('command','program','emergency','drive'):
+        for name in ('command','program','emergency','drive','asset'):
           self.client.sock.settimeout(1)
           self.client.subscribe((self.prefix+name).encode(),qos=0)
         self.client.sock.settimeout(1)
@@ -308,6 +644,8 @@ class Control:
           self.lost=False
       self.client.check_msg()
       network=False
+      now=self.clock.ticks_ms()
+      if self.expire_program():return
       if self.reported is None or self.clock.ticks_diff(now,self.reported)>=5000:
         self.status()
       if self.emergency:
@@ -322,13 +660,15 @@ class Control:
         self.cancel()
         self.pending=payload
       if self.drive is not None or self.drive_stopping is not None:return
+      if self.asset_busy():return
+      self.reject_busy()
       if self.native_pending is not None:return
       if self.timer is not None:
         start,duration,motor=self.timer
         if self.clock.ticks_diff(now,start)>=duration:
-          if motor:self.action=('stop',None)
+          if motor:self.action=('stop',True)
           self.timer=None
-          self.complete()
+          if not motor:self.complete()
         return
       if self.blocks is None and self.pending is not None:
         payload,self.pending=self.pending,None
@@ -349,11 +689,25 @@ class Control:
           command=dict(command)
           command.pop('timestamp',None)
           plan=[command]
-        self.blocks=validate(plan)
+        if type(plan) is dict:
+          if 'program' not in request or any(k not in ('program','run_id','timestamp') for k in request):
+            raise ValueError('envelope')
+          self.blocks,self.tape=validate_indexed(plan)
+          self.indexed_run=True
+          self.program_started=self.clock.ticks_ms()
+        else:self.blocks=validate(plan)
+        for command in self.blocks:
+          if command['type']=='play_recording':
+            store=self.recordings
+            if not getattr(self.io,'recording_available',False) or store is None or not store.ready or store.error is not None:
+              raise ValueError('recording_unavailable')
+            meta=store.assets.get(command['recording'])
+            if meta is None:raise ValueError('recording_missing')
+            if command['duration']!=meta['duration_ms']/1000:raise ValueError('recording_duration')
         self.index=0
         self.event('started')
       if self.blocks is not None:
-        b=self.blocks[self.index]
+        b=self.blocks[self.tape[self.index] if self.tape is not None else self.index]
         t=b['type']
         self.event('started','block')
         motor=t in ('move_forward','move_backward','dc_motor')
@@ -410,6 +764,29 @@ def native():
     from umqtt.simple import MQTTClient
 
   class IO:
+    def __init__(self):
+      self.recording_available=False
+      self.recording_buffer=None
+      self.recording_root='/flash/mbot_voice'
+      # Never import an absent speaker module: import constructs a singleton
+      # and starts vendor workers. Discovery inspects already-loaded objects.
+      try:
+        import sys
+        module=sys.modules.get('driver.speaker')
+        globals_module=sys.modules.get('global_objects')
+        speaker=getattr(module,'speaker_obj',None)
+        player=getattr(globals_module,'mp3_music_o',None)
+        play=getattr(speaker,'__play_mp3',None)
+        speed=getattr(speaker,'play_speed',None)
+        source=getattr(module,'SOUNDS_TYPE_MP3_SOURCE',None)
+        mode=getattr(player,'PLAYER_MODE_MP3',None)
+        if (callable(play) and type(speed) is int and speed==100 and type(source) is int and source==5
+            and type(mode) is int and mode==1 and callable(getattr(player,'play',None))
+            and callable(getattr(player,'stop',None)) and callable(getattr(cyberpi.audio,'stop',None))):
+          self.recording_play=play
+          self.recording_speed,self.recording_source=speed,source
+          self.recording_available=True
+      except Exception:pass
     def drive(self,direction,speed):
       # Vendor: yuque.com/makeblock-help-center-en/mcode/cyberpi-api-shields
       # drive_power(EM1_power, EM2_power): percent, positive shaft CCW.
@@ -423,6 +800,8 @@ def native():
       finally:
         try:mbot2.starter_shield.dc_motor_stop()
         finally:cyberpi.audio.stop()
+      # Native may borrow this buffer; no cancellation/error path frees it.
+      self.recording_buffer=None
     def execute(self,b):
       t=b['type']
       if t=='move_forward':mbot2.forward(b['speed'])
@@ -434,6 +813,18 @@ def native():
         # Vendor call may block for duration (at most 2s); Stop cannot preempt it.
         if b['duration']>0:cyberpi.audio.play_tone(b['frequency'],b['duration'])
       elif t=='play_sound':cyberpi.audio.play(b['sound'])
+      elif t=='play_recording':
+        if not self.recording_available or self.recording_buffer is not None:raise ValueError('recording_unavailable')
+        ident=b['recording']
+        if not asset_id(ident):raise ValueError('recording')
+        with open(self.recording_root+'/'+ident+'.json','r') as stream:meta=json.loads(stream.read(513))
+        Recordings.metadata(None,meta)
+        if meta['id']!=ident or b['duration']!=meta['duration_ms']/1000:raise ValueError('recording_duration')
+        with open(self.recording_root+'/'+ident+'.mp3','rb') as stream:data=stream.read(24577)
+        import hashlib
+        if len(data)!=meta['size'] or binascii.hexlify(hashlib.sha256(data).digest()).decode()!=ident:raise ValueError('recording_digest')
+        self.recording_buffer=data
+        self.recording_play(self.recording_buffer,self.recording_speed,self.recording_source,False)
       elif t=='set_volume':cyberpi.audio.set_vol(b['volume'])
       elif t=='stop_sound':cyberpi.audio.stop()
       elif t in ('turn_left','turn_right'):
@@ -492,12 +883,15 @@ def ota_step(context):
     _app.sensor_index=None
     _app.cancel('identity')
     _app.action=None
-    _app.io.stop()
+    _app.motor_stop_needed=True
+    try:_app.io.stop()
+    except Exception:return
     _app.drive_stopped()
     raise ValueError('identity')
   try:
     if _app.initial_stop:
-      _app.io.stop()
+      try:_app.io.stop()
+      except Exception:return
       _app.initial_stop=False
       try:
         import machine
@@ -513,13 +907,107 @@ def ota_step(context):
       _app.emergency=False
       _app.cancel('emergency')
     _app.expire_drive()
-    stopping=_app.drive_stopping is not None
-    if stopping:
-      _app.io.stop()
+    _app.expire_program()
+    _app.expire_asset()
+    # A Stop already received wins over a simultaneous completion deadline.
+    if (_app.timer is not None and _app.timer[2] and
+        _app.clock.ticks_diff(_app.clock.ticks_ms(),_app.timer[0])>=_app.timer[1]):
+      if _app.emergency:
+        _app.emergency=False
+        _app.cancel('emergency')
+        _app.event('canceled')
+      elif _app.stop_pending is not None:
+        payload=_app.stop_pending
+        _app.event('canceled')
+        _app.cancel('stop')
+        _app.pending=payload
+    due_stop=_app.expire_motor()
+    stopping=(_app.drive_stopping is not None or
+      (_app.motor_stop_needed and _app.timer is None))
+    if stopping and not due_stop:
+      _app.motor_stop_needed=True
+      try:_app.io.stop()
+      except Exception:return
       _app.drive_stopped()
       _app.action=None
     prepared=_app.native_pending
-    if not stopping:_app.step()
+    if not stopping and not due_stop:_app.step()
+    _app.expire_asset()
+    if _app.asset_pending is not None:
+      # MQTT has fully unwound. Parse/admit here, before any disk phase.
+      payload,_app.asset_pending=_app.asset_pending,None
+      request=None
+      stage='json'
+      try:
+        request=json.loads(payload)
+        stage='schema'
+        if type(request) is not dict:raise ValueError('request')
+        quoted=escaped=False
+        fields=0
+        for char in payload:
+          if quoted:
+            if escaped:escaped=False
+            elif char==92:escaped=True
+            elif char==34:quoted=False
+          elif char==34:quoted=True
+          elif char==58:fields+=1
+        if fields!=len(request):raise ValueError('duplicate')
+        op=request.get('op')
+        keys=('op','transfer_id','boot')
+        if op=='begin':keys+=('id','size','sha256','duration_ms')
+        elif op=='chunk':keys+=('offset','data')
+        elif op in ('status','delete'):keys+=('id',)
+        elif op not in ('finish','abort'):raise ValueError('op')
+        if len(request)!=len(keys) or any(k not in keys for k in request):raise ValueError('fields')
+        if type(request['transfer_id']) is not str or not 1<=len(request['transfer_id'])<=64:raise ValueError('transfer_id')
+        if request['boot']!=_app.ctx.boot:raise ValueError('boot')
+        if 'id' in request and not asset_id(request['id']):raise ValueError('id')
+        if op=='chunk':
+          data=request['data']
+          if type(request['offset']) is not int or not 0<=request['offset']<=24576:raise ValueError('offset')
+          if type(data) is not str or not 2<=len(data)<=1024 or len(data)%2 or any(c not in '0123456789abcdefABCDEF' for c in data):raise ValueError('data')
+        store=_app.recordings
+        if store is None or not getattr(_app.io,'recording_available',False):raise ValueError('unsupported')
+        stage='metadata'
+        if op=='begin':store.metadata({k:request[k] for k in ('id','sha256','size','duration_ms')})
+        stage='admission'
+        if store.request==request:
+          store.at=_app.clock.ticks_ms()
+        elif (not store.ready or store.error is not None or store.job is not None or store.cleanup
+            or _app.initial_stop or _app.client is None or _app.blocks is not None or _app.pending is not None
+            or _app.native_pending is not None or _app.timer is not None or _app.action is not None
+            or _app.stop_pending is not None or _app.sensor_index is not None or _app.motor_stop_needed
+            or _app.drive is not None or _app.drive_stopping is not None):raise ValueError('busy')
+        else:
+          store.request=request
+          store.job=store.operation(request)
+          owner=store.transfer or store.last
+          store.reply_id=request.get('id',owner['meta']['id'] if owner and owner['transfer_id']==request['transfer_id'] else '')
+          if store.transfer is None or store.transfer['transfer_id']==request['transfer_id']:store.at=_app.clock.ticks_ms()
+      except Exception as error:
+        request=request if type(request) is dict else {}
+        safe={}
+        for key,limit in (('op',16),('transfer_id',64),('boot',128),('id',64)):
+          value=request.get(key,'')
+          safe[key]=value if type(value) is str and len(value)<=limit else ''
+        safe.update({'ok':False,'offset':0,'error':str(error)[:64],'error_stage':stage})
+        owner=_app.recordings.transfer if _app.recordings is not None else None
+        if owner is not None and owner['transfer_id']==safe['transfer_id']:
+          safe['id'],safe['offset']=owner['meta']['id'],owner['offset']
+        _app.publish('asset_status',safe)
+    if (_app.recordings is not None and not _app.motor_stop_needed and
+        (_app.action is None or _app.action[0]!='stop')):
+      store=_app.recordings
+      ack=store.step()
+      # The pure scheduler has returned; no generator/dispatch frames may
+      # surround filesystem builtins on the native low-stack runtime.
+      disk,store.action=store.action,None
+      if disk is not None:
+        store.error_stage='fs_'+disk[0]
+        try:store.io_result=store.execute(disk)
+        except Exception as error:store.io_error=error
+      if store.request is not None:store.at=_app.clock.ticks_ms()
+      if ack is not None:_app.publish('asset_status',ack)
     _app.expire_drive()
     action,_app.action=_app.action,None
     if prepared is not None and _app.native_pending is prepared and prepared[2]:
@@ -539,8 +1027,10 @@ def ota_step(context):
     if action is not None:
       try:
         if action[0]=='stop':
+          _app.motor_stop_needed=True
           _app.io.stop()
           _app.drive_stopped()
+          if action[1]:_app.complete()
         elif action[0]=='sensors':
           if _app.sensor_index is None:_app.sensor_index=0
           data=_app.io.sensors(_app.sensor_index)
@@ -550,8 +1040,15 @@ def ota_step(context):
           _app.sensor_index=_app.sensor_index+1 if data.get('sampling') else None
         else:
           started=_app.clock.ticks_ms()
+          if action[0]=='execute' and action[1]['type'] in ('move_forward','move_backward','dc_motor','play_recording','turn_left','turn_right'):
+            # A setpoint may take effect even when its driver subsequently throws.
+            _app.motor_stop_needed=True
           if action[0]=='drive':_app.io.drive(action[1]['direction'],action[1]['speed'])
           else:_app.io.execute(action[1])
+          if action[0]=='execute' and action[1]['type'] in ('turn_left','turn_right'):
+            # A successful blocking turn has returned; its exceptional path
+            # retains the latch and Stops before diagnostics like other motors.
+            _app.motor_stop_needed=False
           diagnostic=dict(prepared[1])
           diagnostic['event']='native_after'
           diagnostic['elapsed_ms']=_app.clock.ticks_diff(_app.clock.ticks_ms(),started)
@@ -563,12 +1060,19 @@ def ota_step(context):
             if action[1]['op']=='tap':_app.drive_at=_app.clock.ticks_ms()
             _app.drive_started=True
             _app.drive_event(action[1],'started')
+          elif _app.expire_program():
+            # Outer recovery below owns Stop, so its failure cannot replace
+            # the elapsed terminal with a spurious native-command exception.
+            pass
           else:
             b=action[1]
-            duration=int(b.get('duration',0)*1000)
+            seconds=b.get('duration',0)
+            # Positive holds always get at least one scheduler millisecond.
+            duration=max(1,int(seconds*1000)) if seconds>0 else 0
+            if b['type']=='play_recording':duration=int(seconds*1000+0.5)
             if duration>0:
               _app.timer=(started if b['type']=='play_tone' else _app.clock.ticks_ms(),duration,
-                b['type'] in ('move_forward','move_backward','dc_motor'))
+                b['type'] in ('move_forward','move_backward','dc_motor','play_recording'))
             else:_app.complete()
       except Exception as error:
         _app.sensor_index=None
@@ -577,8 +1081,9 @@ def ota_step(context):
           diagnostic.update({'event':'native_exception','error':str(error)[:128],
             'error_type':type(error).__name__,'uptime_ms':_app.clock.ticks_ms(),
             'elapsed_ms':_app.clock.ticks_diff(_app.clock.ticks_ms(),started)})
-          if action[0]=='execute':
-            # Preserve ordinary command diagnostics before recovery Stop.
+          if action[0]=='execute' and not _app.motor_stop_needed and not _app.indexed_run:
+            # Preserve existing blocking-command diagnostics; nonblocking motor
+            # setpoints must Stop before any network diagnostic can delay them.
             try:
               _app.client.sock.settimeout(1)
               _app.client.publish((_app.prefix+'log').encode(),json.dumps(diagnostic).encode(),retain=False,qos=0)
@@ -588,23 +1093,35 @@ def ota_step(context):
           if item[1].get('type')=='program' and item[1].get('event')=='canceled']
         _app.cancel('native_error')
         _app.action=None
-        if action[0]=='drive':
+        if action[0]=='drive' or (action[0]=='execute' and _app.motor_stop_needed):
           # Queue locally: native drive may have moved before throwing. No
           # network diagnostic may delay Stop, including a failed Stop retry.
           _app.publish('log',diagnostic)
+        if not any(item[1].get('type')=='program' and item[1].get('event')=='canceled'
+            and item[1].get('run_id')==_app.run_id for item in _app.outgoing):
+          _app.event('failed',error=error)
         try:
           _app.io.stop()
           _app.drive_stopped()
         except Exception:
           # Keep the stop obligation latched; retry before any network/work.
-          if _app.drive_stopping is not None:return
-        _app.event('failed',error=error)
+          _app.motor_stop_needed=True
+          return
     for _ in range(8):
       _app.expire_drive()
-      if _app.drive_stopping is not None:
-        _app.io.stop()
+      _app.expire_program()
+      due_stop=_app.expire_motor()
+      if _app.drive_stopping is not None or (_app.motor_stop_needed and _app.timer is None):
+        _app.motor_stop_needed=True
+        try:_app.io.stop()
+        except Exception as error:
+          if due_stop:
+            _app.cancel('stop_error')
+            _app.event('failed',error=error)
+          return
         _app.drive_stopped()
         _app.action=None
+        if due_stop:_app.complete()
       if _app.client is None or not _app.outgoing:break
       suffix,data=_app.outgoing[0]
       try:
@@ -617,18 +1134,30 @@ def ota_step(context):
         if _app.run_id is None:_app.run_id=data.get('run_id')
         _app.disconnect(_app.clock.ticks_ms())
         _app.action=None
-        _app.io.stop()
+        _app.motor_stop_needed=True
+        try:_app.io.stop()
+        except Exception:return
         _app.drive_stopped()
         break
     _app.expire_drive()
-    if _app.drive_stopping is not None:
-      _app.io.stop()
+    _app.expire_program()
+    due_stop=_app.expire_motor()
+    if _app.drive_stopping is not None or (_app.motor_stop_needed and _app.timer is None):
+      _app.motor_stop_needed=True
+      try:_app.io.stop()
+      except Exception as error:
+        if due_stop:
+          _app.cancel('stop_error')
+          _app.event('failed',error=error)
+        return
       _app.drive_stopped()
       _app.action=None
+      if due_stop:_app.complete()
     if _app.client is None:_app.sensor_index=None
     # Retain correlation through final native IO and all queued publications.
     if _app.blocks is None and not _app.outgoing and not _app.lost:
       _app.run_id=None
+      _app.indexed_run=False
   except Exception as error:
     print('MOTOR_APP_ERROR:',repr(error))
     try:

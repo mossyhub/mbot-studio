@@ -213,7 +213,15 @@ test('clicking a nested reporter selects only that reporter before Delete', asyn
   await expect(page.locator('.se-script.main .editing')).toHaveCount(1);
   await page.keyboard.press('Delete');
   await expect.poll(() => saved(page)).toEqual([{ type: 'wait', _id: 'wait' }]);
-  await expect(page.locator('.se-script.main input')).toHaveValue('1');
+  // Deleting a reporter removes the slot; an unknown runtime has no proven
+  // omission default. Do not display a palette creation default as stored data.
+  await expect(page.locator('.se-script.main input')).toHaveValue('');
+  await expect(page.locator('.se-script.main')).toContainText('Missing duration; enter a value.');
+  await page.evaluate(value => window.mountBlocks(value), await saved(page));
+  await expect(page.locator('.se-script.main input')).toHaveValue('');
+  expect(await saved(page)).toEqual([{ type: 'wait', _id: 'wait' }]);
+  await page.locator('.se-script.main input').fill('1');
+  await expect.poll(() => saved(page)).toEqual([{ type: 'wait', _id: 'wait', duration: 1 }]);
 });
 
 test('Escape cancels a highlighted connection without changing either script', async ({ page }) => {

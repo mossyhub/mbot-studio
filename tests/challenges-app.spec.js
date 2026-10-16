@@ -62,7 +62,24 @@ test('editing a submitted non-solution into a solution cannot credit the older r
  const f=await mount(page);await start(page);await page.locator('.se-script.main input[type="number"]').last().fill('1');await expect(page.getByRole('button',{name:'Run Program'})).toBeEnabled();await page.getByRole('button',{name:'Run Program'}).click();await expect.poll(()=>f.posts.length).toBe(1);await page.locator('.se-script.main input[type="number"]').last().fill('2');f.send();await expect(page.getByTestId('program-lifecycle')).toContainText('Completed');expect(await saved(page)).toEqual({});
 });
 test('Stop invalidates earning before the cancellation event arrives',async({page})=>{
- const f=await mount(page);await start(page);await page.getByRole('button',{name:'Run Program'}).click();await expect.poll(()=>f.posts.length).toBe(1);await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();f.send();await expect(page.getByTestId('program-lifecycle')).toContainText('Completed');expect(await saved(page)).toEqual({});
+ const f=await mount(page);await start(page);
+ const status=page.getByTestId('program-lifecycle');
+ const run=page.getByRole('button',{name:'Run Program'});
+ await run.click();await expect(status).toContainText('Submitted');
+ await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();
+ await expect(status).toContainText('device stop is not confirmed');
+ // An in-flight completion can arrive after Stop. It cannot become success or credit.
+ f.send();await expect(status).toContainText('Unverified');
+ await expect(status).not.toContainText('Completed');
+ expect(await saved(page)).toEqual({});
+ expect(await page.evaluate(()=>localStorage.getItem('mbot-studio-achievements:a')||'')).not.toContain('first_program');
+ await expect(run).toBeEnabled();await run.click();
+ await expect(status).toContainText('Submitted — awaiting device confirmation (run-2)');
+ f.send('canceled','run-1');f.send('completed','run-1');
+ await expect(status).toContainText('Submitted — awaiting device confirmation (run-2)');
+ f.send('completed','run-2');await expect(page.getByTestId('mission-strip')).toContainText('Device-confirmed');
+ expect((await saved(page)).ch_forward.runId).toBe('run-2');
+ expect(f.posts).toHaveLength(2);expect(f.unexpected).toEqual([]);
 });
 test('historical reused badge IDs keep original meanings and dates while current awards stay independent',async({page})=>{
  const f=await mount(page);

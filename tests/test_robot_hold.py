@@ -388,7 +388,7 @@ def test_native_drive_side_effect_failure_stops_before_network_and_latches_retry
         assert m._app.drive_stopping is not None
         send(client, packet(hold_id='cannot-run'), 'drive')
         client.check_msg = lambda: trace.append('network-check')
-        with pytest.raises(RuntimeError, match='stop fault'): m.ota_step(ctx)
+        m.ota_step(ctx)  # Retryable Stop must not evict the loader application.
         assert trace == ['motor-side-effect', 'stop', 'stop']
         assert not any(d['event']=='stopped' for d in evidence(client))
         stop_fails = False

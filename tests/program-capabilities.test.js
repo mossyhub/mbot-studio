@@ -20,6 +20,15 @@ const lowerableTypes = ['say', 'repeat', 'set_variable', 'change_variable', 'var
   'op_round', 'op_abs', 'op_function', 'op_join', 'op_letter', 'op_length',
   'op_gt', 'op_lt', 'op_eq', 'op_and', 'op_or', 'op_not', 'op_contains'];
 
+test('recorded audio is gated on installed capability and online status, never legacy unknown', () => {
+  const online = {robotOnline:true,capabilities:['recorded_audio_v1']};
+  assert.equal(capabilities.getProgramBlockCapability('play_recording',online).supported,true);
+  for(const status of [null,{}, {...online,robotOnline:false}, {...online,capabilities:['play_recording']}]) {
+    const result=capabilities.getProgramBlockCapability('play_recording',status);
+    assert.equal(result.supported,false);assert.equal(result.status,'requires-runtime');
+  }
+});
+
 test('every available AV palette default and finite slot variant passes real server admission without publishing', () => {
   const service = new MqttService(); // No connect, sendCommand or sendProgram.
   service.robotStatusMetadata = { ...av, capabilities: flatTypes, application: 'cooperative-v1', motion_enabled: true, armed: true };
@@ -108,7 +117,7 @@ test('palette filtering is non-destructive and unknown runtimes retain the full 
   const supported = getProgramPalette(catalog, runtime);
   assert.deepEqual(supported.map(row => row.type).sort(), [...flatTypes].sort());
   const all = getProgramPalette(catalog, runtime, { includeUnavailable: true });
-  assert.equal(all.length, 66);
+  assert.equal(all.length, 67); // Adds the capability-gated saved voice clip.
   assert.equal(all.find(row => row.type === 'sensor_distance').capability.status, 'requires-runtime');
   assert.equal(all.find(row => row.type === 'turn_left').definition.slots.length, 1);
   const lowered = getProgramPalette(catalog, runtime, { loweredTypes: ['repeat', 'op_add'] });
@@ -116,7 +125,7 @@ test('palette filtering is non-destructive and unknown runtimes retain the full 
   assert.deepEqual(getProgramPalette(catalog, { ...av, capabilities: [] }), []);
   for (const status of [null, {}, { build: 'legacy' }, { build: 'mbot-motor-control-v1' }]) {
     const rows = getProgramPalette(catalog, status);
-    assert.equal(rows.length, all.length);
+    assert.equal(rows.length, all.length - 1); // Voice is never legacy-unknown support.
     assert.strictEqual(rows.find(row => row.type === 'turn_left').definition, catalog.turn_left);
     assert.ok(rows.every(row => row.capability.status === 'unknown'));
   }
@@ -128,7 +137,7 @@ test('inventory covers every catalog entry and gates lowering on the verified se
   assert.ok(capabilities.PROGRAM_BLOCK_INVENTORY, 'an explicit inventory is required');
   const inventory = capabilities.PROGRAM_BLOCK_INVENTORY;
   assert.deepEqual(Object.keys(inventory).sort(), Object.keys(catalog).sort());
-  assert.equal(Object.keys(inventory).length, 73);
+  assert.equal(Object.keys(inventory).length, 74); // play_recording is a distinct persisted-asset command.
   for (const [type, entry] of Object.entries(inventory)) {
     const expected = flatTypes.includes(type) ? 'flat'
       : lowerableTypes.includes(type) ? 'server-lowered' : 'requires-runtime';

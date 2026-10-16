@@ -77,7 +77,7 @@ export const CHALLENGES = [
   mission('ch_nested_pattern','Pattern Architect',3,'🧩','Compose a finite pattern inside another pattern.',[
     goal('Run a repeat inside another repeat.',e=>has(e,'nested_repeat')),
     goal('Produce at least 4 LED changes and 4 positive waits.',e=>of(e,'set_led').length>=4&&of(e,'wait').filter(b=>duration(b)>0).length>=4),
-  ],[repeat(2,repeat(2,led('blue')))],'Add a short wait to the inner pattern. Count the expanded steps; stay within 32.'),
+  ],[repeat(2,repeat(2,led('blue')))],'Add a short wait to the inner pattern. Check the connected robot limits above Run: repeats count as executed steps, while distinct commands and total requested holds have separate budgets.'),
   mission('ch_elbow_care','Elbow Check',3,'🦾','Send two nearby S1 elbow commands with a pause.',[
     goal('Command S1 twice with values between 65 and 100, differing by 5–15.',e=>{const a=of(e,'servo').filter(b=>b.port==='S1');return a.length===2&&a.every(b=>b.angle>=65&&b.angle<=100&&(b.speed??0)===0)&&Math.abs(a[0].angle-a[1].angle)>=5&&Math.abs(a[0].angle-a[1].angle)<=15;}),
     goal('Pause at least 0.5 seconds between elbow commands.',e=>sequence({program:e.program.filter(b=>b.type!=='wait'||duration(b)>=0.5)},['servo','wait','servo'])),

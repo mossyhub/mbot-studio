@@ -1,0 +1,27 @@
+{
+  "name": "Fixture robot",
+  "additions": [
+    {
+      "port": "S1", "type": "servo", "label": "arm",
+      "partOf":"robot arm", "purpose":"Ground and Straight up and Straight out the arm",
+      "orientation": "vertical", "feedbackType": "position",
+      "states": ["ground", "straight up", "straight out"],
+      "homeState": "straight out", "stallBehavior": "safe",
+      "actions": [
+        {"name":"ground", "targetState":"ground", "angle":56},
+        {"name":"straight up", "targetState":"straight up", "angle":180},
+        {"name":"straight out", "targetState":"straight out", "angle":91}
+      ]
+    },
+    {
+      "port": "M1", "type": "dc_motor", "label": "claw",
+      "partOf":"robot arm", "purpose":"Close and Open the claw",
+      "motorStyle": "gripper", "feedbackType": "none",
+      "states": ["close", "open"], "homeState": "open", "stallBehavior":"safe",
+      "actions": [
+        {"name":"close", "targetState":"close", "motorDirection":"forward", "speed":100, "duration":4.1},
+        {"name":"open", "targetState":"open", "motorDirection":"reverse", "speed":100, "duration":4.4}
+      ]
+    }
+  ]
+}

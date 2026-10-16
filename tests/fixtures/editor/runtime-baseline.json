@@ -1,0 +1,5 @@
+{
+  "build":"mbot-av-control-v1", "application":"cooperative-v1",
+  "motion_enabled":true, "armed":true, "robotOnline":true,
+  "capabilities":["move_forward","move_backward","dc_motor","servo","wait","stop","display_text","set_led","read_sensors","status","turn_left","turn_right","play_tone","play_sound","set_volume","stop_sound","display_animation","drive_hold","drive_tap","motor_power_100","turn_angle_360"]
+}

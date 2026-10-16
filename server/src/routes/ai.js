@@ -1,10 +1,37 @@
 import { Router } from 'express';
 import { generateProgram, chatWithAI, getAiDiagnostics, getModel } from '../services/ai-service.js';
-import { blocksToMicroPython } from '../services/code-generator.js';
+import { programToMicroPython } from '../services/code-generator.js';
 import { loadConfig } from './config.js';
 import { MqttService } from '../services/mqtt-service.js';
 import { SessionStore } from '../services/session-store.js';
 import { getSessionId, validateBlocks, validateMessage } from '../services/validation.js';
+
+// Use the same compiler and installed-runtime admission as Run. This is only
+// a preview: never publish, repair returned parameters, or infer execution.
+function preflightGeneratedProgram(result, mqtt, robotConfig) {
+  if (!Object.hasOwn(result, 'program')) return result;
+  const status = mqtt.getRobotStatus();
+  if (status.application !== 'cooperative-v1' || status.build !== 'mbot-av-control-v1') {
+    return result.program ? { ...result, pythonCode: programToMicroPython(result.program, robotConfig, mqtt) } : result;
+  }
+  try {
+    return { ...result, pythonCode: programToMicroPython(result.program, robotConfig, mqtt) };
+  } catch (error) {
+    if (error.code === 'PYTHON_PREVIEW_UNAVAILABLE') {
+      // Admission succeeded; preserve the usable editor proposal, but never
+      // substitute a comment-only/legacy export for managed AV behavior.
+      const { pythonCode, ...proposal } = result;
+      return { ...proposal, previewUnavailable: { code: error.code, reason: error.message } };
+    }
+    const { program, pythonCode, explanation, ...rest } = result;
+    return { ...rest, success: false, runnable: false, rejectedProgram: program,
+      error: error.message,
+      chat: `I couldn't make a runnable program for this robot: ${error.message}. No program was changed or run.`,
+      errors: [{ code: error.code || 'PROGRAM_INVALID', message: error.message,
+        sourceId: error.sourceId ?? null, path: error.path ?? 'program' }],
+    };
+  }
+}
 
 export const aiRoutes = Router();
 
@@ -55,13 +82,9 @@ aiRoutes.post('/generate', async (req, res) => {
     const robotConfig = loadConfig();
     const history = conversations.get(sessionId);
 
-    const hardwareStates = MqttService.getInstance().getHardwareStates();
-    const result = await generateProgram(msgValidation.value, robotConfig, history, validatedCurrentBlocks, hardwareStates);
-
-    conversations.append(sessionId, [
-      { role: 'user', content: msgValidation.value },
-      { role: 'assistant', content: JSON.stringify(result) },
-    ]);
+    const mqtt = MqttService.getInstance();
+    const hardwareStates = mqtt.getHardwareStates();
+    const result = preflightGeneratedProgram(await generateProgram(msgValidation.value, robotConfig, history, validatedCurrentBlocks, hardwareStates, mqtt.getRobotStatus()), mqtt, robotConfig);
 
     // Home actions are prepended in robot.js when the program is sent to the robot.
     // Do NOT add them here — it would cause double homing.
@@ -69,7 +92,9 @@ aiRoutes.post('/generate', async (req, res) => {
     // If we got a program, update assumed states for any actions that have targetState
     if (result.program) {
       const mqtt = MqttService.getInstance();
-      for (const block of result.program) {
+      // Generation is not execution. Retain legacy assumptions only for the
+      // unknown/legacy runtime; cooperative hardware state is device-owned.
+      for (const block of mqtt.isCooperativeApp() ? [] : result.program) {
         if (block.type === 'dc_motor' && block.port) {
           // Find the matching action in config to get targetState
           const addition = robotConfig.additions?.find(a => a.port === block.port);
@@ -87,9 +112,13 @@ aiRoutes.post('/generate', async (req, res) => {
           }
         }
       }
-      result.pythonCode = blocksToMicroPython(result.program, robotConfig);
     }
 
+    // A proposal is recorded only after its preview has been constructed.
+    if (!result.previewUnavailable) conversations.append(sessionId, [
+      { role: 'user', content: msgValidation.value },
+      { role: 'assistant', content: JSON.stringify(result) },
+    ]);
     res.json(result);
   } catch (error) {
     console.error('Generate error:', error);
@@ -114,19 +143,15 @@ aiRoutes.post('/chat', async (req, res) => {
     const robotConfig = loadConfig();
     const history = conversations.get(sessionId);
 
-    const hardwareStates = MqttService.getInstance().getHardwareStates();
-    const result = await chatWithAI(msgValidation.value, robotConfig, history, hardwareStates);
+    const mqtt = MqttService.getInstance();
+    const hardwareStates = mqtt.getHardwareStates();
+    const result = preflightGeneratedProgram(await chatWithAI(msgValidation.value, robotConfig, history, hardwareStates, mqtt.getRobotStatus()), mqtt, robotConfig);
 
-    conversations.append(sessionId, [
+    // A proposal is recorded only after its preview has been constructed.
+    if (!result.previewUnavailable) conversations.append(sessionId, [
       { role: 'user', content: msgValidation.value },
       { role: 'assistant', content: JSON.stringify(result) },
     ]);
-
-    // If AI decided to generate a program, include Python code too
-    if (result.program) {
-      result.pythonCode = blocksToMicroPython(result.program, robotConfig);
-    }
-
     res.json(result);
   } catch (error) {
     console.error('Chat error:', error);
@@ -146,10 +171,10 @@ aiRoutes.post('/blocks-to-code', (req, res) => {
       return res.status(400).json({ error: blocksValidation.error });
     }
     const robotConfig = loadConfig();
-    const code = blocksToMicroPython(blocksValidation.value, robotConfig);
+    const code = programToMicroPython(blocksValidation.value, robotConfig, MqttService.getInstance());
     res.json({ code });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 422).json({ error: error.message, errorCode: error.code || 'PYTHON_PREVIEW_UNAVAILABLE' });
   }
 });
 
