@@ -9,7 +9,8 @@ OTA_BUILD_ID='mbot-av-control-v1'
 DIAGNOSTIC_REVISION='native-boundary-v1'
 CAPS=('move_forward','move_backward','dc_motor','servo','wait',
     'stop','display_text','set_led','read_sensors','status','turn_left','turn_right',
-    'play_tone','play_sound','set_volume','stop_sound','display_animation','drive_hold')
+    'play_tone','play_sound','set_volume','stop_sound','display_animation','drive_hold',
+    'drive_tap','motor_power_100','turn_angle_360')
 COLORS=('red','green','blue','yellow','cyan','purple','white','orange','off')
 
 def number(p,key,default,low,high):
@@ -37,7 +38,8 @@ def validate(blocks):
     t=p.get('type')
     allowed=('type','run_id')
     if t in ('move_forward','move_backward','dc_motor'):
-      number(p,'speed',20,-50 if t=='dc_motor' else 0,50)
+      # Forward/backward use vendor RPM; DC motor uses signed percent power.
+      number(p,'speed',20,-100 if t=='dc_motor' else 0,100)
       number(p,'duration',1,0,5)
       allowed += ('speed','duration')
       if t=='dc_motor':
@@ -45,8 +47,8 @@ def validate(blocks):
           raise ValueError('port')
         allowed += ('port',)
     elif t in ('turn_left','turn_right'):
-      # Native turn may block; cap each command. Speed/duration are unavailable.
-      number(p,'angle',0,0,30)
+      # One native turn may block until return; never split or repeat it.
+      number(p,'angle',0,0,360)
       allowed += ('angle',)
     elif t=='servo':
       if p.get('port') not in ('S1','S2','S3','S4'):
@@ -189,21 +191,21 @@ class Control:
         elif char==58:fields+=1
       if fields!=len(request):raise ValueError('duplicate')
       op=request.get('op')
-      keys=('op','hold_id','boot','direction','speed') if op=='start' else ('op','hold_id','boot')
-      if op not in ('start','renew','stop') or len(request)!=len(keys) or any(k not in keys for k in request):
+      keys=('op','hold_id','boot','direction','speed') if op in ('start','tap') else ('op','hold_id','boot')
+      if op not in ('start','tap','renew','stop') or len(request)!=len(keys) or any(k not in keys for k in request):
         raise ValueError('fields')
       if type(request['hold_id']) is not str or not 1<=len(request['hold_id'])<=64:
         raise ValueError('hold_id')
       if type(request['boot']) is not str or request['boot']!=self.ctx.boot:raise ValueError('boot')
-      if op=='start':
+      if op in ('start','tap'):
         if request['direction'] not in ('forward','backward','left','right'):raise ValueError('direction')
-        number(request,'speed',None,0,50)
+        number(request,'speed',None,0,100)
     except Exception:
       hold_id=request.get('hold_id') if type(request) is dict else None
       if type(hold_id) is not str or len(hold_id)>64:hold_id=''
       self.drive_event({'hold_id':hold_id,'boot':self.ctx.boot},'rejected','malformed')
       return
-    if op=='start':
+    if op in ('start','tap'):
       if (self.initial_stop or self.client is None or self.drive is not None or self.drive_stopping is not None
           or self.blocks is not None or self.pending is not None or self.native_pending is not None
           or self.timer is not None or self.action is not None or self.stop_pending is not None
@@ -216,6 +218,9 @@ class Control:
       self.action=('drive',request)
     elif self.drive is not None and request['hold_id']==self.drive['hold_id']:
       if op=='renew':
+        if self.drive['op']=='tap':
+          self.drive_event(request,'rejected','not_renewable')
+          return
         # Pending starts cannot extend their original deadline. Ignore early
         # renewals: a rejection would incorrectly terminate the server owner.
         if self.drive_started:self.drive_at=self.clock.ticks_ms()
@@ -223,8 +228,10 @@ class Control:
     else:self.drive_event(request,'rejected','inactive')
 
   def expire_drive(self):
-    if self.drive is not None and self.clock.ticks_diff(self.clock.ticks_ms(),self.drive_at)>=700:
-      self.cancel('expired')
+    if self.drive is not None:
+      tap=self.drive['op']=='tap' and self.drive_started
+      if self.clock.ticks_diff(self.clock.ticks_ms(),self.drive_at)>=(400 if tap else 700):
+        self.cancel('tap_completed' if tap else 'expired')
 
   def drive_stopped(self):
     stopped,self.drive_stopping=self.drive_stopping,None
@@ -551,6 +558,9 @@ def ota_step(context):
           diagnostic['uptime_ms']=_app.clock.ticks_ms()
           _app.publish('log',diagnostic)
           if action[0]=='drive':
+            # Tap gets its full bounded pulse only after successful native return.
+            # Pending admission still uses the original 700ms receipt deadline.
+            if action[1]['op']=='tap':_app.drive_at=_app.clock.ticks_ms()
             _app.drive_started=True
             _app.drive_event(action[1],'started')
           else:

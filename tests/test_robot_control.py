@@ -312,7 +312,7 @@ def test_validation_is_whole_program_and_strict():
     assert m.validate([{'type':'move_forward','params':{'speed':10,'duration':0.1},'_id':'ui'}])[0]['speed'] == 10
     for blocks in ([{'type':'stop'}]*33, [{'type':'stop'}, {'type':'repeat'}],
                    [{'type':'servo','port':'S1','angle':90,'speed':1}],
-                   [{'type':'move_forward','speed':51,'duration':1}],
+                   [{'type':'move_forward','speed':101,'duration':1}],
                    [{'type':'wait','duration':float('nan')}],
                    [{'type':'set_led','color':'unknown'}]):
         with pytest.raises(ValueError):
@@ -682,12 +682,14 @@ def test_repeated_sensor_requests_do_not_restart_an_active_scan(monkeypatch):
 def test_turn_validation_is_bounded_strict_and_advertised(kind):
     m, ctx, clock, io, client = setup()
     assert kind in m.CAPS
+    assert 'turn_angle_360' in m.CAPS
+    assert 'turn_angle_360' in client.events[-1][1]['capabilities']
     assert kind in client.events[-1][1]['capabilities']
     assert m.validate([{'type': kind}]) == [{'type': kind, 'angle': 0}]
-    for angle in (0, 0.5, 15, 30):
+    for angle in (0, 0.5, 15, 30, 31, 90, 360):
         assert m.validate([{'type': kind, 'params': {'angle': angle}}]) == [
             {'type': kind, 'angle': angle}]
-    for angle in (-0.1, 30.1, 90, True, False, '10', None,
+    for angle in (-0.1, 360.1, 361, True, False, '10', None,
                   float('nan'), float('inf'), -float('inf')):
         with pytest.raises(ValueError, match='angle'):
             m.validate([{'type': kind, 'angle': angle}])
@@ -698,7 +700,7 @@ def test_turn_validation_is_bounded_strict_and_advertised(kind):
 
 @pytest.mark.parametrize('kind,sign', [('turn_left', -1), ('turn_right', 1)])
 @pytest.mark.parametrize('failure', [False, True])
-@pytest.mark.parametrize('angle', [0, 0.5, 30])
+@pytest.mark.parametrize('angle', [0, 0.5, 30, 90, 360])
 def test_native_turn_sign_zero_shallow_completion_and_failure_stop(monkeypatch, kind, sign, failure, angle):
     import inspect
     import sys
@@ -963,6 +965,38 @@ def test_blocking_tone_does_not_add_a_second_duration(monkeypatch):
     assert m._app.timer is None and m._app.blocks is None
     assert calls == [('tone', (440, 2), {})]
     assert any(e.get('run_id') == 'blocking-tone' and e.get('event') == 'completed' for _, e in client.events)
+
+
+@pytest.mark.parametrize('kind', ['move_forward', 'move_backward', 'dc_motor'])
+@pytest.mark.parametrize('speed', [0, 50, 100])
+def test_program_motor_full_range_preserves_native_units(kind, speed, monkeypatch):
+    import sys
+    m, ctx, clock, io, client = setup()
+    calls = []
+    mbot = SimpleNamespace(forward=lambda n: calls.append(('rpm', n)),
+        backward=lambda n: calls.append(('rpm', n)),
+        starter_shield=SimpleNamespace(dc_motor_set_power=lambda port, n: calls.append(('percent', port, n))))
+    for name, module in [('mbot2', mbot), ('mbuild', SimpleNamespace()),
+            ('cyberpi', SimpleNamespace(wifi=SimpleNamespace(is_connect=lambda: True))),
+            ('simple_mqtt', SimpleNamespace(MQTTClient=Client))]:
+        monkeypatch.setitem(sys.modules, name, module)
+    m._app.io = m.native()['io']
+    block = {'type': kind, 'speed': speed, 'duration': 1}
+    if kind == 'dc_motor': block['port'] = 'M1'
+    send(client, {'program': [block]}, 'program')
+    m.ota_step(ctx)
+    dispatch_prepared(m, ctx)
+    assert calls == [('percent', 1, speed)] if kind == 'dc_motor' else calls == [('rpm', speed)]
+    if kind == 'dc_motor':
+        block['speed'] = -speed
+        m._app.io.execute(m.validate([block])[0])
+        assert calls[-1] == ('percent', 1, -speed)
+    for invalid in (101, -101 if kind == 'dc_motor' else -1):
+        block['speed'] = invalid
+        with pytest.raises(ValueError, match='speed'): m.validate([block])
+    block['speed'] = speed
+    block['duration'] = 5.01
+    with pytest.raises(ValueError, match='duration'): m.validate([block])
 
 
 def test_emergency_callback_preempts_pending_motion_control_case():

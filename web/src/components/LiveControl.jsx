@@ -4,6 +4,8 @@ import SoundScreenControls from './SoundScreenControls';
 import './LiveControl.css';
 
 const MAX_MISSION_EVENTS = 500;
+const HOLD_DELAY_MS = 180;
+const TAP_TIMEOUT_MS = 3000;
 
 function createHoldId() {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -55,39 +57,38 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
   const directQueueGenerationRef = useRef(0);
   const driveRef = useRef(null);
   const [activeDirection, setActiveDirection] = useState(null);
+  const [motorPower, setMotorPower] = useState(50);
   const supportsDriveHold = Array.isArray(avStatus?.capabilities) && avStatus.capabilities.includes('drive_hold');
+  const supportsDriveTap = supportsDriveHold && avStatus.capabilities.includes('drive_tap');
+  const maxMotorPower = avStatus?.capabilities?.includes('motor_power_100') ? 100 : 50;
   const driveReady = supportsDriveHold && robotConnected && wsConnected && avStatus.armed === true && avStatus.motion_enabled === true
     && avStatus.robotOnline !== false && ![avStatus.status, avStatus.state, avStatus.robotState].includes('offline');
 
-  const cancelDrive = useCallback(() => {
+  const cancelDrive = useCallback((sendStop = true) => {
     const hold = driveRef.current;
     if (!hold) return;
     // Invalidate first: late timers, capture events and old device replies are inert.
     driveRef.current = null;
     clearInterval(hold.renewTimer);
     clearTimeout(hold.ackTimer);
+    clearTimeout(hold.intentTimer);
+    clearTimeout(hold.tapTimer);
     setActiveDirection(null);
-    if (hold.socket.readyState === WebSocket.OPEN) {
+    if (sendStop && hold.phase !== 'pending' && hold.socket.readyState === WebSocket.OPEN) {
       try { hold.socket.send(JSON.stringify({ type: 'drive_stop', hold_id: hold.id })); } catch { /* lease expires if transport is lost */ }
     }
-    if (hold.pointerId !== undefined && hold.element.hasPointerCapture?.(hold.pointerId)) {
+    if (hold.pointerId !== undefined && hold.element?.hasPointerCapture?.(hold.pointerId)) {
       hold.element.releasePointerCapture(hold.pointerId);
     }
   }, []);
 
-  const startDrive = (direction, owner) => {
-    if (!driveReady || driveRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
-    cancelDirectQueue();
-    aiRequestController.current?.abort();
-    aiRequestController.current = null;
-    setSending(false);
+  const startDrive = (hold) => {
+    if (driveRef.current !== hold || hold.phase !== 'pending' || wsRef.current !== hold.socket) return;
+    if (hold.socket.readyState !== WebSocket.OPEN) { cancelDrive(); return; }
     const now = performance.now();
-    const hold = { id: createHoldId(), socket: wsRef.current, direction, boot: avStatus.boot,
-      startedAt: now, lastAck: now, startAcknowledged: false, pendingRenews: 0, ...owner };
-    driveRef.current = hold;
-    setActiveDirection(direction);
+    Object.assign(hold, { phase: 'held', startedAt: now, lastAck: now, startAcknowledged: false, pendingRenews: 0 });
     const checkAck = () => {
-      if (driveRef.current !== hold) return false;
+      if (driveRef.current !== hold || wsRef.current !== hold.socket) return false;
       const now = performance.now();
       if ((!hold.startAcknowledged && now - hold.startedAt > 500) || now - hold.lastAck > 500) {
         cancelDrive();
@@ -106,7 +107,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     };
     hold.armAckWatchdog();
     try {
-      hold.socket.send(JSON.stringify({ type: 'drive_start', hold_id: hold.id, direction, speed: 30 }));
+      hold.socket.send(JSON.stringify({ type: 'drive_start', hold_id: hold.id, direction: hold.direction, speed: hold.speed }));
     } catch {
       cancelDrive();
       addLog('error', 'Drive canceled: transport failed.');
@@ -126,6 +127,58 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     }, 200);
   };
 
+  const beginDriveIntent = (direction, owner) => {
+    if (!driveReady || driveRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    cancelDirectQueue();
+    aiRequestController.current?.abort();
+    aiRequestController.current = null;
+    setSending(false);
+    const hold = { id: createHoldId(), socket: wsRef.current, direction, boot: avStatus.boot,
+      phase: 'pending', speed: Math.min(motorPower, maxMotorPower), tapCapable: supportsDriveTap,
+      pressedAt: performance.now(), ...owner };
+    driveRef.current = hold;
+    setActiveDirection(direction);
+    if (supportsDriveTap) hold.intentTimer = setTimeout(() => startDrive(hold), HOLD_DELAY_MS);
+    else startDrive(hold); // Older held-drive firmware has no native bounded-power tap.
+  };
+
+  const releaseDrive = (event) => {
+    const hold = driveRef.current;
+    if (!hold || hold.phase === 'tap') return;
+    if (hold.phase !== 'pending' || performance.now() - hold.pressedAt >= HOLD_DELAY_MS) {
+      cancelDrive();
+      return;
+    }
+    // Captured pointerup is retargeted to the button even when released outside it.
+    if (hold.pointerId !== undefined) {
+      const rect = hold.element.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX >= rect.right || event.clientY < rect.top || event.clientY >= rect.bottom) {
+        cancelDrive();
+        return;
+      }
+    }
+    if (wsRef.current !== hold.socket || hold.socket.readyState !== WebSocket.OPEN) { cancelDrive(); return; }
+    clearTimeout(hold.intentTimer);
+    hold.phase = 'tap';
+    // Release input ownership before releasePointerCapture fires lostcapture/blur.
+    const { element, pointerId } = hold;
+    delete hold.pointerId;
+    delete hold.key;
+    hold.element = null;
+    if (pointerId !== undefined && element?.hasPointerCapture?.(pointerId)) element.releasePointerCapture(pointerId);
+    hold.tapTimer = setTimeout(() => {
+      if (driveRef.current !== hold || wsRef.current !== hold.socket) return;
+      cancelDrive();
+      addLog('error', 'Tap canceled: device completion timed out. Press again to retry.');
+    }, TAP_TIMEOUT_MS);
+    try {
+      hold.socket.send(JSON.stringify({ type: 'drive_tap', hold_id: hold.id, direction: hold.direction, speed: hold.speed }));
+    } catch {
+      cancelDrive();
+      addLog('error', 'Tap canceled: transport failed.');
+    }
+  };
+
   const directionProps = (direction, command) => ({
     'aria-label': direction,
     'aria-describedby': 'drive-help',
@@ -138,24 +191,24 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       if (event.button !== 0 || event.isPrimary === false || driveRef.current) return;
       const element = event.currentTarget;
       element.focus();
-      startDrive(direction, { element, pointerId: event.pointerId });
+      beginDriveIntent(direction, { element, pointerId: event.pointerId });
       if (driveRef.current?.element === element) {
         try { element.setPointerCapture(event.pointerId); } catch { /* synthetic events have no active pointer */ }
       }
     },
-    onPointerUp: event => { if (driveRef.current?.pointerId === event.pointerId) cancelDrive(); },
+    onPointerUp: event => { if (driveRef.current?.pointerId === event.pointerId) releaseDrive(event); },
     onPointerCancel: event => { if (driveRef.current?.pointerId === event.pointerId) cancelDrive(); },
     onLostPointerCapture: event => { if (driveRef.current?.pointerId === event.pointerId) cancelDrive(); },
     onBlur: event => { if (driveRef.current?.element === event.currentTarget) cancelDrive(); },
     onKeyDown: event => {
       if (!supportsDriveHold || ![' ', 'Enter'].includes(event.key)) return;
       event.preventDefault();
-      if (!event.repeat && !driveRef.current) startDrive(direction, { element: event.currentTarget, key: event.key });
+      if (!event.repeat && !driveRef.current) beginDriveIntent(direction, { element: event.currentTarget, key: event.key });
     },
     onKeyUp: event => {
       if (!supportsDriveHold || ![' ', 'Enter'].includes(event.key)) return;
       event.preventDefault();
-      if (driveRef.current?.key === event.key && driveRef.current.element === event.currentTarget) cancelDrive();
+      if (driveRef.current?.key === event.key && driveRef.current.element === event.currentTarget) releaseDrive(event);
     },
   });
 
@@ -163,6 +216,8 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     const hold = driveRef.current;
     if (hold && (status?.boot !== hold.boot || status?.armed !== true || status?.motion_enabled !== true
       || !status?.capabilities?.includes('drive_hold') || status?.robotOnline === false
+      || (hold.tapCapable && !status?.capabilities?.includes('drive_tap'))
+      || (hold.speed > 50 && !status?.capabilities?.includes('motor_power_100'))
       || [status?.status, status?.state, status?.robotState].includes('offline'))) cancelDrive();
     setAvStatus(status);
   }, [cancelDrive]);
@@ -288,7 +343,11 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
           const msg = JSON.parse(event.data);
           if (msg.type === 'drive_ack') {
             const hold = driveRef.current;
-            if (!hold || hold.id !== msg.hold_id) return;
+            if (!hold || hold.id !== msg.hold_id || hold.phase === 'pending') return;
+            if (hold.phase === 'tap') {
+              if (msg.op === 'tap') addLog('system', `Tap submitted [hold_id=${hold.id}] — submission only, not confirmed movement`);
+              return; // No renewal or hold ACK watchdog for a device-bounded tap.
+            }
             const now = performance.now();
             if ((!hold.startAcknowledged && now - hold.startedAt > 500) || now - hold.lastAck > 500) {
               cancelDrive();
@@ -311,7 +370,9 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
             const status = msg.data;
             const hold = driveRef.current;
             if (!hold || hold.id !== status?.hold_id) return;
-            if (status.boot !== hold.boot || ['stopped', 'rejected'].includes(status.event)) cancelDrive();
+            if (status.boot !== hold.boot || ['stopped', 'rejected'].includes(status.event)) {
+              cancelDrive(hold.phase !== 'tap' || status.boot !== hold.boot);
+            }
             addLog('robot', `Device drive ${status.event} [hold_id=${status.hold_id}]${status.reason ? `: ${status.reason}` : ''}`);
             recordMissionEvent('drive_status', status);
           } else if (msg.type === 'mqtt' && msg.topic === 'robot/sensors') {
@@ -340,6 +401,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
             addLog('system', `✅ Command sent: ${msg.command}${msg.run_id ? ` [run_id=${msg.run_id}] — submission only; see device execution events` : ''}`);
             recordMissionEvent('ack', { command: msg.command, ...(msg.run_id ? { run_id: msg.run_id } : {}) });
           } else if (msg.type === 'error') {
+            cancelDrive();
             addLog('error', `❌ ${msg.message}`);
             recordMissionEvent('ws_error', { message: msg.message });
           }
@@ -609,12 +671,20 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         {/* Direction Pad */}
         <div className="direction-pad">
           <h3>Quick Controls</h3>
+          {supportsDriveHold && <div className="live-subtext">
+            <label htmlFor="drive-power">Motor power (%)</label>{' '}
+            <output htmlFor="drive-power">{Math.min(motorPower, maxMotorPower)}%</output>
+            <input id="drive-power" type="range" min="0" max={maxMotorPower} step="1"
+              value={Math.min(motorPower, maxMotorPower)} disabled={!driveReady || !!activeDirection}
+              aria-describedby="drive-help"
+              onChange={event => { if (!driveRef.current) setMotorPower(Number(event.target.value)); }} />
+          </div>}
           <p id="drive-help" className="live-subtext" role="status">
             {supportsDriveHold
-              ? 'Hold a direction to drive; release to stop. Space or Enter works on a focused direction. ACK means submission, not confirmed movement.'
+              ? `${supportsDriveTap ? 'Tap for a bounded 400 ms nudge at the selected power. Hold for 180 ms to drive continuously; release to stop. ' : 'Hold a direction to drive at the selected power; release to stop. Firmware update required for bounded-power taps. '}Space or Enter works on a focused direction. Power is captured at press; 0% requests no motor power. ACK means submission, not confirmed movement.`
               : 'Firmware update required for hold-to-drive. Tap-only fallback: each press sends one bounded movement; release does not shorten it. Use STOP to cancel.'}
             {supportsDriveHold && !driveReady && ' Connect and arm the robot with motion enabled to drive.'}
-            {activeDirection && ` Requesting ${activeDirection}. Other commands are paused until release.`}
+            {activeDirection && ` Requesting ${activeDirection}. Other commands are paused until release or tap completion.`}
           </p>
           <div className="dpad">
             <div className="dpad-row">

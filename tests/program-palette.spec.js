@@ -15,6 +15,38 @@ async function mount(page, blocks=[], robotStatus=status) {
   await page.addScriptTag({content:bundle});
   await page.evaluate(({blocks,robotStatus})=>window.mount(blocks,robotStatus),{blocks,robotStatus});
 }
+test('power and native angle controls expand only on advertised capabilities without rewriting saved values', async ({page}) => {
+  const blocks = [
+    { type: 'move_forward', speed: 100, duration: 1, _id: 'forward' },
+    { type: 'dc_motor', port: 'M1', speed: -100, duration: 1, _id: 'motor' },
+    { type: 'turn_left', angle: 360, _id: 'left' },
+  ];
+  await mount(page, blocks);
+  const forward = page.getByRole('group', { name: 'move forward block', exact: true }).locator('input').first();
+  const dc = page.getByRole('group', { name: 'DC motor block', exact: true }).locator('input').first();
+  const angle = page.getByRole('group', { name: 'turn left block', exact: true }).locator('input');
+  await expect(forward).toHaveAttribute('max', '50');
+  await expect(dc).toHaveAttribute('min', '-50');
+  await expect(angle).toHaveAttribute('max', '30');
+  await expect(forward).toHaveValue('100');
+  await expect(dc).toHaveValue('-100');
+  await expect(angle).toHaveValue('360');
+  const expanded = { ...status, capabilities: [...status.capabilities, 'motor_power_100', 'turn_angle_360'] };
+  await page.evaluate(({blocks, runtime}) => window.mount(blocks, runtime), { blocks, runtime: expanded });
+  await expect(forward).toHaveAttribute('max', '100');
+  await expect(dc).toHaveAttribute('min', '-100');
+  await expect(dc).toHaveAttribute('max', '100');
+  await expect(angle).toHaveAttribute('max', '360');
+  expect(await page.evaluate(() => window.saved)).toBeUndefined();
+  await angle.fill('90');
+  expect((await page.evaluate(() => window.saved))[2].angle).toBe(90);
+  await angle.fill('360');
+  expect((await page.evaluate(() => window.saved))[2].angle).toBe(360);
+  await page.evaluate(runtime => window.mount(window.saved, runtime), status);
+  await expect(angle).toHaveAttribute('max', '30');
+  await expect(angle).toHaveValue('360');
+});
+
 test('legacy values remain visible and unchanged with AV controls; legacy else is editable', async ({page})=>{
   const blocks=[{type:'turn_left',speed:75,angle:90},{type:'play_sound',sound:'meow'},{type:'if_predicate',cond:true,then:[],else:[{type:'wait',duration:2}]}];
   await mount(page,blocks);

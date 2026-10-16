@@ -15,17 +15,22 @@ export class DriveHold {
   submit(owner, message) {
     this.checkLease();
     this.checkStatus();
+    if (!['drive_start', 'drive_tap', 'drive_renew', 'drive_stop'].includes(message?.type)) fail('Invalid drive type');
     const op = message.type.slice('drive_'.length);
     const { hold_id } = message;
-    const fields = op === 'start' ? ['type', 'hold_id', 'direction', 'speed'] : ['type', 'hold_id'];
+    const beginsDrive = op === 'start' || op === 'tap';
+    const fields = beginsDrive ? ['type', 'hold_id', 'direction', 'speed'] : ['type', 'hold_id'];
     if (typeof hold_id !== 'string' || !UUID.test(hold_id) ||
         Object.keys(message).some(key => !fields.includes(key))) fail('Invalid drive fields or hold_id UUID');
-    if (op === 'start') {
+    if (beginsDrive) {
       if (this.active) fail('Drive already owned; release before starting');
+      const capabilities = this.mqtt.robotStatusMetadata.capabilities;
+      const maxPower = Array.isArray(capabilities) && capabilities.includes('motor_power_100') ? 100 : 50;
       if (!['forward', 'backward', 'left', 'right'].includes(message.direction) ||
           typeof message.speed !== 'number' || !Number.isFinite(message.speed) ||
-          message.speed < 0 || message.speed > 50) fail('Drive requires direction and speed in 0..50');
+          message.speed < 0 || message.speed > maxPower) fail(`Drive requires direction and speed in 0..${maxPower}`);
       this.validateStatus();
+      if (op === 'tap' && !capabilities.includes('drive_tap')) fail('Drive tap unsupported');
       if (!['ready', 'idle', 'stopped'].includes(this.mqtt.robotState)) fail('Robot is busy or not ready');
       const used = this.usedIds.get(owner) || new Set();
       if (used.has(hold_id)) fail('Hold ID already consumed; use a fresh UUID');
@@ -33,11 +38,12 @@ export class DriveHold {
       if (used.size >= 4096) fail('Drive session limit reached; reconnect before a fresh press');
       used.add(hold_id);
       this.usedIds.set(owner, used);
-      this.active = { owner, hold_id, boot: this.mqtt.robotStatusMetadata.boot };
+      this.active = { owner, hold_id, op, speed: message.speed, boot: this.mqtt.robotStatusMetadata.boot };
       this.publish({ op, hold_id, boot: this.active.boot, direction: message.direction, speed: message.speed });
       this.renewLease();
     } else {
       if (!this.active || this.active.owner !== owner || this.active.hold_id !== hold_id) fail('No matching active drive owned by this socket');
+      if (op === 'renew' && this.active.op === 'tap') fail('Tap cannot be renewed');
       this.publish({ op, hold_id, boot: this.active.boot });
       if (op === 'stop') this.invalidate('released', false);
       else this.renewLease();
@@ -85,7 +91,10 @@ export class DriveHold {
   }
 
   renewLease() {
-    this.active.deadline = this.now() + 500;
+    // Tap is a device-bounded pulse, not a browser-renewed hold. This ceiling
+    // includes native start delay; started events never extend ownership.
+    const timeout = this.active.op === 'tap' ? 3000 : 500;
+    this.active.deadline = this.now() + timeout;
     clearTimeout(this.timer);
     const active = this.active;
     const check = () => {
@@ -96,7 +105,7 @@ export class DriveHold {
         this.timer.unref();
       }
     };
-    this.timer = setTimeout(check, 500);
+    this.timer = setTimeout(check, timeout);
     this.timer.unref();
   }
 
@@ -109,6 +118,9 @@ export class DriveHold {
     try {
       this.validateStatus();
       if (this.active.boot !== this.mqtt.robotStatusMetadata.boot) fail('Robot boot changed');
+      const caps = this.mqtt.robotStatusMetadata.capabilities;
+      if (this.active.op === 'tap' && !caps.includes('drive_tap')) fail('Drive tap unsupported');
+      if (this.active.speed > 50 && !caps.includes('motor_power_100')) fail('Motor power capability changed');
     } catch (error) { this.invalidate(error.message); }
   }
 

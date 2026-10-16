@@ -98,5 +98,15 @@ export function getProgramBlockDefinition(type, definition, runtimeStatus) {
       slots.push({ ...override, key });
     }
   }
+  if (['move_forward', 'move_backward', 'dc_motor'].includes(type) &&
+      Array.isArray(runtimeStatus.capabilities) && runtimeStatus.capabilities.includes('motor_power_100')) {
+    const speed = slots.find(slot => slot.key === 'speed');
+    if (speed) Object.assign(speed, { min: type === 'dc_motor' ? -100 : 0, max: 100 });
+  }
+  if (['turn_left', 'turn_right'].includes(type) &&
+      Array.isArray(runtimeStatus.capabilities) && runtimeStatus.capabilities.includes('turn_angle_360')) {
+    const angle = slots.find(slot => slot.key === 'angle');
+    if (angle) Object.assign(angle, { min: 0, max: 360 });
+  }
   return { ...definition, ...properties, slots };
 }

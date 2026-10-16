@@ -100,6 +100,7 @@ function handleWebSocketMessage(ws, msg) {
 
   switch (msg.type) {
     case 'drive_start':
+    case 'drive_tap':
     case 'drive_renew':
     case 'drive_stop':
       try {

@@ -465,7 +465,8 @@ export class MqttService {
         };
         if (motorControl) {
           if (['move_forward', 'move_backward', 'dc_motor'].includes(block.type)) {
-            boundedNumber('speed', block.type === 'dc_motor' ? -50 : 0, 50);
+            const maxPower = capabilities.includes('motor_power_100') ? 100 : 50;
+            boundedNumber('speed', block.type === 'dc_motor' ? -maxPower : 0, maxPower);
             boundedNumber('duration', 0, 5);
           }
           if (block.type === 'servo') {
@@ -473,7 +474,9 @@ export class MqttService {
             boundedNumber('speed', 0, 0);
           }
           // Native driver angle, not calibrated chassis rotation.
-          if (['turn_left', 'turn_right'].includes(block.type)) boundedNumber('angle', 0, 30);
+          if (['turn_left', 'turn_right'].includes(block.type)) {
+            boundedNumber('angle', 0, capabilities.includes('turn_angle_360') ? 360 : 30);
+          }
         }
         if (avControl) {
           let expanded = 1;
