@@ -90,6 +90,13 @@
 }
 
 /* === Direction Pad === */
+.drive-telemetry {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
 .direction-pad {
   padding: 10px 16px;
   border-bottom: 1px solid var(--color-border);
@@ -115,6 +122,9 @@
 }
 
 .dpad-btn {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
   width: 52px;
   height: 52px;
   border-radius: 10px;
@@ -133,6 +143,24 @@
 .dpad-btn:active {
   transform: translateY(2px);
   box-shadow: none;
+}
+
+.dpad-btn[aria-pressed="true"] {
+  transform: translateY(2px);
+  box-shadow: none;
+  outline: 3px solid #0f766e;
+  outline-offset: 2px;
+  background: #0f766e;
+}
+
+.dpad-btn:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 3px;
+}
+
+.dpad-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .dpad-stop {

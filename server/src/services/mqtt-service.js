@@ -1,4 +1,5 @@
 import mqtt from 'mqtt';
+import { DriveHold } from './drive-hold.js';
 import { RobotDiagnostics } from './robot-diagnostics.js';
 import { randomUUID } from 'node:crypto';
 
@@ -64,12 +65,14 @@ export class MqttService {
     return MqttService.instance;
   }
 
-  constructor({ diagnostics } = {}) {
+  constructor({ diagnostics, driveClock, mqttConnect = mqtt.connect } = {}) {
     this.diagnostics = diagnostics || new RobotDiagnostics({ persist: false });
+    this.mqttConnect = mqttConnect;
     this.timeoutRecordedFor = null;
+    this.driveHold = new DriveHold(this, { now: driveClock });
   }
 
-  publishRecorded(topic, payload) {
+  publishRecorded(topic, payload, onResult = null) {
     const data = JSON.parse(payload);
     const intentId = this.diagnostics.record('publish_intent', {
       topic: topic.replace(`${this.topicPrefix}/`, ''), payload: data, identity: this.robotStatusMetadata,
@@ -78,6 +81,7 @@ export class MqttService {
       this.client.publish(topic, payload, { qos: 0, retain: false }, error => {
         this.diagnostics.record('publish_result', { intentId, run_id: data.run_id ?? null,
           outcome: error ? 'transport_error' : 'transport_callback', errorCode: error?.code ?? null });
+        onResult?.(error);
       });
     } catch (error) {
       this.diagnostics.record('publish_result', { intentId, outcome: 'publish_threw', errorCode: error.code ?? null });
@@ -103,9 +107,10 @@ export class MqttService {
     const brokerUrl = process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883';
 
     return new Promise((resolve, reject) => {
-      this.client = mqtt.connect(brokerUrl, {
+      this.client = this.mqttConnect(brokerUrl, {
         clientId: `mbot-studio-server-${Date.now()}`,
         clean: true,
+        queueQoSZero: false,
         connectTimeout: 5000,
         reconnectPeriod: 5000,
       });
@@ -125,6 +130,7 @@ export class MqttService {
         this.client.subscribe(`${this.topicPrefix}/robot/log`);
         this.client.subscribe(`${this.topicPrefix}/robot/repl/result`);
         this.client.subscribe(`${this.topicPrefix}/robot/execution`);
+        this.client.subscribe(`${this.topicPrefix}/robot/drive_status`);
 
         resolve();
       });
@@ -176,6 +182,11 @@ export class MqttService {
           }
         }
 
+        if (shortTopic === 'robot/status') this.driveHold.checkStatus();
+        if (shortTopic === 'robot/drive_status') {
+          try { this.driveHold.deviceStatus(JSON.parse(payload)); } catch { /* malformed device status */ }
+        }
+
         // Notify all listeners
         for (const [, callback] of this.listeners) {
           try {
@@ -188,16 +199,22 @@ export class MqttService {
 
       this.client.on('error', (err) => {
         this.connected = false;
+        this.robotStatusLastSeen = null;
+        this.driveHold.invalidate('MQTT error');
         this.diagnostics.record('broker_error', { code: err.code ?? null });
         reject(err);
       });
 
       this.client.on('offline', () => {
         this.connected = false;
+        this.robotStatusLastSeen = null;
+        this.driveHold.invalidate('MQTT offline');
         this.diagnostics.record('broker_offline');
       });
       this.client.on('close', () => {
         this.connected = false;
+        this.robotStatusLastSeen = null;
+        this.driveHold.invalidate('MQTT closed');
         this.diagnostics.record('broker_close');
       });
 
@@ -214,6 +231,7 @@ export class MqttService {
    * Send a command to the robot
    */
   sendCommand(command) {
+    this.driveHold.rejectCompetingCommand();
     if (this.isCooperativeApp() &&
         !['mbot-motor-control-v1', 'mbot-av-control-v1'].includes(this.robotStatusMetadata.build) &&
         ['read_sensors', 'status', 'get_status'].includes(command?.type)) {
@@ -241,6 +259,7 @@ export class MqttService {
    * Send a full program to the robot for autonomous execution
    */
   sendProgram(program, runId = null) {
+    this.driveHold.rejectCompetingCommand();
     this.validateCooperativeProgram(program);
     if (!this.connected) {
       console.warn('MQTT not connected, program not sent');
@@ -303,6 +322,7 @@ export class MqttService {
    * Emergency stop
    */
   emergencyStop() {
+    this.driveHold.invalidate('Emergency stop');
     if (!this.connected) return false;
     // Cooperative apps handle Stop only on the dedicated topic; a command-topic
     // duplicate becomes an unsupported program and can cancel the next run.

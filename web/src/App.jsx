@@ -8,11 +8,12 @@ import LiveControl from './components/LiveControl.jsx';
 import StatusBar from './components/StatusBar.jsx';
 import Celebrations from './components/Celebrations.jsx';
 import Achievements from './components/Achievements.jsx';
-import Challenges from './components/Challenges.jsx';
+import Challenges, { MissionStrip } from './components/Challenges.jsx';
+import { captureSubmission, acceptSubmission, completeSubmission, cancelSubmission } from './services/challenge-progress.js';
 import TemplateGallery from './components/TemplateGallery.jsx';
 import DebugTerminal from './components/DebugTerminal.jsx';
 import { playProgramSent, playSuccess, playError, playStop, playConnect, playDisconnect, playClick, playAchievement, playCelebration, isMuted, setMuted } from './services/sound-service';
-import { checkProgramAchievements, tryEarnBadge, incrementStat, getProgress, setAchievementsProfile } from './services/achievements';
+import { tryEarnBadge, getProgress, setAchievementsProfile } from './services/achievements';
 import './App.css';
 import RobotDiagnostics from './components/RobotDiagnostics.jsx';
 
@@ -130,6 +131,10 @@ export default function App() {
   const [savedProjects, setSavedProjects] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [currentProfileId, setCurrentProfileId] = useState(null);
+  const currentProfileRef = useRef(currentProfileId);
+  currentProfileRef.current = currentProfileId;
+  const [activeMission, setActiveMission] = useState(null);
+  const [progressVersion, setProgressVersion] = useState(0);
   const [messages, setMessages] = useState([DEFAULT_WELCOME]);
   const [blockHistory, setBlockHistory] = useState([[]]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -208,6 +213,9 @@ export default function App() {
     if (!currentProfileId) return;
 
     setAchievementsProfile(currentProfileId);
+    cancelSubmission(activeRun.current?.submission);
+    setActiveMission(null);
+    setCelebrationQueue([]);
 
     const projects = loadProjects(currentProfileId);
     setSavedProjects(projects.map(p => ({
@@ -348,12 +356,15 @@ export default function App() {
 
   const handleRunProgram = useCallback(async () => {
     if (blocks.length === 0 || activeRun.current || programBlocked) return;
-    const run = { id: null, events: [], controller: new AbortController() };
+    const run = { id: null, events: [], controller: new AbortController(),
+      submission: captureSubmission({ blocks, profileId: currentProfileId, robotConfig }) };
     activeRun.current = run;
     setProgramLifecycle({ text: 'Submitting program…', pending: true });
-    const award = () => {
-      const badges = checkProgramAchievements(blocks);
-      setCelebrationQueue(prev => [...prev, ...badges.map(badge => ({ badge, type: 'confetti' }))]);
+    const award = event => {
+      const { badges, challenges } = completeSubmission(run.submission, event, currentProfileRef.current);
+      const missionAwards = challenges.map(c => ({ id: c.id, name: c.title, icon: c.icon, description: 'Mission earned — device-confirmed program!' }));
+      setProgressVersion(v => v + 1);
+      setCelebrationQueue(prev => [...prev, ...[...missionAwards, ...badges].map(badge => ({ badge, type: 'confetti' }))]);
       badges.forEach(() => playAchievement());
     };
     run.dispose = () => {
@@ -377,8 +388,8 @@ export default function App() {
         const label = { completed: 'Completed', failed: 'Failed', canceled: 'Canceled' }[event.event];
         const detail = event.details ? ` — ${typeof event.details === 'string' ? event.details.slice(0, 300) : JSON.stringify(event.details).slice(0, 300)}` : '';
         finish(`${label} — device confirmed (${run.id})${detail}`);
-        if (event.event === 'completed') award();
-        else if (event.event === 'failed') playError();
+        if (event.event === 'completed') award(event);
+        else { cancelSubmission(run.submission); if (event.event === 'failed') playError(); }
       } else if (['accepted', 'started'].includes(event.event)) {
         // Do not regress started to accepted when events arrive out of order.
         if (run.started && event.event === 'accepted') return;
@@ -415,7 +426,7 @@ export default function App() {
       const res = await fetch('/api/robot/program', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ program: blocks }),
+        body: JSON.stringify({ program: run.submission.blocks }),
         signal: run.controller.signal,
       });
       const data = await res.json();
@@ -427,6 +438,7 @@ export default function App() {
         setErrorToast(data.hint ? `Could not send to robot: ${error} — ${data.hint}` : `Could not send to robot: ${error}`);
       } else if (typeof data.run_id === 'string' && data.run_id) {
         run.id = data.run_id;
+        acceptSubmission(run.submission, data);
         setProgramLifecycle({ text: `Submitted — awaiting device confirmation (${run.id})`, pending: true });
         const earlyEvents = run.events;
         run.events = [];
@@ -434,8 +446,7 @@ export default function App() {
       } else if (robotStatus.application === 'cooperative-v1') {
         finish('Unverified — submission returned no run ID; device completion cannot be confirmed.');
       } else {
-        finish('Program sent (legacy transport acknowledgement).');
-        award();
+        finish('Unverified — transport acknowledgement only; no device-completed run ID.');
       }
     } catch (err) {
       if (activeRun.current !== run) return;
@@ -443,9 +454,10 @@ export default function App() {
       playError();
       setErrorToast('Error sending program: ' + err.message);
     }
-  }, [blocks, robotStatus.application, programBlocked]);
+  }, [blocks, robotStatus.application, programBlocked, currentProfileId, robotConfig]);
 
   const handleStop = useCallback(async () => {
+    cancelSubmission(activeRun.current?.submission);
     playStop();
     try {
       await fetch('/api/robot/stop', { method: 'POST' });
@@ -531,6 +543,7 @@ export default function App() {
   }, [currentProfileId, resetBlockHistory, restoreBlocks]);
 
   const handleProfileSwitch = useCallback((profileId) => {
+    cancelSubmission(activeRun.current?.submission);
     setCurrentProfileId(profileId);
     saveCurrentProfileId(profileId);
   }, []);
@@ -548,6 +561,7 @@ export default function App() {
     const updated = [...profiles, newProfile];
     setProfiles(updated);
     saveProfilesToStorage(updated);
+    cancelSubmission(activeRun.current?.submission);
     setCurrentProfileId(newProfile.id);
     saveCurrentProfileId(newProfile.id);
     return true;
@@ -577,22 +591,20 @@ export default function App() {
   }, []);
 
   const handleChallengeLoadProgram = useCallback((challenge) => {
+    // Deterministic unfinished starter; no AI, no auto-run, no full solution.
+    if (blocks.length && !window.confirm('Load this mission starter? Save any work you want to keep first.')) return;
+    const starter = structuredClone(challenge.starter);
+    commitBlocks(starter);
+    setProjectId(null);
+    setProjectName(challenge.title);
+    saveCurrentProjectId(currentProfileId, null);
+    setPendingSuggestion(null);
+    setActiveMission(challenge);
+    setShowCode(false);
     setActiveTab(TABS.PROGRAM);
     playClick();
-    // Pre-fill the chat with the challenge prompt so AI generates a starting point
-    const prompt = challenge.prompt || challenge.description;
-    if (prompt) {
-      setMessages(prev => [
-        ...prev,
-        { role: 'user', content: `Challenge: ${challenge.title}\n${prompt}` },
-      ]);
-    }
-  }, []);
+  }, [blocks.length, commitBlocks, currentProfileId]);
 
-  const handleChallengeCelebration = useCallback((badge) => {
-    setCelebrationQueue(prev => [...prev, { badge, type: 'confetti' }]);
-    playAchievement();
-  }, []);
 
   const handleAchievement = useCallback((badgeId) => {
     const b = tryEarnBadge(badgeId);
@@ -616,7 +628,7 @@ export default function App() {
     setMuted(newMuted);
   }, [soundMuted]);
 
-  const achievementProgress = getProgress();
+  const achievementProgress = getProgress(currentProfileId);
 
   return (
     <div className="app">
@@ -709,6 +721,8 @@ export default function App() {
                 </div>
               </div>
 
+              <MissionStrip challenge={activeMission} blocks={blocks} currentProfileId={currentProfileId} robotConfig={robotConfig}
+                onClose={() => setActiveMission(null)} onViewChallenges={() => setActiveTab(TABS.CHALLENGES)} />
               <div className={`program-readiness ${programBlocked || disconnectedCount ? 'needs-attention' : ''}`} role="status" data-testid="program-readiness">
                 {disconnectedCount > 0 && <span>{disconnectedCount} block{disconnectedCount === 1 ? '' : 's'} not connected — won't run. Use “Connect to program” or snap them under “when program starts”. </span>}
                 {!blocks.length ? (disconnectedCount ? 'No blocks connected to start.' : 'Start here: add a block from the library.') : checkRuntime ? (
@@ -742,7 +756,7 @@ export default function App() {
 
               {showTemplates && (
                 <div className="templates-section">
-                  <TemplateGallery onLoadTemplate={handleTemplateLoad} robotConfig={robotConfig} />
+                  <TemplateGallery onLoadTemplate={handleTemplateLoad} robotConfig={robotConfig} robotStatus={robotStatus} />
                 </div>
               )}
 
@@ -780,7 +794,9 @@ export default function App() {
             <Challenges
               currentProfileId={currentProfileId}
               onLoadProgram={handleChallengeLoadProgram}
-              onCelebration={handleChallengeCelebration}
+
+              robotConfig={robotConfig}
+              progressVersion={progressVersion}
             />
           </div>
         )}

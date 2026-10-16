@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { lowerProgram } from '../server/src/services/program-lowering.js';
 
 async function setup(page, beforeResponse) {
+  // All unneeded API reads/previews stay isolated from the running service.
+  await page.route('**/api/**', r => r.fulfill({json:{}}));
   await page.addInitScript(() => {
     localStorage.setItem('mbot-studio-current-profile', 'profile_default');
     localStorage.setItem('mbot-studio-current-project:profile_default', 'lifecycle');
@@ -18,7 +21,8 @@ async function setup(page, beforeResponse) {
       await beforeResponse(emit);
       await page.waitForTimeout(100); // Deliver WS frames while HTTP is still held.
     }
-    await r.fulfill({json:{sent:true,run_id:'run-current'}});
+    // Completion credit now requires the real admission source-map contract.
+    await r.fulfill({json:{sent:true,run_id:'run-current',...lowerProgram(r.request().postDataJSON().program)}});
   });
   await page.goto('/');
   await page.getByRole('button',{name:'Run Program'}).click();
