@@ -211,6 +211,29 @@
   transition: opacity 0.15s;
 }
 .se-script.floating:hover::before { opacity: 1; }
+.se-disconnected-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  border: 1px solid #d5aa4b;
+  border-radius: 6px;
+  background: #fff4d4;
+  color: #624300;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.se-disconnected-note button {
+  padding: 3px 6px;
+  border: 1px solid #98752e;
+  border-radius: 4px;
+  background: white;
+  color: #513600;
+  cursor: pointer;
+  font-size: inherit;
+}
+.se-disconnected-note button:focus-visible { outline: 2px solid #513600; outline-offset: 2px; }
 .se-script-grip {
   position: absolute;
   top: -10px; left: 0;

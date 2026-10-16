@@ -444,7 +444,8 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
             <div className="dpad-row">
               <button
                 className="dpad-btn dpad-left"
-                onMouseDown={() => enqueueDirectCommand({ type: 'turn_left', speed: 40, angle: 90 })}
+                title="Small left turn — native angle request, not calibrated heading"
+                onMouseDown={() => enqueueDirectCommand({ type: 'turn_left', angle: 30 })}
               >
                 ⬅️
               </button>
@@ -456,7 +457,8 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
               </button>
               <button
                 className="dpad-btn dpad-right"
-                onMouseDown={() => enqueueDirectCommand({ type: 'turn_right', speed: 40, angle: 90 })}
+                title="Small right turn — native angle request, not calibrated heading"
+                onMouseDown={() => enqueueDirectCommand({ type: 'turn_right', angle: 30 })}
               >
                 ➡️
               </button>
