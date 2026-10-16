@@ -321,6 +321,199 @@ test('start requires exact bounded fields and fresh armed AV capability status',
   }
 });
 
+const tap = (hold_id = randomUUID(), extra = {}) => start(hold_id, { type: 'drive_tap', ...extra });
+const enableTap = f => f.service.robotStatusMetadata.capabilities.push('drive_tap', 'motor_power_100');
+
+test('tap publishes one exact nonqueued pulse and retains exclusive ownership until device completion', async t => {
+  const f = await fixture(t), a = await f.socket(), b = await f.socket();
+  await f.connect();
+  enableTap(f);
+  const msg = tap(undefined, { speed: 100 });
+  assert.deepEqual(await a.send(msg), { type: 'drive_ack', hold_id: msg.hold_id, op: 'tap' });
+  assert.deepEqual(f.packets, [{ topic: 'robot/drive', data: {
+    op: 'tap', hold_id: msg.hold_id, boot: 'boot-a', direction: 'forward', speed: 100,
+  }, options: { qos: 0, retain: false } }]);
+  f.advance(501); // No browser renew: native start may still be pending.
+  f.service.driveHold.checkLease();
+  assert.equal(f.service.driveHold.active.hold_id, msg.hold_id);
+  const deadline = f.service.driveHold.active.deadline;
+  assert.equal((await a.send({ type: 'drive_renew', hold_id: msg.hold_id })).type, 'drive_error');
+  assert.equal(f.service.driveHold.active.deadline, deadline, 'tap cannot be renewed');
+  for (const owner of [a, b]) {
+    assert.equal((await owner.send(tap())).type, 'drive_error');
+    assert.equal((await owner.send(start())).type, 'drive_error');
+  }
+  assert.equal(f.packets.length, 1);
+  f.incoming('robot/drive_status', { event: 'started', hold_id: msg.hold_id, boot: 'boot-a' });
+  assert.equal(f.service.driveHold.active.deadline, deadline, 'native start does not reset server ceiling');
+  f.incoming('robot/drive_status', { event: 'stopped', hold_id: msg.hold_id, boot: 'boot-a' });
+  assert.equal(f.service.driveHold.active, null);
+  assert.equal((await a.send(msg)).type, 'drive_error', 'no replay of a consumed tap');
+  assert.equal((await a.send(tap())).type, 'drive_ack', 'fresh deliberate tap works');
+});
+
+test('tap requires both advertised capabilities and exact fields with capability-gated power', async t => {
+  const f = await fixture(t), a = await f.socket();
+  for (const caps of [[], ['drive_hold'], ['drive_tap'], ['motor_power_100', 'drive_tap']]) {
+    f.service.robotStatusMetadata.capabilities = caps;
+    assert.equal((await a.send(tap())).type, 'drive_error', JSON.stringify(caps));
+  }
+  for (const expanded of [false, true]) {
+    f.service.robotStatusMetadata.capabilities = ['drive_hold', 'drive_tap', ...(expanded ? ['motor_power_100'] : [])];
+    for (const speed of [0, 50, 100, 101, -1, '30', null]) {
+      const msg = tap(undefined, { speed });
+      const valid = typeof speed === 'number' && speed >= 0 && speed <= (expanded ? 100 : 50);
+      assert.equal((await a.send(msg)).type, valid ? 'drive_ack' : 'drive_error', `${expanded}:${speed}`);
+      if (valid) await a.send({ type: 'drive_stop', hold_id: msg.hold_id });
+    }
+  }
+  const count = f.packets.length;
+  for (const extra of [{ hold_id: 'bad' }, { direction: 'up' }, { boot: 'boot-a' },
+    { duration: 0.4 }, { lease_ms: 3000 }, { direction: undefined }, { speed: undefined }, { op: 'tap' }]) {
+    assert.equal((await a.send(tap(undefined, extra))).type, 'drive_error', JSON.stringify(extra));
+  }
+  assert.equal(f.packets.length, count);
+});
+
+test('active tap revokes when its advertised tap or power capability disappears', async t => {
+  const f = await fixture(t), a = await f.socket();
+  await f.connect();
+  for (const removed of ['drive_tap', 'motor_power_100']) {
+    f.service.robotStatusMetadata.capabilities = ['drive_hold', 'drive_tap', 'motor_power_100'];
+    const msg = tap(undefined, { speed: 100 });
+    assert.equal((await a.send(msg)).type, 'drive_ack');
+    f.incoming('robot/status', { capabilities: f.service.robotStatusMetadata.capabilities.filter(cap => cap !== removed) });
+    assert.equal(f.service.driveHold.active, null, removed);
+    assert.equal(f.packets.at(-1).data.op, 'stop');
+  }
+});
+
+test('unknown drive operations cannot publish or extend an active tap', async t => {
+  const f = await fixture(t), a = await f.socket();
+  enableTap(f);
+  const msg = tap();
+  await a.send(msg);
+  const { owner, deadline } = f.service.driveHold.active;
+  for (const type of ['drive_unknown', 'drive_start_extra', 'wrong_renew']) {
+    assert.throws(() => f.service.driveHold.submit(owner, { type, hold_id: msg.hold_id }), /drive/i);
+  }
+  assert.equal(f.service.driveHold.active.deadline, deadline);
+  assert.equal(f.packets.length, 1);
+});
+
+test('tap ownership expires at 3000ms even after delayed start and invalid renewals', async t => {
+  const f = await fixture(t), a = await f.socket(), b = await f.socket();
+  await f.connect();
+  enableTap(f);
+  const msg = tap();
+  await a.send(msg);
+  f.advance(2999);
+  for (const owner of [a, b]) {
+    assert.equal((await owner.send({ type: 'drive_renew', hold_id: msg.hold_id })).type, 'drive_error');
+  }
+  f.incoming('robot/drive_status', { event: 'started', hold_id: msg.hold_id, boot: 'boot-a' });
+  assert.equal(f.service.driveHold.active?.hold_id, msg.hold_id);
+  assert.equal(f.packets.length, 1);
+  f.advance(1);
+  f.service.driveHold.checkLease();
+  assert.equal(f.service.driveHold.active?.hold_id, undefined);
+  assert.deepEqual(f.packets.map(p => p.data.op), ['tap', 'stop']);
+  assert.equal((await a.send(msg)).type, 'drive_error');
+  assert.equal((await a.send(tap())).type, 'drive_ack');
+});
+
+test('tap cancellation covers native start delay and running pulse without queue or replay', async t => {
+  const f = await fixture(t);
+  await f.connect();
+  enableTap(f);
+  const original = { ...f.service.robotStatusMetadata };
+  for (const started of [false, true]) {
+    for (const interrupt of ['stop', 'http-emergency', 'ws-emergency', 'command', 'program',
+      'close', 'error', 'malformed', 'offline', 'mqtt-close', 'mqtt-error', 'rejected', 'boot', 'disarm', 'stale']) {
+      f.client.connected = f.service.connected = true;
+      f.service.robotStatusMetadata = { ...original };
+      f.service.robotStatusLastSeen = f.service.robotLastSeen = Date.now();
+      const a = await f.socket(), msg = tap();
+      assert.equal((await a.send(msg)).type, 'drive_ack', `${started}:${interrupt}`);
+      if (started) f.incoming('robot/drive_status', { event: 'started', hold_id: msg.hold_id, boot: 'boot-a' });
+      const count = f.packets.length;
+      if (interrupt === 'stop') await a.send({ type: 'drive_stop', hold_id: msg.hold_id });
+      else if (interrupt === 'http-emergency') {
+        assert.equal((await fetch(`${f.base}/api/robot/stop`, { method: 'POST' })).status, 200);
+      } else if (interrupt === 'ws-emergency') {
+        a.ws.send(JSON.stringify({ type: 'emergency_stop' }));
+        await a.send({ type: 'ping' });
+      } else if (interrupt === 'command') assert.throws(() => f.service.sendCommand({ type: 'wait', duration: 0 }), /drive/i);
+      else if (interrupt === 'program') assert.throws(() => f.service.sendProgram([{ type: 'wait', duration: 0 }]), /drive/i);
+      else if (interrupt === 'close') a.ws.close();
+      else if (interrupt === 'error') f.service.driveHold.active.owner.emit('error', new Error('isolated'));
+      else if (interrupt === 'malformed') a.ws.send('{');
+      else if (['offline', 'mqtt-close', 'mqtt-error'].includes(interrupt)) {
+        f.client.connected = false;
+        f.client.emit(interrupt.replace('mqtt-', ''), new Error('isolated'));
+      } else if (interrupt === 'rejected') f.incoming('robot/drive_status', { event: 'rejected', hold_id: msg.hold_id, boot: 'boot-a' });
+      else if (interrupt === 'boot') f.incoming('robot/status', { boot: 'boot-b' });
+      else if (interrupt === 'disarm') f.incoming('robot/status', { armed: false });
+      else if (interrupt === 'stale') { f.service.robotStatusLastSeen = Date.now() - 16000; f.service.driveHold.checkStatus(); }
+      await waitFor(() => !f.service.driveHold.active);
+      if (f.client.connected) assert.ok(f.packets.slice(count).some(p => p.data.op === 'stop'), `${started}:${interrupt}`);
+      else assert.equal(f.packets.length, count, 'offline stop must not queue');
+      assert.ok(f.packets.slice(count).every(p => ['robot/drive', 'robot/emergency'].includes(p.topic)), 'competing work not published');
+      f.client.connected = f.service.connected = true;
+      f.service.robotStatusMetadata = { ...original };
+      f.service.robotStatusLastSeen = f.service.robotLastSeen = Date.now();
+      const next = await f.socket(), fresh = tap();
+      assert.equal((await next.send({ type: 'drive_renew', hold_id: msg.hold_id })).type, 'drive_error');
+      assert.equal((await next.send(fresh)).type, 'drive_ack');
+      f.incoming('robot/drive_status', { event: 'stopped', hold_id: msg.hold_id, boot: 'boot-a' });
+      assert.equal(f.service.driveHold.active?.hold_id, fresh.hold_id, 'late event cannot cancel replacement');
+      await next.send({ type: 'drive_stop', hold_id: fresh.hold_id });
+    }
+  }
+});
+
+test('tap transport failures revoke only their generation and do not permit retry with consumed IDs', async t => {
+  const f = await fixture(t), a = await f.socket();
+  enableTap(f);
+  const publish = f.client.publish;
+  for (const failure of ['throw', 'sync-callback', 'async-callback']) {
+    let callback;
+    f.client.publish = (topic, body, options, cb) => {
+      if (JSON.parse(body).op !== 'tap') return publish(topic, body, options, cb);
+      if (failure === 'throw') throw new Error('isolated submission error');
+      if (failure === 'sync-callback') cb(new Error('isolated callback error'));
+      else { publish(topic, body, options); callback = cb; }
+    };
+    const msg = tap();
+    assert.equal((await a.send(msg)).type, failure === 'async-callback' ? 'drive_ack' : 'drive_error');
+    callback?.(new Error('isolated async error'));
+    assert.equal(f.service.driveHold.active?.hold_id, undefined);
+    f.client.publish = publish;
+    assert.equal((await a.send(msg)).type, 'drive_error');
+    const fresh = tap();
+    assert.equal((await a.send(fresh)).type, 'drive_ack');
+    callback?.(new Error('late old error'));
+    assert.equal(f.service.driveHold.active?.hold_id, fresh.hold_id);
+    await a.send({ type: 'drive_stop', hold_id: fresh.hold_id });
+  }
+});
+
+test('100 power is accepted only with explicit motor_power_100 capability', async t => {
+  const f = await fixture(t), a = await f.socket();
+  for (const expanded of [false, true]) {
+    f.service.robotStatusMetadata.capabilities = ['drive_hold', ...(expanded ? ['motor_power_100'] : [])];
+    for (const speed of [0, 50, 100, 101, -1, '100', null]) {
+      const msg = start(undefined, { speed });
+      const valid = typeof speed === 'number' && speed >= 0 && speed <= (expanded ? 100 : 50);
+      assert.equal((await a.send(msg)).type, valid ? 'drive_ack' : 'drive_error', `${expanded}:${speed}`);
+      if (valid) {
+        assert.equal(f.packets.at(-1).data.speed, speed);
+        await a.send({ type: 'drive_stop', hold_id: msg.hold_id });
+      }
+    }
+  }
+});
+
 test('WS hold start/renew/stop uses dedicated non-retained QoS0 MQTT and correlated acks', async t => {
   const f = await fixture(t), a = await f.socket(), msg = start();
   assert.deepEqual(await a.send(msg), { type: 'drive_ack', hold_id: msg.hold_id, op: 'start' });

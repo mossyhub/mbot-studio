@@ -24,7 +24,8 @@ test('loose blocks explain why Run is disabled and explicitly connect without ex
  const posts=await mount(page);await dragLooseWait(page);
  await expect(page.getByTestId('program-readiness')).toContainText('not connected');
  await expect(page.getByRole('button',{name:'Run Program'})).toBeDisabled();
- await expect(page.locator('.se-script.floating')).toContainText('Not connected');
+ await expect(page.locator('.se-script.floating')).not.toContainText('Not connected');
+ await expect(page.locator('.se-script.floating')).not.toContainText("won't run");
  await page.getByRole('button',{name:'Connect to program',exact:true}).click();
  await expect(page.locator('.se-script.floating')).toHaveCount(0);
  await expect(page.getByTestId('program-readiness')).toContainText('Ready to run');

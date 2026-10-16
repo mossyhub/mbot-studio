@@ -162,6 +162,34 @@ async function avControl(overrides = {}) {
     capabilities: [...motorCapabilities, ...avTypes], ...overrides });
 }
 
+test('new power and angle capabilities flow through HTTP command and Program lowering without splitting', async () => {
+  for (const expanded of [false, true]) {
+    await avControl({ capabilities: [...motorCapabilities, ...avTypes,
+      ...(expanded ? ['motor_power_100', 'turn_angle_360'] : [])] });
+    for (const type of ['move_forward', 'move_backward', 'dc_motor']) {
+      for (const speed of [0, 50, 100, 101, ...(type === 'dc_motor' ? [-100, -101] : [])]) {
+        const command = { type, speed, duration: 0.4, ...(type === 'dc_motor' ? { port: 'M1' } : {}) };
+        for (const route of ['/command', '/program']) {
+          const result = await send(route, route === '/command' ? { command } : { program: [command] });
+          if (Math.abs(speed) <= (expanded ? 100 : 50)) assertPublished(result, route, route === '/command' ? command : [command]);
+          else { assert.equal(result.status, 400); assert.deepEqual(result.published, []); }
+        }
+      }
+    }
+    for (const type of ['turn_left', 'turn_right']) {
+      for (const angle of [0, 30, 90, 360, 361]) {
+        const command = { type, angle };
+        const program = [{ type: 'repeat', times: 1, do: [command] }];
+        for (const route of ['/command', '/program']) {
+          const result = await send(route, route === '/command' ? { command } : { program });
+          if (angle <= (expanded ? 360 : 30)) assertPublished(result, route, route === '/command' ? command : [command]);
+          else { assert.equal(result.status, 400); assert.deepEqual(result.published, []); }
+        }
+      }
+    }
+  }
+});
+
 test('AV build preserves strict small-runtime motor admission and palette', async () => {
   await avControl();
   await checkMotorBlock({ type: 'move_forward', speed: 51 }, { type: 'move_forward', speed: 50 });

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 const liveCss = readFileSync(new URL('../web/src/components/LiveControl.css', import.meta.url), 'utf8');
 
 let bundle;
-const ready = { capabilities: ['drive_hold'], armed: true, motion_enabled: true, boot: 'boot-a', robotOnline: true };
+const ready = { capabilities: ['drive_hold', 'drive_tap', 'motor_power_100'], armed: true, motion_enabled: true, boot: 'boot-a', robotOnline: true };
 test.beforeAll(async () => {
   const result = await build({ stdin: {
     contents: `import React from 'react';
@@ -50,7 +50,7 @@ async function setup(page, status = ready, origin = 'http://127.0.0.1:15190/') {
         window.sent.push({ ...msg, at: performance.now() });
         super.send(data);
         // Server submission ACK only; robot drive_status is separately injected.
-        if (window.ack && ['drive_start', 'drive_renew'].includes(msg.type)) this.dispatchEvent(new MessageEvent('message', {
+        if (window.ack && ['drive_start', 'drive_renew', 'drive_tap'].includes(msg.type)) this.dispatchEvent(new MessageEvent('message', {
           data: JSON.stringify({ type: 'drive_ack', hold_id: msg.hold_id, op: msg.type.slice(6) }),
         }));
       }
@@ -74,11 +74,314 @@ async function setup(page, status = ready, origin = 'http://127.0.0.1:15190/') {
     check: () => { expect(errors).toEqual([]); expect(unexpected).toEqual([]); },
   };
 }
-async function press(page, direction = 'up', pointerId = 1) {
+async function rawPress(page, direction = 'up', pointerId = 1) {
   await page.locator(`.dpad-${direction}`).dispatchEvent('pointerdown', { pointerId, pointerType: 'mouse', button: 0, isPrimary: true });
 }
+async function press(page, direction = 'up', pointerId = 1) {
+  await rawPress(page, direction, pointerId);
+  await page.clock.runFor(180);
+}
 async function release(page, direction = 'up', pointerId = 1, type = 'pointerup') {
-  await page.locator(`.dpad-${direction}`).dispatchEvent(type, { pointerId, pointerType: 'mouse' });
+  const target = page.locator(`.dpad-${direction}`);
+  const box = await target.boundingBox();
+  await target.dispatchEvent(type, { pointerId, pointerType: 'mouse', clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 });
+}
+
+test('tap transport exception releases busy ownership and permits a fresh tap', async ({ page }) => {
+  const f = await setup(page);
+  await rawPress(page);
+  await page.evaluate(() => {
+    const socket = window.sockets.at(-1);
+    window.restoreSend = socket.send;
+    socket.send = () => { throw new Error('tap transport failure'); };
+  });
+  await release(page);
+  await expect(powerSlider(page)).toBeEnabled();
+  await page.evaluate(() => { window.sockets.at(-1).send = window.restoreSend; });
+  await page.clock.runFor(3000);
+  expect(await f.drive()).toEqual([]);
+  await rawPress(page, 'left');
+  await release(page, 'left');
+  expect((await f.drive())[0]).toMatchObject({ type: 'drive_tap', direction: 'left' });
+  f.check();
+});
+
+test('older held firmware exposes only supported 0–50 power and no native tap', async ({ page }) => {
+  const f = await setup(page, { ...ready, capabilities: ['drive_hold'] });
+  await expect(powerSlider(page)).toHaveAttribute('max', '50');
+  await expect(page.locator('#drive-help')).toContainText('Firmware update required for bounded-power taps');
+  await rawPress(page);
+  expect((await f.drive())[0]).toMatchObject({ type: 'drive_start', speed: 50 });
+  await release(page);
+  expect((await f.drive()).map(m => m.type)).toEqual(['drive_start', 'drive_stop']);
+  f.check();
+});
+
+test('loss of full-power capability cancels a 100 percent hold and requires fresh input', async ({ page }) => {
+  const f = await setup(page);
+  await setPower(page, 100);
+  await press(page);
+  await f.receive({ type: 'mqtt', topic: 'robot/status', data: { ...ready, capabilities: ['drive_hold', 'drive_tap'] } });
+  expect((await f.drive()).at(-1).type).toBe('drive_stop');
+  await expect(powerSlider(page)).toHaveAttribute('max', '50');
+  await page.clock.runFor(1000);
+  expect(await f.drive()).toHaveLength(2);
+  await press(page, 'down');
+  expect((await f.drive()).at(-1)).toMatchObject({ type: 'drive_start', direction: 'backward', speed: 50 });
+  await release(page, 'down');
+  f.check();
+});
+
+for (const terminal of ['rejected', 'drive_error']) {
+  test(`tap ${terminal} releases busy state for a new intentional tap`, async ({ page }) => {
+    const f = await setup(page);
+    await rawPress(page);
+    await release(page);
+    const id = (await f.drive())[0].hold_id;
+    await f.receive(terminal === 'drive_error' ? { type: 'drive_error', hold_id: id, message: 'rejected' }
+      : { type: 'mqtt', topic: 'robot/drive_status', data: { boot: ready.boot, hold_id: id, event: terminal } });
+    await expect(powerSlider(page)).toBeEnabled();
+    await rawPress(page, 'right');
+    await release(page, 'right');
+    expect((await f.drive()).at(-1)).toMatchObject({ type: 'drive_tap', direction: 'right' });
+    f.check();
+  });
+}
+
+const pendingReasons = ['pointercancel', 'lostpointercapture', 'blur', 'pagehide', 'hidden', 'button-blur', 'unmount', 'offline', 'socket-error', 'socket-close', 'boot', 'disarmed', 'motion-disabled', 'capability', 'power-capability', 'server-error', 'Stop'];
+async function cancelAndRestore(page, f, reason) {
+  if (['pointercancel', 'lostpointercapture'].includes(reason)) await release(page, 'up', 1, reason);
+  if (['blur', 'pagehide'].includes(reason)) await page.evaluate(reason => window.dispatchEvent(new Event(reason)), reason);
+  if (reason === 'hidden') await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  if (reason === 'button-blur') await page.locator('.mission-name-input').focus();
+  if (reason === 'unmount') await page.evaluate(() => window.renderLive(true, false));
+  if (reason === 'offline') await page.evaluate(() => window.renderLive(false));
+  if (reason === 'socket-error') await page.evaluate(() => window.sockets.at(-1).dispatchEvent(new Event('error')));
+  if (reason === 'socket-close') {
+    f.sockets.at(-1).close();
+    await expect(page.getByRole('button', { name: 'Refresh sensors', exact: true })).toBeDisabled();
+  }
+  const changed = { boot: { boot: 'boot-b' }, disarmed: { armed: false }, 'motion-disabled': { motion_enabled: false },
+    capability: { capabilities: ['drive_hold', 'motor_power_100'] }, 'power-capability': { capabilities: ['drive_hold', 'drive_tap'] } };
+  if (changed[reason]) await f.receive({ type: 'mqtt', topic: 'robot/status', data: { ...ready, ...changed[reason] } });
+  if (reason === 'server-error') await f.receive({ type: 'error', message: 'test rejection' });
+  if (reason === 'Stop') await page.locator('.live-controls-panel .btn-danger').dispatchEvent('click');
+  return async () => {
+    if (reason === 'hidden') await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    if (['unmount', 'offline'].includes(reason)) await page.evaluate(() => window.renderLive(true));
+    if (reason === 'socket-error') await page.evaluate(() => window.sockets.at(-1).onopen());
+    if (reason === 'socket-close') await page.clock.runFor(1000);
+    await expect(page.getByRole('button', { name: 'Refresh sensors', exact: true })).toBeEnabled();
+    await f.receive({ type: 'mqtt', topic: 'robot/status', data: ready });
+    await expect(powerSlider(page)).toBeEnabled();
+  };
+}
+
+for (const phase of ['pending', 'tap']) {
+  for (const reason of pendingReasons.filter(r => phase === 'pending' || !['pointercancel', 'lostpointercapture', 'button-blur'].includes(r))) {
+    test(`${reason} cancels ${phase} at 100 percent without later nudge; fresh press succeeds`, async ({ page }) => {
+      const f = await setup(page);
+      await setPower(page, 100);
+      await page.evaluate(() => { window.callbacks = []; });
+      await rawPress(page);
+      if (phase === 'tap') await release(page);
+      await page.evaluate(() => { window.oldCallbacks = [...window.callbacks]; });
+      const restore = await cancelAndRestore(page, f, reason);
+      if (phase === 'pending') expect(await f.drive()).toEqual([]);
+      else if (reason !== 'socket-close') expect((await f.drive()).at(-1).type).toBe('drive_stop');
+      const count = (await f.drive()).length;
+      await page.clock.runFor(200);
+      expect(await f.drive()).toHaveLength(count);
+      await restore();
+      // A delayed release and reconnect must not submit any pending intent.
+      await release(page);
+      expect(await f.drive()).toHaveLength(count);
+      await rawPress(page, 'right');
+      await page.evaluate(() => window.oldCallbacks.forEach(fn => fn()));
+      expect(await f.drive()).toHaveLength(count);
+      await page.clock.runFor(180);
+      expect((await f.drive()).at(-1)).toMatchObject({ type: 'drive_start', direction: 'right' });
+      await release(page, 'right');
+      f.check();
+    });
+  }
+}
+
+for (const ms of [179, 180]) {
+  test(`release at ${ms} ms chooses exactly one tap or hold`, async ({ page }) => {
+    const f = await setup(page);
+    await rawPress(page);
+    await page.clock.runFor(ms);
+    await release(page);
+    expect((await f.drive()).map(m => m.type)).toEqual(ms === 179 ? ['drive_tap'] : ['drive_start', 'drive_stop']);
+    f.check();
+  });
+}
+
+for (const key of ['Space', 'Enter']) {
+  test(`quick ${key} release sends only one tap and no synthetic duplicate`, async ({ page }) => {
+    const f = await setup(page);
+    await page.locator('.dpad-left').focus();
+    await page.keyboard.down(key);
+    await page.keyboard.down(key);
+    expect(await f.drive()).toEqual([]);
+    await page.keyboard.up(key);
+    expect((await f.drive()).map(m => m.type)).toEqual(['drive_tap']);
+    await page.clock.runFor(600);
+    expect(await f.drive()).toHaveLength(1);
+    f.check();
+  });
+}
+
+test('short captured release outside is cancellation, not a nudge', async ({ page }) => {
+  const f = await setup(page);
+  const box = await page.locator('.dpad-up').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(2, 2);
+  await page.mouse.up();
+  await page.clock.runFor(1000);
+  expect(await f.messages()).toEqual([]);
+  await press(page);
+  expect((await f.drive())[0].type).toBe('drive_start');
+  await release(page);
+  f.check();
+});
+
+test('tap stays exclusively busy through ACK and started; rapid taps never queue; terminal permits fresh input', async ({ page }) => {
+  const f = await setup(page);
+  await page.evaluate(() => { window.callbacks = []; });
+  await rawPress(page);
+  await release(page);
+  const first = (await f.drive())[0];
+  await page.evaluate(() => { window.oldCallbacks = [...window.callbacks]; });
+  await f.receive({ type: 'mqtt', topic: 'robot/drive_status', data: { boot: ready.boot, hold_id: first.hold_id, event: 'started' } });
+  // Blur due to deliberate input release must not truncate a tap.
+  await page.locator('.mission-name-input').focus();
+  for (let i = 0; i < 12; i++) { await rawPress(page, 'down'); await release(page, 'down'); }
+  await page.locator('.hw-port-row').first().getByRole('button', { name: '45°', exact: true }).dispatchEvent('click');
+  await page.clock.runFor(1000);
+  expect(await f.messages()).toHaveLength(1);
+  await expect(powerSlider(page)).toBeDisabled();
+  await f.receive({ type: 'mqtt', topic: 'robot/drive_status', data: { boot: ready.boot, hold_id: first.hold_id, event: 'stopped' } });
+  await expect(powerSlider(page)).toBeEnabled();
+  await rawPress(page, 'right');
+  await release(page, 'right');
+  const second = (await f.drive()).at(-1);
+  expect(second).toMatchObject({ type: 'drive_tap', direction: 'right' });
+  expect(second.hold_id).not.toBe(first.hold_id);
+  await f.receive({ type: 'drive_error', hold_id: first.hold_id, message: 'old failure' });
+  await f.receive({ type: 'mqtt', topic: 'robot/drive_status', data: { boot: ready.boot, hold_id: first.hold_id, event: 'stopped' } });
+  await page.evaluate(() => window.oldCallbacks.forEach(fn => fn()));
+  expect(await f.drive()).toHaveLength(2);
+  await expect(powerSlider(page)).toBeDisabled();
+  await page.locator('.dpad-stop').click();
+  expect((await f.drive()).at(-1)).toMatchObject({ type: 'drive_stop', hold_id: second.hold_id });
+  expect((await f.messages()).at(-1).type).toBe('emergency_stop');
+  f.check();
+});
+
+for (const ack of [true, false]) {
+  test(`missing tap terminal cancels at 3000ms with ack=${ack}, never renews`, async ({ page }) => {
+    const f = await setup(page);
+    await page.evaluate(ack => { window.ack = ack; }, ack);
+    await rawPress(page);
+    await release(page);
+    await page.clock.runFor(2999);
+    expect((await f.drive()).map(m => m.type)).toEqual(['drive_tap']);
+    await page.clock.runFor(1);
+    expect((await f.drive()).map(m => m.type)).toEqual(['drive_tap', 'drive_stop']);
+    await expect(powerSlider(page)).toBeEnabled();
+    await page.clock.runFor(1000);
+    expect(await f.drive()).toHaveLength(2);
+    await press(page, 'down');
+    expect((await f.drive()).at(-1).type).toBe('drive_start');
+    await release(page, 'down');
+    f.check();
+  });
+}
+
+const powerSlider = page => page.getByRole('slider', { name: 'Motor power (%)', exact: true });
+async function setPower(page, power) {
+  await powerSlider(page).evaluate((el, value) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, power);
+}
+
+for (const power of [0, 50, 100]) {
+  for (const [button, direction] of [['up','forward'],['down','backward'],['left','left'],['right','right']]) {
+    for (const held of [false, true]) {
+      test(`${held ? 'hold' : 'tap'} ${direction} snapshots selected ${power} percent power`, async ({ page }) => {
+        const f = await setup(page);
+        await expect(powerSlider(page)).toHaveValue('50');
+        await expect(powerSlider(page)).toHaveAttribute('min', '0');
+        await expect(powerSlider(page)).toHaveAttribute('max', '100');
+        await setPower(page, power);
+        await expect(powerSlider(page)).toHaveValue(String(power));
+        const target = page.locator(`.dpad-${button}`);
+        await target.focus();
+        await page.keyboard.down('Space');
+        await expect(powerSlider(page)).toBeDisabled();
+        await setPower(page, power === 100 ? 0 : 100); // Cannot alter the captured command.
+        if (held) await page.clock.runFor(180);
+        else expect(await f.drive()).toEqual([]);
+        await page.keyboard.up('Space');
+        expect((await f.drive())[0]).toMatchObject({ type: held ? 'drive_start' : 'drive_tap', direction, speed: power });
+        if (!held) {
+          await expect(powerSlider(page)).toBeDisabled();
+          await f.receive({ type: 'mqtt', topic: 'robot/drive_status', data: {
+            boot: ready.boot, hold_id: (await f.drive())[0].hold_id, event: 'stopped',
+          } });
+        }
+        await expect(powerSlider(page)).toBeEnabled();
+        f.check();
+      });
+    }
+  }
+}
+
+for (const [button, direction] of [['up','forward'],['down','backward'],['left','left'],['right','right']]) {
+  test(`quick real click ${direction} sends one bounded native power tap only on release`, async ({ page }) => {
+    const f = await setup(page);
+    const target = page.locator(`.dpad-${button}`);
+    const box = await target.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.clock.runFor(179);
+    expect(await f.messages()).toEqual([]);
+    await page.mouse.up();
+    expect(await f.drive()).toHaveLength(1);
+    expect((await f.drive())[0]).toMatchObject({ type: 'drive_tap', direction, speed: 50 });
+    expect((await f.drive())[0].hold_id).toMatch(/^[0-9a-f-]{36}$/);
+    await page.clock.runFor(600);
+    expect(await f.drive()).toHaveLength(1); // No synthetic-click duplicate or renew.
+    await f.receive({ type: 'mqtt', topic: 'robot/drive_status', data: {
+      boot: ready.boot, hold_id: (await f.drive())[0].hold_id, event: 'stopped',
+    } });
+    f.check();
+  });
+}
+
+for (const [button, direction] of [['up','forward'],['down','backward'],['left','left'],['right','right']]) {
+  test(`held ${direction} uses default 50 percent power and stops on release`, async ({ page }) => {
+    const f = await setup(page);
+    await press(page, button);
+    expect((await f.drive())[0]).toMatchObject({type:'drive_start',direction,speed:50});
+    await page.clock.runFor(600);
+    await release(page, button);
+    expect((await f.drive()).at(-1).type).toBe('drive_stop');
+    const count=(await f.drive()).length;
+    await page.clock.runFor(1000);
+    expect(await f.drive()).toHaveLength(count);
+    f.check();
+  });
 }
 
 for (const reason of ['pointercancel', 'lostpointercapture', 'blur', 'pagehide', 'hidden', 'button-blur', 'unmount', 'offline', 'socket-error', 'socket-close', 'boot', 'disarmed', 'motion-disabled', 'Stop']) {
@@ -235,6 +538,7 @@ for (const key of ['Space', 'Enter']) {
     const f = await setup(page);
     await page.locator('.dpad-left').focus();
     await page.keyboard.down(key);
+    await page.clock.runFor(180);
     await page.keyboard.down(key);
     await page.keyboard.down(key === 'Space' ? 'Enter' : 'Space');
     await page.keyboard.up(key === 'Space' ? 'Enter' : 'Space');
@@ -253,6 +557,7 @@ for (const key of ['Space', 'Enter']) {
     await page.clock.runFor(600);
     expect(await f.drive()).toHaveLength(count);
     await page.keyboard.down(key);
+    await page.clock.runFor(180);
     expect((await f.drive()).at(-1).type).toBe('drive_start');
     await page.keyboard.up(key);
     f.check();
@@ -262,7 +567,7 @@ for (const key of ['Space', 'Enter']) {
 test('secondary pointer releases do not cancel the owner; CSS disables touch gestures and exposes active state', async ({ page }) => {
   const f = await setup(page);
   await press(page, 'up', 7);
-  await press(page, 'down', 8);
+  await rawPress(page, 'down', 8);
   await release(page, 'down', 8);
   await page.clock.runFor(200);
   expect((await f.drive()).map(m => m.type)).toEqual(['drive_start', 'drive_renew']);
@@ -337,6 +642,7 @@ test('pointer capture stops a real mouse hold released outside the button', asyn
   const box = await button.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
+  await page.clock.runFor(180);
   await expect(button).toHaveAttribute('aria-pressed', 'true');
   expect(await button.evaluate(el => el.hasPointerCapture(1))).toBe(true);
   await page.mouse.move(2, 2);
@@ -374,6 +680,7 @@ test('nonlocalhost HTTP uses secure random UUIDs for start, renew, release and a
   const box = await button.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
+  await page.clock.runFor(180);
   await expect(button).toHaveAttribute('aria-pressed', 'true');
   await page.clock.runFor(400);
   await page.mouse.move(2, 2);
@@ -401,7 +708,7 @@ test('long hold renews every 200ms, release stops immediately, and a new hold ge
   await expect(page.locator('.dpad-up')).toHaveAttribute('aria-pressed', 'true');
   await page.clock.runFor(2400);
   const messages = await f.drive();
-  expect(messages[0]).toMatchObject({ type: 'drive_start', direction: 'forward', speed: 30 });
+  expect(messages[0]).toMatchObject({ type: 'drive_start', direction: 'forward', speed: 50 });
   expect(messages[0].hold_id).toMatch(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/);
   expect(messages.slice(1).map(m => m.type)).toEqual(Array(12).fill('drive_renew'));
   expect(messages.slice(1).map((m, i) => m.at - messages[i].at)).toEqual(Array(12).fill(200));

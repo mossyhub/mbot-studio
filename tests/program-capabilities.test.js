@@ -46,6 +46,60 @@ test('every available AV palette default and finite slot variant passes real ser
   assert.equal(service.client, null, 'the test never opens a network connection');
 });
 
+test('motor power overlay expands only advertised new AV firmware and passes server admission', () => {
+  const service = new MqttService();
+  const original = plain(catalog);
+  for (const expanded of [false, true]) {
+    const runtime = { ...av, capabilities: [...flatTypes, ...(expanded ? ['motor_power_100'] : [])],
+      application: 'cooperative-v1', armed: true, motion_enabled: true };
+    service.robotStatusMetadata = runtime;
+    service.robotLastSeen = service.robotStatusLastSeen = Date.now();
+    const max = expanded ? 100 : 50;
+    for (const type of ['move_forward', 'move_backward', 'dc_motor']) {
+      const definition = capabilities.getProgramBlockDefinition(type, catalog[type], runtime);
+      const speedSlot = definition.slots.find(slot => slot.key === 'speed');
+      assert.equal(speedSlot.max, max);
+      assert.equal(speedSlot.min, type === 'dc_motor' ? -max : 0);
+      assert.equal(definition.slots.find(slot => slot.key === 'duration').max, 5);
+      for (const speed of [-101, -100, -50, -1, 0, 50, 100, 101, '100', null]) {
+        const block = { type, speed, duration: 5, ...(type === 'dc_motor' ? { port: 'M1' } : {}) };
+        const valid = typeof speed === 'number' && speed >= speedSlot.min && speed <= max;
+        if (valid) assert.doesNotThrow(() => service.validateCooperativeProgram([block]), `${expanded}:${type}:${speed}`);
+        else assert.throws(() => service.validateCooperativeProgram([block]), /speed/, `${expanded}:${type}:${speed}`);
+      }
+      assert.throws(() => service.validateCooperativeProgram([{ type, duration: 5.1,
+        ...(type === 'dc_motor' ? { port: 'M1' } : {}) }]), /duration/);
+    }
+    assert.equal(capabilities.getProgramBlockDefinition('turn_left', catalog.turn_left, runtime).slots[0].max, 30);
+    assert.throws(() => service.validateCooperativeProgram([{ type: 'turn_left', angle: 31 }]), /angle/);
+  }
+  assert.deepEqual(plain(catalog), original, 'do not change the base definitions or imported programs');
+  assert.equal(catalog.dc_motor.slots.find(slot => slot.key === 'speed').min, -100);
+  assert.equal(catalog.dc_motor.slots.find(slot => slot.key === 'speed').max, 100);
+});
+
+test('native turn overlays and admission expand to 360 only with turn_angle_360', () => {
+  const service = new MqttService();
+  for (const expanded of [false, true]) {
+    const runtime = { ...av, capabilities: [...flatTypes, ...(expanded ? ['turn_angle_360'] : [])],
+      application: 'cooperative-v1', armed: true, motion_enabled: true };
+    service.robotStatusMetadata = runtime;
+    service.robotLastSeen = service.robotStatusLastSeen = Date.now();
+    for (const type of ['turn_left', 'turn_right']) {
+      const definition = capabilities.getProgramBlockDefinition(type, catalog[type], runtime);
+      assert.deepEqual(plain(definition.slots.map(slot => slot.key)), ['angle']);
+      assert.equal(definition.slots[0].min, 0);
+      assert.equal(definition.slots[0].max, expanded ? 360 : 30);
+      for (const angle of [-1, 0, 30, 90, 360, 361]) {
+        const validate = () => service.validateCooperativeProgram([{ type, angle }]);
+        if (angle >= 0 && angle <= (expanded ? 360 : 30)) assert.doesNotThrow(validate);
+        else assert.throws(validate, /angle/);
+      }
+      assert.throws(() => service.validateCooperativeProgram([{ type, angle: 30, speed: 100 }]), /parameter/);
+    }
+  }
+});
+
 test('palette filtering is non-destructive and unknown runtimes retain the full editor', () => {
   assert.equal(typeof capabilities.getProgramPalette, 'function');
   const { getProgramPalette } = capabilities;

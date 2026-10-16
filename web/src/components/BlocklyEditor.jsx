@@ -1557,7 +1557,6 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
                     title="Drag to move this script"
                   />
                   <div className="se-disconnected-note">
-                    <span>Not connected — won't run</span>
                     <button type="button" onClick={() => connectScript(s.id)}>Connect to program</button>
                   </div>
                   <ArrSlot kind="top" index={0} scriptId={scriptId}
