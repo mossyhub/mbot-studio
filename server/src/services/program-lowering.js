@@ -1,13 +1,14 @@
 // Compiler for mbot-av-control-v1, not the experimental RobotEngine.
 // Every branch is checked; only the selected branch contributes output/state.
-export const PROGRAM_LIMITS = Object.freeze({ nodes: 256, depth: 8, repeat: 50, iterations: 256,
-  instructions: 32, evaluations: 4096, sourceBytes: 65536, requestedHoldSeconds: 120 });
+import { LEGACY_PROGRAM_PROFILE, resolveProgramProfile, validateSourceMap } from './program-encoding.js';
+export const PROGRAM_LIMITS = LEGACY_PROGRAM_PROFILE.limits;
 const FIELDS = {
   move_forward: ['speed', 'duration'], move_backward: ['speed', 'duration'],
   dc_motor: ['port', 'speed', 'duration'], servo: ['port', 'angle', 'speed'],
   turn_left: ['angle'], turn_right: ['angle'], wait: ['duration'], stop: [],
   display_text: ['text', 'size'], say: ['text'], set_led: ['color'], play_tone: ['frequency', 'duration'],
   play_sound: ['sound'], set_volume: ['volume'], stop_sound: [], display_animation: ['frames', 'interval'],
+  play_recording: ['recording'],
   repeat: ['times', 'do'], set_variable: ['name', 'source', 'value'], change_variable: ['name', 'by'],
   if_predicate: ['cond', 'then', 'else'], if_else_predicate: ['cond', 'then', 'else'],
 };
@@ -36,22 +37,28 @@ function variableName(value, source) {
 }
 
 /** Pure lowering; callers must still run the installed runtime's admission. */
-export function lowerProgram(input, { validateBlock = () => {} } = {}) {
+export function lowerProgram(input, { validateBlock = () => {}, resolveRecording = () => null, profile } = {}) {
+  const limits = resolveProgramProfile(profile).limits;
   let nodes = 0;
   let iterations = 0;
   let evaluations = 0;
   let requestedHoldSeconds = 0;
+  let holdCorrection = 0;
   const program = [];
   const sourceMap = [];
   function step(source) {
-    if (++evaluations > PROGRAM_LIMITS.evaluations) fail('Program exceeds 4096 evaluation steps', source);
+    if (++evaluations > limits.evaluations) fail(`Program exceeds ${limits.evaluations} evaluation steps`, source);
   }
   function count(source, depth) {
-    if (depth > PROGRAM_LIMITS.depth) fail('Program depth exceeds 8', source);
-    if (++nodes > PROGRAM_LIMITS.nodes) fail('Program exceeds 256 source nodes', source);
+    if (limits.sourceIdBytes && typeof source.sourceId === 'string' && Buffer.byteLength(source.sourceId, 'utf8') > limits.sourceIdBytes) fail('Program source ID exceeds 128 UTF-8 bytes', source);
+    if (depth > limits.depth) fail('Program depth exceeds 8', source);
+    if (++nodes > limits.nodes) fail('Program exceeds 256 source nodes', source);
   }
   // Build expression closures without evaluating code or fetching live values.
-  function expression(value, source, depth) {
+  function expression(value, source, depth, expected = 'number') {
+    if (value === undefined || value === null) {
+      fail(expected === 'boolean' ? 'A condition is required in this socket' : 'A numeric value is required in this socket', source);
+    }
     if (!object(value)) {
       if (typeof value !== 'boolean') number(value, source);
       return () => value;
@@ -69,7 +76,8 @@ export function lowerProgram(input, { validateBlock = () => {} } = {}) {
         return env.get(name);
       };
     }
-    const args = fields.map(key => expression(value[key], { ...source, path: `${source.path}.${key}` }, depth + 1));
+    const operandType = ['op_and', 'op_or', 'op_not'].includes(value.type) ? 'boolean' : 'number';
+    const args = fields.map(key => expression(value[key], { ...source, path: `${source.path}.${key}` }, depth + 1, operandType));
     return env => {
       step(source);
       // Eagerly check both operands, even a short-circuited one. Accepted boolean
@@ -111,8 +119,8 @@ export function lowerProgram(input, { validateBlock = () => {} } = {}) {
   }
   function inspect(blocks, path, depth) {
     if (!Array.isArray(blocks)) fail('Program children must be an array', { path });
-    if (depth > PROGRAM_LIMITS.depth) fail('Program depth exceeds 8', { path });
-    if (blocks.length > PROGRAM_LIMITS.nodes) fail('Program exceeds 256 source nodes', { path });
+    if (depth > limits.depth) fail('Program depth exceeds 8', { path });
+    if (blocks.length > limits.nodes) fail('Program exceeds 256 source nodes', { path });
     return blocks.map((block, index) => {
       const source = { sourceId: block?._id ?? null, path: `${path}[${index}]` };
       count(source, depth);
@@ -131,12 +139,12 @@ export function lowerProgram(input, { validateBlock = () => {} } = {}) {
       if (Object.keys(block).some(key => ![...envelope, ...FIELDS[block.type]].includes(key))) fail(`Unknown ${block.type} parameter`, source);
       if (Object.hasOwn(block, 'run_id') && (typeof block.run_id !== 'string' || [...block.run_id].length > 128)) fail('Invalid run_id', source);
       const node = { block, source, values: {}, wrapped, original };
-      const expr = key => expression(block[key], { ...source, path: `${source.path}${wrapped ? '.params' : ''}.${key}` }, depth + 1);
+      const expr = (key, expected) => expression(block[key], { ...source, path: `${source.path}${wrapped ? '.params' : ''}.${key}` }, depth + 1, expected);
       if (block.type === 'repeat') {
-        if (!Number.isInteger(block.times) || block.times < 0 || block.times > PROGRAM_LIMITS.repeat) fail('repeat times must be a literal integer in 0..50', source);
+        if (!Number.isInteger(block.times) || block.times < 0 || block.times > limits.repeat) fail(`repeat times must be a literal integer in 0..${limits.repeat}`, source);
         node.children = inspect(block.do, `${source.path}.do`, depth + 1);
       } else if (['if_predicate', 'if_else_predicate'].includes(block.type)) {
-        node.condition = expr('cond');
+        node.condition = expr('cond', 'boolean');
         node.then = inspect(Object.hasOwn(block, 'then') ? block.then : [], `${source.path}.then`, depth + 1);
         node.else = inspect(Object.hasOwn(block, 'else') ? block.else : [], `${source.path}.else`, depth + 1);
       } else if (['set_variable', 'change_variable'].includes(block.type)) {
@@ -164,7 +172,7 @@ export function lowerProgram(input, { validateBlock = () => {} } = {}) {
         // Zero-count bodies still undergo semantic checking, without state leaks.
         if (block.times === 0) visit(node.children, new Map(env), false);
         for (let iteration = 0; iteration < block.times; iteration++) {
-          if (++iterations > PROGRAM_LIMITS.iterations) fail('Program exceeds 256 total iterations', source);
+          if (++iterations > limits.iterations) fail(`Program exceeds ${limits.iterations} total iterations`, source);
           visit(node.children, env, emit);
         }
       } else if (node.condition) {
@@ -179,6 +187,16 @@ export function lowerProgram(input, { validateBlock = () => {} } = {}) {
         } else env.set(node.name, value);
       } else {
         const lowered = { ...block };
+        if (block.type === 'play_recording') {
+          if (typeof block.recording !== 'string' || !/^[0-9a-f]{64}$/.test(block.recording)) fail('Invalid recording ID', source);
+          let asset;
+          try { asset = resolveRecording(block.recording); }
+          catch (error) { throw Object.assign(error, source); }
+          if (!asset || asset.id !== block.recording || asset.sha256 !== block.recording ||
+              !Number.isInteger(asset.size) || asset.size < 1 || asset.size > 24576 ||
+              !Number.isInteger(asset.duration_ms) || asset.duration_ms < 1 || asset.duration_ms > 3000) fail('Trusted recording metadata unavailable', source);
+          lowered.duration = asset.duration_ms / 1000;
+        }
         // code-generator.js say and robot_control.py display_text both call
         // display.show_label(text, size, 'center', index=0). Say's size is 14;
         // there is no speech, hold duration, or implicit clear operation.
@@ -194,13 +212,19 @@ export function lowerProgram(input, { validateBlock = () => {} } = {}) {
         catch (error) { throw Object.assign(error, source); }
         if (!emit) continue;
         const expanded = block.type === 'display_animation' ? block.frames.length * 2 : 1;
-        if (sourceMap.length + expanded > PROGRAM_LIMITS.instructions) fail('Program exceeds 32 expanded instructions', source);
+        if (sourceMap.length + expanded > limits.instructions) fail(`Program exceeds ${limits.instructions} expanded instructions`, source);
         // Requested holds only: native driver overhead/turn/sound duration is
         // unknown. This is not a wall-clock deadline or a Stop guarantee.
+        let hold = 0;
         if (['wait', 'move_forward', 'move_backward', 'dc_motor', 'play_tone'].includes(block.type)) {
-          requestedHoldSeconds += number(lowered.duration ?? (block.type === 'play_tone' ? 0.5 : 1), source);
-        } else if (block.type === 'display_animation') requestedHoldSeconds += block.frames.length * number(lowered.interval ?? 0.5, source);
-        if (requestedHoldSeconds > PROGRAM_LIMITS.requestedHoldSeconds) fail('Program requested holds exceed 120 seconds', source);
+          hold = number(lowered.duration ?? (block.type === 'play_tone' ? 0.5 : 1), source);
+        } else if (block.type === 'play_recording') hold = lowered.duration;
+        else if (block.type === 'display_animation') hold = block.frames.length * number(lowered.interval ?? 0.5, source);
+        const corrected = hold - holdCorrection;
+        const sum = requestedHoldSeconds + corrected;
+        holdCorrection = (sum - requestedHoldSeconds) - corrected;
+        requestedHoldSeconds = sum;
+        if (requestedHoldSeconds > limits.requestedHoldSeconds) fail('Program requested holds exceed 120 seconds', source);
         program.push(wireBlock);
         for (let index = 0; index < expanded; index++) {
           sourceMap.push({ ...source, compiledIndex: sourceMap.length });
@@ -211,7 +235,8 @@ export function lowerProgram(input, { validateBlock = () => {} } = {}) {
   const tree = inspect(input, 'program', 1);
   // Inspection bounds recursion and permits arrays only for known children or
   // literal frames, so serialization cannot hide an unchecked/deep subtree.
-  if (Buffer.byteLength(JSON.stringify(input), 'utf8') > PROGRAM_LIMITS.sourceBytes) fail('Program source exceeds 65536 bytes');
+  if (Buffer.byteLength(JSON.stringify(input), 'utf8') > limits.sourceBytes) fail('Program source exceeds 65536 bytes');
   visit(tree, new Map());
+  validateSourceMap(sourceMap, sourceMap.length, profile);
   return { program, compiledCount: sourceMap.length, sourceMap, requestedHoldSeconds };
 }

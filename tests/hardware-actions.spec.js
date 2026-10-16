@@ -38,8 +38,10 @@ async function mount(page, blocks = [], robotStatus = status, robotConfig = conf
 }
 async function dragAction(page, name) {
   const transfer = await page.evaluateHandle(() => new DataTransfer());
-  await page.locator('.se-palette-list [draggable="true"]').filter({ hasText: name })
-    .dispatchEvent('dragstart', { dataTransfer: transfer });
+  const action = page.locator('.se-palette-list .se-block-shape').filter({ hasText: name });
+  await expect(action).toHaveAttribute('aria-disabled', 'false');
+  await expect(action).toHaveAttribute('draggable', 'true');
+  await action.dispatchEvent('dragstart', { dataTransfer: transfer });
   await page.locator('.se-script.main > [data-arr-slot]').last().dispatchEvent('drop', { dataTransfer: transfer });
   await transfer.dispose();
   return page.evaluate(() => window.saved);
@@ -103,6 +105,24 @@ test('runtime transitions refresh only new action defaults, never imported or ex
   expect(unknown.slice(0, -1)).toEqual(av);
   expect(unknown.at(-1).speed).toBe(-100);
   expect(await page.evaluate(() => window.config)).toEqual(config);
+});
+
+test('known unsupported actions and invalid unknown-runtime actions remain unavailable without edits', async ({page}) => {
+  await mount(page, [], {...status, capabilities:['servo']});
+  await expect(page.locator('.se-palette-list')).not.toContainText('Claw: close');
+  await page.getByRole('button',{name:'All blocks',exact:true}).click();
+  const action = page.locator('.se-palette-list .se-block-shape').filter({hasText:'Claw: close'});
+  await expect(action).toHaveAttribute('aria-disabled','true');
+  await expect(action).toHaveAttribute('draggable','false');
+  await expect(action).toContainText('does not advertise');
+  const missingPort = structuredClone(config);
+  delete missingPort.additions[0].port;
+  await page.evaluate(args => window.mount(...args), [[], null, missingPort]);
+  await expect(action).toHaveAttribute('aria-disabled','true');
+  await expect(action).toHaveAttribute('draggable','false');
+  await expect(action).toContainText('Repair this action in Setup');
+  expect(await page.evaluate(() => window.saved)).toBeUndefined();
+  expect(await page.evaluate(() => window.config)).toEqual(missingPort);
 });
 
 test('bounded powers, explicit zero, missing defaults and servo actions retain their semantics', async ({ page }) => {

@@ -120,8 +120,7 @@ def test_startup_native_stop_is_shallow_before_network_and_actions(monkeypatch, 
         faults.add(failed)
         for _ in range(2):
             calls.clear()
-            with pytest.raises(RuntimeError, match=failed + ' fault'):
-                m.ota_step(ctx)
+            m.ota_step(ctx)  # Failed Stop remains owned by the live loader application.
             assert calls == stops, 'failed stop must block network, reads and motion'
             assert m._app.client is None and not client.events
             assert not m._app.outgoing, 'failed startup must not queue an armed grant'
@@ -844,7 +843,11 @@ def test_native_stop_audio_and_both_motors_even_on_failure(monkeypatch, interrup
     assert {c[0] for c in calls} == {'audio_stop', 'motor_stop', 'dc_stop'}
     assert m._app.blocks is None and m._app.timer is None
     if failed:
-        assert any(e.get('event') == 'failed' for _, e in client.events)
+        assert m._app.motor_stop_needed
+        failures.clear()
+        m.ota_step(ctx)
+        assert not m._app.motor_stop_needed
+        assert any(e.get('event') == ('canceled' if interruption == 'emergency' else 'failed') for _, e in client.events)
 
 
 @pytest.mark.parametrize('block,failed', [
@@ -861,6 +864,10 @@ def test_audio_native_failure_cleanup_keeps_original_error(monkeypatch, block, f
     dispatch_prepared(m, ctx)
     assert {'motor_stop', 'dc_stop', 'audio_stop'}.issubset(c[0] for c in calls)
     assert m._app.blocks is None and m._app.timer is None
+    assert m._app.motor_stop_needed
+    failures.clear()
+    m.ota_step(ctx)
+    assert not m._app.motor_stop_needed
     terminal = [e for _, e in client.events if e.get('type') == 'program' and e.get('event') in ('failed', 'completed')]
     assert len(terminal) == 1 and terminal[0]['event'] == 'failed'
     assert terminal[0]['error'] == failed + ' fault'

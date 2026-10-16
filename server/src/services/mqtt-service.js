@@ -2,6 +2,8 @@ import mqtt from 'mqtt';
 import { DriveHold } from './drive-hold.js';
 import { RobotDiagnostics } from './robot-diagnostics.js';
 import { randomUUID } from 'node:crypto';
+import { encodeProgram, selectProgramProfile, LEGACY_PROGRAM_PROFILE } from './program-encoding.js';
+import { RecordingTransfer, recordingMetadata } from './recording-transfer.js';
 
 const MOTION_TYPES = new Set(['move_forward', 'move_backward', 'turn_left', 'turn_right',
   'set_speed', 'move_until', 'dc_motor', 'dc_motor_position', 'servo']);
@@ -29,6 +31,7 @@ const MOTOR_CONTROL_RUNTIME_TYPES = new Set(['read_sensors', 'status']);
 const AV_CONTROL_FIELDS = {
   ...MOTOR_CONTROL_FIELDS,
   play_tone: ['frequency', 'duration'], play_sound: ['sound'],
+  play_recording: ['recording', 'duration'],
   set_volume: ['volume'], stop_sound: [], display_animation: ['frames', 'interval'],
 };
 
@@ -65,11 +68,13 @@ export class MqttService {
     return MqttService.instance;
   }
 
-  constructor({ diagnostics, driveClock, mqttConnect = mqtt.connect } = {}) {
+  constructor({ diagnostics, driveClock, mqttConnect = mqtt.connect, recordingRegistry = null, recordingTransferOptions } = {}) {
     this.diagnostics = diagnostics || new RobotDiagnostics({ persist: false });
     this.mqttConnect = mqttConnect;
     this.timeoutRecordedFor = null;
     this.driveHold = new DriveHold(this, { now: driveClock });
+    this.recordingRegistry = recordingRegistry;
+    this.recordingTransfer = new RecordingTransfer(this, recordingTransferOptions);
   }
 
   publishRecorded(topic, payload, onResult = null) {
@@ -131,13 +136,20 @@ export class MqttService {
         this.client.subscribe(`${this.topicPrefix}/robot/repl/result`);
         this.client.subscribe(`${this.topicPrefix}/robot/execution`);
         this.client.subscribe(`${this.topicPrefix}/robot/drive_status`);
+        this.client.subscribe(`${this.topicPrefix}/robot/asset_status`, { qos: 0 });
+        this.client.subscribe(`${this.topicPrefix}/ota/+/request`, { qos: 0 });
 
         resolve();
       });
 
-      this.client.on('message', (topic, message) => {
+      this.client.on('message', (topic, message, packet = {}) => {
         const shortTopic = topic.replace(`${this.topicPrefix}/`, '');
         const payload = message.toString();
+        const otaDevice = /^ota\/([^/]+)\/request$/.exec(shortTopic)?.[1];
+        if (otaDevice && (!this.robotStatusMetadata.device || otaDevice === this.robotStatusMetadata.device)) {
+          this.recordingTransfer.invalidate('OTA request observed');
+          this.robotStatusLastSeen = null;
+        }
         if (['robot/status', 'robot/sensors', 'robot/execution', 'robot/log'].includes(shortTopic)) {
           let data;
           try { data = JSON.parse(payload); } catch { data = { text: payload, malformedJson: true }; }
@@ -183,6 +195,10 @@ export class MqttService {
         }
 
         if (shortTopic === 'robot/status') this.driveHold.checkStatus();
+        if (shortTopic === 'robot/status') this.recordingTransfer.checkStatus();
+        if (shortTopic === 'robot/asset_status' && message.length <= 2048) {
+          try { this.recordingTransfer.handleAck(JSON.parse(payload), packet); } catch { /* malformed asset ACK */ }
+        }
         if (shortTopic === 'robot/drive_status') {
           try { this.driveHold.deviceStatus(JSON.parse(payload)); } catch { /* malformed device status */ }
         }
@@ -201,6 +217,7 @@ export class MqttService {
         this.connected = false;
         this.robotStatusLastSeen = null;
         this.driveHold.invalidate('MQTT error');
+        this.recordingTransfer.invalidate('MQTT error', false);
         this.diagnostics.record('broker_error', { code: err.code ?? null });
         reject(err);
       });
@@ -209,12 +226,14 @@ export class MqttService {
         this.connected = false;
         this.robotStatusLastSeen = null;
         this.driveHold.invalidate('MQTT offline');
+        this.recordingTransfer.invalidate('MQTT offline', false);
         this.diagnostics.record('broker_offline');
       });
       this.client.on('close', () => {
         this.connected = false;
         this.robotStatusLastSeen = null;
         this.driveHold.invalidate('MQTT closed');
+        this.recordingTransfer.invalidate('MQTT closed', false);
         this.diagnostics.record('broker_close');
       });
 
@@ -231,6 +250,8 @@ export class MqttService {
    * Send a command to the robot
    */
   sendCommand(command) {
+    this.recordingTransfer.rejectCompetingCommand();
+    if (command?.type === 'play_recording') throw admissionError('Recorded audio requires Program preparation', 422, 'COOPERATIVE_UNSUPPORTED');
     this.driveHold.rejectCompetingCommand();
     if (this.isCooperativeApp() &&
         !['mbot-motor-control-v1', 'mbot-av-control-v1'].includes(this.robotStatusMetadata.build) &&
@@ -258,8 +279,32 @@ export class MqttService {
   /**
    * Send a full program to the robot for autonomous execution
    */
-  sendProgram(program, runId = null) {
+  sendProgram(program, runId = null, timestamp = Date.now()) {
+    this.recordingTransfer.rejectCompetingCommand();
     this.driveHold.rejectCompetingCommand();
+    if (this.isCooperativeApp() && this.robotStatusMetadata.build === 'mbot-av-control-v1') {
+      const prepared = this.prepareProgram(program, runId || randomUUID(), timestamp);
+      const snapshot = JSON.parse(prepared.payload);
+      const blocks = Array.isArray(snapshot.program) ? snapshot.program : snapshot.program.commands;
+      const recordings = new Map(blocks.filter(block => block.type === 'play_recording').map(block => {
+        const id = (block.params || block).recording;
+        return [id, this.resolveRecording(id)];
+      }));
+      if (recordings.size) {
+        const registry = this.recordingRegistry;
+        return this.recordingTransfer.run([...recordings.keys()], async id => ({
+          ...recordings.get(id), audio: await registry.read(id),
+        }), session => {
+          // Re-admit the immutable submitted plan, not mutable caller objects.
+          const current = this.prepareProgram(snapshot.program, snapshot.run_id, snapshot.timestamp);
+          this.recordingTransfer.assertSession(session);
+          this.publishRecorded(`${this.topicPrefix}/robot/program`, current.payload);
+          return true;
+        });
+      }
+      this.publishRecorded(`${this.topicPrefix}/robot/program`, prepared.payload);
+      return true;
+    }
     this.validateCooperativeProgram(program);
     if (!this.connected) {
       console.warn('MQTT not connected, program not sent');
@@ -322,6 +367,7 @@ export class MqttService {
    * Emergency stop
    */
   emergencyStop() {
+    this.recordingTransfer.invalidate('Emergency Stop');
     this.driveHold.invalidate('Emergency stop');
     if (!this.connected) return false;
     // Cooperative apps handle Stop only on the dedicated topic; a command-topic
@@ -358,6 +404,33 @@ export class MqttService {
     return this.robotStatusMetadata.application === 'cooperative-v1';
   }
 
+  getProgramProfile() {
+    if (!this.connected || !this.isRobotOnline() || !this.robotStatusLastSeen ||
+        Date.now() - this.robotStatusLastSeen >= MqttService.ROBOT_TIMEOUT) return LEGACY_PROGRAM_PROFILE;
+    return selectProgramProfile(this.robotStatusMetadata);
+  }
+
+  setRecordingRegistry(registry) {
+    this.recordingTransfer.invalidate('Recording registry changed');
+    this.recordingRegistry = registry;
+  }
+
+  resolveRecording(id) {
+    return recordingMetadata(this.recordingRegistry?.get(id), id);
+  }
+
+  prepareProgram(program, runId, timestamp = Date.now(), sourceMap) {
+    if (!this.isCooperativeApp() || this.robotStatusMetadata.build !== 'mbot-av-control-v1') {
+      throw admissionError('Program encoding requires confirmed AV runtime', 422, 'COOPERATIVE_UNSUPPORTED');
+    }
+    if (!this.connected || !this.isRobotOnline() || !this.robotStatusLastSeen ||
+        Date.now() - this.robotStatusLastSeen >= MqttService.ROBOT_TIMEOUT) {
+      throw admissionError('Cooperative robot status is stale or offline', 503, 'COOPERATIVE_OFFLINE');
+    }
+    return encodeProgram(program, { profile: this.getProgramProfile(), runId, timestamp, sourceMap,
+      validateBlock: block => this.validateCooperativeProgram([block]) });
+  }
+
   validateCooperativePayload(payload) {
     // Control.put rejects the entire MQTT payload above 8192 bytes, including
     // JSON escaping, UTF-8 and the server's timestamp/run_id envelope.
@@ -370,7 +443,29 @@ export class MqttService {
 
   /** Capability admission only: publishing never proves device execution. */
   validateCooperativeProgram(program, { commandEnvelope = false } = {}) {
-    if (!this.isCooperativeApp()) return;
+    // Objects are a versioned Program protocol, never a legacy bypass. This
+    // guard precedes even the non-cooperative return and rechecks live grants.
+    if (!Array.isArray(program)) {
+      if (commandEnvelope || this.getProgramProfile().encoding !== 'indexed-v1') {
+        throw admissionError('Indexed Program requires program_indexed_v1 capability', 422, 'COOPERATIVE_UNSUPPORTED');
+      }
+      this.prepareProgram(program, '00000000-0000-4000-8000-000000000000');
+      return;
+    }
+    if (!this.isCooperativeApp()) {
+      const pending = [...program], seen = new Set();
+      while (pending.length) {
+        const block = pending.pop();
+        if (!isObject(block) || seen.has(block)) continue;
+        seen.add(block);
+        if (block.type === 'play_recording') throw admissionError('Recording requires confirmed AV runtime', 422, 'COOPERATIVE_UNSUPPORTED');
+        for (const key of ['do', 'then', 'else']) {
+          const children = (block.params || block)[key];
+          if (Array.isArray(children)) pending.push(...children);
+        }
+      }
+      return;
+    }
     if (!this.isRobotOnline() || !this.robotStatusLastSeen ||
         Date.now() - this.robotStatusLastSeen >= MqttService.ROBOT_TIMEOUT) {
       throw admissionError('Cooperative robot status is stale or offline', 503, 'COOPERATIVE_OFFLINE');
@@ -479,6 +574,11 @@ export class MqttService {
           }
         }
         if (avControl) {
+          if (block.type === 'play_recording') {
+            if (!capabilities.includes('recorded_audio_v1')) throw admissionError('Recording capability unavailable', 422, 'COOPERATIVE_UNSUPPORTED');
+            const metadata = this.resolveRecording(params.recording);
+            if (params.duration !== metadata.duration_ms / 1000) throw admissionError('Recording duration must match trusted metadata');
+          }
           let expanded = 1;
           if (block.type === 'display_animation') {
             if (!Array.isArray(params.frames) || params.frames.length < 1 || params.frames.length > 12 ||
@@ -533,6 +633,12 @@ export class MqttService {
       }
     };
     visit(program);
+    if (avControl && !commandEnvelope) {
+      // Flat validation remains bounded at 32, even on newer firmware; larger
+      // plans enter through the explicit indexed envelope or prepareProgram.
+      encodeProgram(program, { profile: LEGACY_PROGRAM_PROFILE,
+        runId: '00000000-0000-4000-8000-000000000000', timestamp: Date.now() });
+    }
   }
 
   /**

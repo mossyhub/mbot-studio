@@ -23,6 +23,7 @@ export class DriveHold {
     if (typeof hold_id !== 'string' || !UUID.test(hold_id) ||
         Object.keys(message).some(key => !fields.includes(key))) fail('Invalid drive fields or hold_id UUID');
     if (beginsDrive) {
+      this.mqtt.recordingTransfer?.rejectCompetingCommand();
       if (this.active) fail('Drive already owned; release before starting');
       const capabilities = this.mqtt.robotStatusMetadata.capabilities;
       const maxPower = Array.isArray(capabilities) && capabilities.includes('motor_power_100') ? 100 : 50;

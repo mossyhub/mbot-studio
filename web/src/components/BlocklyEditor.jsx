@@ -1,6 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import VoiceRecording from './VoiceRecording.jsx';
+import {listRecordings} from '../services/voice-recording.js';
+const RecordingRegistry = createContext([]);
 import './BlocklyEditor.css';
-import { AV_PROGRAM_BUILD, getProgramPalette, getProgramBlockDefinition } from '../services/program-capabilities';
+import { AV_PROGRAM_BUILD, getProgramPalette, getProgramBlockDefinition, getProgramBlockCapability } from '../services/program-capabilities';
 
 // Exact static subset in server/src/services/program-lowering.js, not the
 // helper's larger candidate inventory. Runtime sensors are never folded.
@@ -140,6 +143,8 @@ const BLOCK_DEFS = {
       options: ['hello','hi','bye','yeah','wow','laugh','hum','sad','sigh','annoyed','angry','surprised','yummy','curious','embarrassed','ready','sprint','sleepy','meow','start','switch','beeps','buzzing','explosion','jump','laser','level-up','low-energy','prompt-tone','right','wrong','ring','score','wake','warning','metal-clash','shot','glass-clink','inflator','running-water','clockwork','click','current','wood-hit','iron','drop','bubble','wave','magic','spitfire','heartbeat','load'],
       default: 'laugh', label: 'sound' }],
     format: (b) => fmt(b.sound) },
+  play_recording: { cat: 'sound', shape: 'stack', label: 'play voice clip',
+    slots: [{ key: 'recording', kind: STR, control: 'select', options: [], default: '', label: 'clip' }] },
   play_melody: { cat: 'sound', shape: 'stack', icon: '🎶', label: 'play melody',
     slots: [{ key: 'melody', kind: STR, control: 'select',
       options: ['birthday','twinkle','jingle','ode','scale','fanfare','alert','win','lose','power_up','power_down','level_up','score'],
@@ -401,6 +406,10 @@ function isReporter(v) {
     && (BLOCK_DEFS[v.type].shape === 'reporter' || BLOCK_DEFS[v.type].shape === 'predicate');
 }
 
+function blockValues(block) {
+  return block.params && typeof block.params === 'object' && !Array.isArray(block.params) ? block.params : block;
+}
+
 function genId() {
   return 'b' + Math.random().toString(36).slice(2, 9);
 }
@@ -415,6 +424,12 @@ function hydrateOne(b) {
   // Legacy catalog used this type for two mouths. Preserve both branches.
   if (out.type === 'if_predicate' && Array.isArray(out.else)) out.type = 'if_else_predicate';
   if (!out._id) out._id = genId();
+  if (blockValues(out) !== out) {
+    out.params = { ...out.params };
+    for (const key of Object.keys(out.params)) {
+      if (isReporter(out.params[key])) out.params[key] = hydrateOne(out.params[key]);
+    }
+  }
   // Mouth arrays (then/else/do)
   for (const k of ['then', 'else', 'do']) {
     if (Array.isArray(out[k])) out[k] = out[k].map(hydrateOne);
@@ -446,6 +461,10 @@ function findById(blocks, id, parent = null) {
 }
 function findInBlock(parent, id) {
   if (!parent || typeof parent !== 'object') return null;
+  if (blockValues(parent) !== parent) {
+    const nested = findInBlock(parent.params, id);
+    if (nested) return nested;
+  }
   for (const k of ['then', 'else', 'do']) {
     if (Array.isArray(parent[k])) {
       for (let i = 0; i < parent[k].length; i++) {
@@ -511,10 +530,12 @@ function setSlot(blocks, parentId, key, value) {
   const out = cloneTree(blocks);
   const loc = findById(out, parentId);
   if (!loc) return out;
+  const target = Array.isArray(key) ? (key[0] === 'params' ? loc.block.params : loc.block) : blockValues(loc.block);
+  const field = Array.isArray(key) ? key[1] : key;
   if (value === null || value === undefined) {
-    delete loc.block[key];
+    delete target[field];
   } else {
-    loc.block[key] = value;
+    target[field] = value;
   }
   return out;
 }
@@ -528,6 +549,7 @@ function descendantIds(block) {
   const visit = (b) => {
     if (!b || typeof b !== 'object') return;
     if (b._id) ids.add(b._id);
+    if (blockValues(b) !== b) visit(b.params);
     for (const k of ['then','else','do']) {
       if (Array.isArray(b[k])) b[k].forEach(visit);
     }
@@ -546,6 +568,21 @@ function descendantIds(block) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDisconnectedBlocksChange, robotConfig, robotStatus }) {
+  const [recordings, setRecordings] = useState([]);
+  const registryAbort = useRef(null);
+  const updateRecordings = React.useCallback(rows => {
+    registryAbort.current?.abort();
+    setRecordings(rows);
+  }, []);
+  // Hydrate names for imported clips without probing hardware or modifying IDs.
+  useEffect(() => {
+    if (!JSON.stringify(extBlocks || []).includes('"play_recording"')) return;
+    const abort = new AbortController(); registryAbort.current = abort;
+    listRecordings({signal:abort.signal}).then(rows => {
+      if (!abort.signal.aborted) setRecordings(rows);
+    }).catch(()=>{}); // Missing registry remains an explicit unavailable ID in the block.
+    return () => abort.abort();
+  }, []);
   const [allBlocks, setAllBlocks] = useState(false);
   const [search, setSearch] = useState('');
   const definitionFor = type => getProgramBlockDefinition(type, BLOCK_DEFS[type], robotStatus);
@@ -693,7 +730,15 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
             .slots.find(slot => slot.key === 'speed');
           block.speed = Math.max(power.min, Math.min(power.max, block.speed));
         }
-        items.push({ id: `${hw.port}_${action.name}`, label: `${hw.label || hw.port}: ${action.name}`, icon: hw.type === 'servo' ? '🦾' : '⚡', block });
+        const capability = getProgramBlockCapability(block.type, robotStatus);
+        const invalid = definitionFor(block.type).slots.find(slot => {
+          const value = block[slot.key];
+          if (value === undefined) return slot.control === 'select';
+          return slot.control === 'select' ? !slot.options.includes(value)
+            : typeof value !== 'number' || !Number.isFinite(value) || value < slot.min || value > slot.max;
+        });
+        const issue = invalid ? `${invalid.key} must be ${invalid.options?.join(', ') || `${invalid.min}..${invalid.max}`}. Repair this action in Setup.` : '';
+        items.push({ id: `${hw.port}_${action.name}`, label: `${hw.label || hw.port}: ${action.name}`, icon: hw.type === 'servo' ? '🦾' : '⚡', block, capability, issue });
       }
     }
     return items;
@@ -818,11 +863,14 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
     if (!drag) return false;
     const block = drag.kind === 'new' ? drag.block : findAnywhere(drag.sourceId)?.loc.block;
     if (!isReporter(block)) return false;
-    if (slotKind === BOOL && BLOCK_DEFS[block.type].shape !== 'predicate') return false;
     if (descendantIds(block).has(parentId)) return false;
     const parent = findAnywhere(parentId)?.loc.block;
-    // Never silently replace an occupied expression subtree.
-    return !!parent && !isReporter(parent[key]);
+    const slot = parent && definitionFor(parent.type)?.slots?.find(s => s.key === key);
+    if (!slot || slot.literalOnly || slot.control === 'select' || slot.control === 'frames') return false;
+    if (BLOCK_DEFS[block.type].kind !== slot.kind) return false;
+    if (robotStatus?.build === AV_PROGRAM_BUILD && !getProgramBlockCapability(block.type, robotStatus, { loweredTypes: LOWERED_TYPES }).supported) return false;
+    // Never silently replace an occupied expression subtree (including wrappers).
+    return !isReporter(blockValues(parent)[key]);
   };
 
   // ── Snap detection (Phase 2) ──────────────────────────────────────────
@@ -1421,6 +1469,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
 
   // ── Render ──────────────────────────────────────────────────────────────
   return (
+    <RecordingRegistry.Provider value={recordings}>
     <div className="scratch-editor">
       <div className="se-cats">
         {CATEGORIES.map((c) => (
@@ -1448,8 +1497,11 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
         </div>
         <div className="se-palette-title">{activeCat === 'my_robot' ? 'My Robot' : (CATEGORIES.find(c => c.id === activeCat)?.label || '')}</div>
         <div className="se-palette-list">
+          {activeCat === 'sound' && !search.trim() && <VoiceRecording runtimeStatus={robotStatus}
+            onRecordingsChange={updateRecordings} onSelect={block => commit([...internal, ...hydrate([block])])} />}
           {activeCat === 'my_robot'
-            ? hardwareItems.map((it) => (
+            ? hardwareItems.filter(it => (allBlocks || it.capability.supported || it.capability.status === 'unknown')
+                && `${it.label} ${it.block.type} ${it.block.port}`.toLowerCase().includes(search.trim().toLowerCase())).map((it) => (
                 <PaletteCustom key={it.id} item={it} onDragStart={(e) => startDragCustomBlock(e, it.block)} onDragEnd={endDrag} />
               ))
             : palette
@@ -1613,6 +1665,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
         />
       )}
     </div>
+    </RecordingRegistry.Provider>
   );
 }
 
@@ -1652,6 +1705,7 @@ function adjustTargetAfterRemoval(target, removedLoc) {
 function reassignIds(b) {
   if (!b || typeof b !== 'object' || !b.type) return b;
   b._id = genId();
+  if (blockValues(b) !== b) Object.values(b.params).forEach(reassignIds);
   for (const k of ['then','else','do']) {
     if (Array.isArray(b[k])) b[k].forEach(reassignIds);
   }
@@ -1720,12 +1774,16 @@ function PaletteEntry({ type, def, onDragStart, onDragEnd, onAdd }) {
 }
 
 function PaletteCustom({ item, onDragStart, onDragEnd }) {
+  // Unknown runtimes retain the legacy editing catalog, not execution approval.
+  const unavailable = !!item.issue || (!item.capability.supported && item.capability.status !== 'unknown');
   return (
     <div className="se-block-shape stack palette" style={{ '--cat': CAT_COLOR.hardware }}
-      draggable onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      draggable={!unavailable} aria-disabled={unavailable}
+      onDragStart={e => { if (unavailable) { e.preventDefault(); return; } onDragStart(e); }} onDragEnd={onDragEnd}>
       <div className="se-block-row">
         <span className="se-block-icon">{item.icon}</span>
         <span className="se-block-text">{item.label}</span>
+        {(item.issue || !item.capability.supported) && <small className="se-unavailable">{item.issue || item.capability.reason}</small>}
       </div>
     </div>
   );
@@ -1755,9 +1813,25 @@ function ReporterPreview({ type, def }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function BlockNode({ block, topIndex, parentId, scriptId, ctx }) {
+  const recordings = useContext(RecordingRegistry);
   const base = BLOCK_DEFS[block.type];
-  const def = getProgramBlockDefinition(block.type, base, ctx.robotStatus) || { cat: 'movement', shape: 'stack', icon: '❓', label: block.type };
-  const removedSlots = (base?.slots || []).filter(s => !(def.slots || []).some(next => next.key === s.key) && Object.hasOwn(block, s.key));
+  const resolved = getProgramBlockDefinition(block.type, base, ctx.robotStatus);
+  const def = block.type === 'play_recording' && resolved ? {...resolved, slots:resolved.slots.map(slot => ({...slot,
+    ariaLabel:'Recording', options:recordings.filter(row=>row.ready).map(row=>row.id),
+    optionLabels:Object.fromEntries(recordings.map(row=>[row.id,row.name || 'Untitled clip']))}))}
+    : resolved || { cat: 'movement', shape: 'stack', icon: '❓', label: block.type };
+  const allowedKeys = new Set(['type', '_id', 'run_id', 'params', ...(def.slots || []).map(s => s.key), ...(def.mouths || []).map(m => m.key)]);
+  // Imported extras stay intact until the user explicitly removes them.
+  if (block.type === 'set_variable' && block.source === 'number') allowedKeys.add('source');
+  const values = blockValues(block);
+  const wrapped = values !== block;
+  const envelope = new Set(['type', '_id', 'run_id', 'params']);
+  const removedSlots = Object.keys(block).filter(key => !(wrapped ? envelope : allowedKeys).has(key))
+    .map(key => ({ key, scope: 'block', value: block[key] }));
+  if (wrapped) for (const key of Object.keys(values)) {
+    if (!(def.slots || []).some(s => s.key === key)) removedSlots.push({ key, scope: 'params', value: values[key] });
+  }
+  if (Object.hasOwn(block, 'params') && !wrapped) removedSlots.push({ key: 'params', scope: 'block', value: block.params });
   const color = CAT_COLOR[def.cat] || '#64748b';
   const isEditing = ctx.editingId === block._id;
 
@@ -1802,15 +1876,17 @@ function BlockNode({ block, topIndex, parentId, scriptId, ctx }) {
           <React.Fragment key={s.key}>
             {def.infix && i > 0 && <span className="se-rep-infix">{def.infix}</span>}
             <SlotInline
-              slot={s}
-              value={block[s.key]}
+              slot={Object.hasOwn(def.effectiveDefaults || {}, s.key) ? { ...s, effectiveDefault: def.effectiveDefaults[s.key] } : s}
+              value={values[s.key]}
               parentId={block._id}
               ctx={ctx}
             />
           </React.Fragment>
         ))}
 
-        {removedSlots.map(s => <span key={s.key} className="se-unavailable" role="alert">Unsupported parameter {s.key}: {fmt(block[s.key])} (preserved)</span>)}
+        {removedSlots.map(s => <span key={`${s.scope}.${s.key}`} className="se-unavailable" role="alert">Unsupported parameter {s.key}: {fmt(s.value)} (preserved)
+          <button type="button" onClick={e => { e.stopPropagation(); ctx.handleSetPrimitive(block._id, [s.scope, s.key], undefined); }}>Remove unsupported {s.key}</button>
+        </span>)}
         <span className="se-block-actions" onClick={(e) => e.stopPropagation()}>
           <button className="se-iconbtn" title="Duplicate" onClick={() => ctx.handleDuplicate(block._id)}>📋</button>
         </span>
@@ -1907,8 +1983,35 @@ function SlotBody({ slot, value, parentId, ctx, onDragOver, onDrop, active }) {
   );
 }
 
+function TextParameter({ value, maxCodePoints, onChange, multiline = false, label }) {
+  const ref = useRef(null);
+  const count = typeof value === 'string' ? [...value].length : 0;
+  const invalid = maxCodePoints !== undefined && count > maxCodePoints;
+  const message = invalid ? `${count}/${maxCodePoints} characters — shorten this text.` : '';
+  useEffect(() => { ref.current?.setCustomValidity(message); }, [message]);
+  const Input = multiline ? 'textarea' : 'input';
+  return <span className="se-parameter-control">
+    <Input ref={ref} type={multiline ? undefined : 'text'} className="se-prim txt"
+      aria-label={label} aria-invalid={invalid} rows={multiline ? 2 : undefined}
+      style={multiline ? { width: 180, resize: 'vertical' } : undefined} value={value}
+      onChange={e => onChange(e.target.value)} onClick={e => e.stopPropagation()} />
+    {maxCodePoints !== undefined && <small role={invalid ? 'alert' : undefined}>{message || `${count}/${maxCodePoints} characters`}</small>}
+  </span>;
+}
+
 function PrimitiveInput({ slot, value, onChange }) {
-  const v = value === undefined || value === null ? (slot.default ?? '') : value;
+  const missing = value === undefined;
+  const nullValue = value === null;
+  const hasDefault = missing && Object.hasOwn(slot, 'effectiveDefault');
+  const message = nullValue ? `Null ${slot.key}; enter a value.`
+    : missing ? (hasDefault ? `Missing ${slot.key} — effective default: ${slot.effectiveDefault}` : `Missing ${slot.key}; enter a value.`) : '';
+  return <span className="se-parameter-control">
+    <PrimitiveControl slot={slot} value={hasDefault ? slot.effectiveDefault : (missing || nullValue ? '' : value)} onChange={onChange} />
+    {message && <small role={hasDefault ? 'status' : 'alert'}>{message}</small>}
+  </span>;
+}
+
+function PrimitiveControl({ slot, value: v, onChange }) {
   if (slot.control === 'frames') {
     const frames = Array.isArray(v) ? v : [];
     return (
@@ -1918,9 +2021,12 @@ function PrimitiveInput({ slot, value, onChange }) {
         <span style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
           {frames.map((frame, i) => (
             <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <textarea className="se-prim txt" aria-label={`Frame ${i + 1}`} rows={2} maxLength={128}
-                style={{ width: 180, resize: 'vertical' }} value={typeof frame === 'string' ? frame : ''}
-                onChange={(e) => onChange(frames.map((item, index) => index === i ? e.target.value : item))} />
+              <TextParameter multiline label={`Frame ${i + 1}`} maxCodePoints={128}
+                value={typeof frame === 'string' ? frame : ''}
+                onChange={text => onChange(frames.map((item, index) => index === i ? text : item))} />
+              {typeof frame !== 'string' && <span role="alert">Frame {i + 1} is not text: {JSON.stringify(frame)} (preserved).
+                <button type="button" onClick={() => onChange(frames.map((item, index) => index === i ? '' : item))}>Replace frame {i + 1} with empty text</button>
+              </span>}
               <button type="button" className="se-iconbtn" aria-label={`Remove frame ${i + 1}`}
                 disabled={frames.length <= 1} onClick={() => onChange(frames.filter((_, index) => index !== i))}>×</button>
             </span>
@@ -1934,9 +2040,9 @@ function PrimitiveInput({ slot, value, onChange }) {
   }
   if (slot.control === 'select') {
     return (
-      <select className="se-prim" value={v} onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()}>
+      <select className="se-prim" aria-label={slot.ariaLabel} value={v} onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()}>
         {!slot.options.includes(v) && <option value={v}>Unavailable: {String(v)}</option>}
-        {slot.options.map((o) => <option key={o} value={o}>{o}</option>)}
+        {slot.options.map((o) => <option key={o} value={o}>{slot.optionLabels?.[o] || o}</option>)}
       </select>
     );
   }
@@ -1949,8 +2055,7 @@ function PrimitiveInput({ slot, value, onChange }) {
   }
   // text
   return (
-    <input type="text" className="se-prim txt" value={v}
-      onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()} />
+    <TextParameter value={v} maxCodePoints={slot.maxCodePoints} onChange={onChange} />
   );
 }
 

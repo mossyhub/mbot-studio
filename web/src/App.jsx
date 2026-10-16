@@ -10,6 +10,7 @@ import Celebrations from './components/Celebrations.jsx';
 import Achievements from './components/Achievements.jsx';
 import Challenges, { MissionStrip } from './components/Challenges.jsx';
 import { captureSubmission, acceptSubmission, completeSubmission, cancelSubmission } from './services/challenge-progress.js';
+import { programEvidenceProfile, readProgramEvidence, agreesWithServer } from './services/program-evidence.js';
 import TemplateGallery from './components/TemplateGallery.jsx';
 import DebugTerminal from './components/DebugTerminal.jsx';
 import { playProgramSent, playSuccess, playError, playStop, playConnect, playDisconnect, playClick, playAchievement, playCelebration, isMuted, setMuted } from './services/sound-service';
@@ -146,9 +147,20 @@ export default function App() {
   const prevRobotOnline = useRef(false);
   const activeRun = useRef(null);
   const [programLifecycle, setProgramLifecycle] = useState(null);
-  useEffect(() => () => {
-    activeRun.current?.dispose();
+  const cancelActiveRun = useCallback((text) => {
+    const run = activeRun.current;
+    // Invalidate first: abort/close may resume an older async continuation.
     activeRun.current = null;
+    if (!run) return;
+    cancelSubmission(run.submission);
+    run.dispose();
+    setProgramLifecycle({ text, pending: false });
+  }, []);
+  useEffect(() => () => {
+    const run = activeRun.current;
+    activeRun.current = null;
+    cancelSubmission(run?.submission);
+    run?.dispose();
   }, []);
 
   const checkRuntime = robotStatus.build === 'mbot-av-control-v1';
@@ -180,6 +192,17 @@ export default function App() {
   }, [blocks, checkRuntime, checkIdentity]);
   const checkIsCurrent = programCheck?.blocks === blocks && programCheck?.identity === checkIdentity;
   const programBlocked = checkRuntime && (!robotStatus.robotOnline || !checkIsCurrent || !programCheck?.runnable);
+  const programEncoding = checkIsCurrent && programCheck?.runnable && robotStatus.robotOnline
+    && robotStatus.mqttConnected && robotStatus.capabilities?.includes('program_indexed_v1')
+    && programCheck.encoding === 'indexed-v1' ? 'indexed-v1' : 'flat';
+  const knownLimits = programEvidenceProfile(programEncoding);
+  // Preflight may tighten a known profile, never enlarge it with arbitrary values.
+  const limit = key => Number.isFinite(programCheck?.limits?.[key]) && programCheck.limits[key] > 0
+    ? Math.min(programCheck.limits[key], knownLimits[key]) : knownLimits[key];
+  const readinessSummary = `Ready to run · ${programCheck?.expandedCount ?? programCheck?.compiledCount ?? '?'} / ${limit('instructions')} ${programEncoding === 'indexed-v1' ? 'executed steps' : 'robot steps'}`
+    + (programEncoding === 'indexed-v1' ? ` · ${programCheck.uniqueCommandCount ?? '?'} / ${limit('uniqueCommands')} distinct commands` : '')
+    + (Number.isFinite(programCheck?.wireBytes) ? ` · ${programCheck.wireBytes} / ${limit('wireBytes')} wire bytes` : '')
+    + (Number.isFinite(programCheck?.requestedHoldSeconds) ? ` · ${Number(programCheck.requestedHoldSeconds.toFixed(3))} / ${limit('requestedHoldSeconds')} s requested holds` : '');
 
   const commitBlocks = useCallback((newBlocks) => {
     setBlocks(newBlocks);
@@ -263,11 +286,29 @@ export default function App() {
       .then(data => setCurrentModel(data.model || ''))
       .catch(console.error);
 
-    // Check robot status periodically
+    // Only the newest poll may publish status, even if abort loses a race
+    // with response-body delivery. Cleanup also revokes the final poll.
+    let statusGeneration = 0;
+    let statusAbort;
+    let statusDeadline;
+    const unavailable = () => setRobotStatus({ connected: false, mqttConnected: false, robotOnline: false, robotState: 'unknown' });
     const checkStatus = () => {
-      fetch('/api/robot/status')
-        .then(r => r.json())
-        .then(s => setRobotStatus({
+      const token = ++statusGeneration;
+      clearTimeout(statusDeadline);
+      statusAbort?.abort();
+      const controller = new AbortController();
+      statusAbort = controller;
+      // Expire before the next five-second poll; an abort alone cannot fence
+      // a body already delivered to JavaScript.
+      statusDeadline = setTimeout(() => {
+        if (token !== statusGeneration) return;
+        statusGeneration++;
+        controller.abort();
+        unavailable();
+      }, 4500);
+      fetch('/api/robot/status', { signal: controller.signal, cache: 'no-store' })
+        .then(r => { if (!r.ok) throw new Error(`Status HTTP ${r.status}`); return r.json(); })
+        .then(s => { if (token === statusGeneration) setRobotStatus({
           connected: s.robotOnline,        // true only when robot is actually responding
           mqttConnected: s.mqttConnected,   // broker connection
           robotOnline: s.robotOnline,       // robot heartbeat received recently
@@ -279,12 +320,15 @@ export default function App() {
           build: s.build,
           boot: s.boot,
           capabilities: s.capabilities,
-        }))
-        .catch(() => setRobotStatus({ connected: false, mqttConnected: false, robotOnline: false, robotState: 'unknown' }));
+        }); })
+        .catch(() => {
+          if (token === statusGeneration) unavailable();
+        })
+        .finally(() => { if (token === statusGeneration) clearTimeout(statusDeadline); });
     };
     checkStatus();
     const interval = setInterval(checkStatus, 5000);
-    return () => clearInterval(interval);
+    return () => { clearInterval(interval); clearTimeout(statusDeadline); statusGeneration++; statusAbort?.abort(); };
   }, []);
 
   // Sound feedback for robot connection changes
@@ -356,7 +400,7 @@ export default function App() {
 
   const handleRunProgram = useCallback(async () => {
     if (blocks.length === 0 || activeRun.current || programBlocked) return;
-    const run = { id: null, events: [], controller: new AbortController(),
+    const run = { id: null, events: new Map(), encoding: programEncoding, controller: new AbortController(),
       submission: captureSubmission({ blocks, profileId: currentProfileId, robotConfig }) };
     activeRun.current = run;
     setProgramLifecycle({ text: 'Submitting program…', pending: true });
@@ -371,7 +415,7 @@ export default function App() {
       clearTimeout(run.timer);
       run.controller.abort();
       run.socket?.close();
-      run.events = [];
+      run.events.clear();
     };
     const finish = (text) => {
       if (activeRun.current !== run) return;
@@ -380,17 +424,22 @@ export default function App() {
       setProgramLifecycle({ text, pending: false });
     };
     // Absolute observation deadline, not refreshed by telemetry/noisy events.
-    run.timer = setTimeout(() => finish('Unverified — timed out waiting for device confirmation; the robot may still be running.'), 120000);
+    run.timer = setTimeout(() => finish('Unverified — timed out waiting for device confirmation; the robot may still be running.'), programEvidenceProfile(run.encoding).observationMs);
     const observe = event => {
       if (activeRun.current !== run || event.run_id !== run.id) return;
       if (['completed', 'failed', 'canceled'].includes(event.event)) {
         if (event.type !== 'program') return; // A block ending is not a program ending.
+        if (run.stopRequested && event.event === 'completed') {
+          finish(`Unverified — device reported completion after Stop; device stop is not confirmed (${run.id}).`);
+          return; // Stop revoked award rights; late completion is not cancellation.
+        }
         const label = { completed: 'Completed', failed: 'Failed', canceled: 'Canceled' }[event.event];
         const detail = event.details ? ` — ${typeof event.details === 'string' ? event.details.slice(0, 300) : JSON.stringify(event.details).slice(0, 300)}` : '';
         finish(`${label} — device confirmed (${run.id})${detail}`);
         if (event.event === 'completed') award(event);
         else { cancelSubmission(run.submission); if (event.event === 'failed') playError(); }
       } else if (['accepted', 'started'].includes(event.event)) {
+        if (run.stopRequested) return; // Do not overwrite the unconfirmed Stop warning.
         // Do not regress started to accepted when events arrive out of order.
         if (run.started && event.event === 'accepted') return;
         if (event.event === 'started') run.started = true;
@@ -411,8 +460,18 @@ export default function App() {
           if (msg.type !== 'mqtt' || msg.topic !== 'robot/execution' || typeof msg.data?.run_id !== 'string') return;
           if (run.id) observe(msg.data);
           else {
-            run.events.push(msg.data);
-            if (run.events.length > 128) run.events.shift();
+            // Before HTTP reveals our run ID, keep at most one program-level
+            // lifecycle per run, not thousands of primitive events. First
+            // terminal wins; noise cannot evict a failed/canceled outcome.
+            const event = msg.data;
+            if (event.type !== 'program' || !['accepted', 'started', 'completed', 'failed', 'canceled'].includes(event.event)
+              || !event.run_id || event.run_id.length > 128) return;
+            const previous = run.events.get(event.run_id);
+            if (!previous && run.events.size >= 32) { run.earlyOverflow = true; return; }
+            if (previous && (['completed', 'failed', 'canceled'].includes(previous.event)
+              || (previous.event === 'started' && event.event === 'accepted'))) return;
+            run.events.set(event.run_id, { type: 'program', run_id: event.run_id, event: event.event,
+              details: event.details ? (typeof event.details === 'string' ? event.details : JSON.stringify(event.details)).slice(0, 300) : undefined });
           }
         } catch { /* malformed telemetry cannot complete a run */ }
       };
@@ -429,6 +488,7 @@ export default function App() {
         body: JSON.stringify({ program: run.submission.blocks }),
         signal: run.controller.signal,
       });
+      if (activeRun.current !== run) return;
       const data = await res.json();
       if (activeRun.current !== run) return;
       if (!res.ok || data.error) {
@@ -439,10 +499,22 @@ export default function App() {
       } else if (typeof data.run_id === 'string' && data.run_id) {
         run.id = data.run_id;
         acceptSubmission(run.submission, data);
+        // The accepted encoding must match the profile captured before Run.
+        // Re-read only the immutable submission, never the now-editable blocks.
+        if (run.encoding === 'indexed-v1') {
+          try {
+            run.submission.evidence = readProgramEvidence(run.submission.blocks, run.encoding);
+            run.submission.verified = data.encoding === run.encoding && agreesWithServer(run.submission.evidence, run.submission.response);
+          } catch { run.submission.verified = false; }
+        } else if (data.encoding === 'indexed-v1') run.submission.verified = false;
         setProgramLifecycle({ text: `Submitted — awaiting device confirmation (${run.id})`, pending: true });
-        const earlyEvents = run.events;
-        run.events = [];
-        earlyEvents.forEach(observe);
+        const earlyEvent = run.events.get(run.id);
+        run.events.clear();
+        if (earlyEvent) observe(earlyEvent);
+        else if (run.earlyOverflow) {
+          cancelSubmission(run.submission);
+          finish('Unverified — too many unrelated early program events; device completion cannot be safely confirmed.');
+        }
       } else if (robotStatus.application === 'cooperative-v1') {
         finish('Unverified — submission returned no run ID; device completion cannot be confirmed.');
       } else {
@@ -454,17 +526,31 @@ export default function App() {
       playError();
       setErrorToast('Error sending program: ' + err.message);
     }
-  }, [blocks, robotStatus.application, programBlocked, currentProfileId, robotConfig]);
+  }, [blocks, robotStatus.application, programBlocked, programEncoding, currentProfileId, robotConfig]);
 
   const handleStop = useCallback(async () => {
-    cancelSubmission(activeRun.current?.submission);
+    // An already received HTTP request may still run server-side: always send
+    // emergency Stop as well (including during recording asset synchronization).
+    const run = activeRun.current;
+    if (run?.id) {
+      // A known submission keeps only bounded device observation. Revoke awards
+      // synchronously, but don't mistake the Stop HTTP ACK for device cancellation.
+      run.stopRequested = true;
+      cancelSubmission(run.submission);
+      run.controller.abort();
+      setProgramLifecycle({ text: `Stop requested — device stop is not confirmed (${run.id}).`, pending: true });
+    } else {
+      // Before an ID is known, revoke every async continuation (including a late
+      // observer-open callback) so no POST or response can revive this run.
+      cancelActiveRun('Canceled locally — Stop requested; device stop is not confirmed.');
+    }
     playStop();
     try {
       await fetch('/api/robot/stop', { method: 'POST' });
     } catch (err) {
       console.error('Stop error:', err);
     }
-  }, []);
+  }, [cancelActiveRun]);
 
   const handleConfigUpdate = useCallback((config) => {
     setRobotConfig(config);
@@ -543,10 +629,10 @@ export default function App() {
   }, [currentProfileId, resetBlockHistory, restoreBlocks]);
 
   const handleProfileSwitch = useCallback((profileId) => {
-    cancelSubmission(activeRun.current?.submission);
+    cancelActiveRun('Canceled locally — profile changed; the robot may still be running.');
     setCurrentProfileId(profileId);
     saveCurrentProfileId(profileId);
-  }, []);
+  }, [cancelActiveRun]);
 
   const handleProfileCreate = useCallback((profileName) => {
     const cleaned = (profileName || '').trim();
@@ -561,11 +647,11 @@ export default function App() {
     const updated = [...profiles, newProfile];
     setProfiles(updated);
     saveProfilesToStorage(updated);
-    cancelSubmission(activeRun.current?.submission);
+    cancelActiveRun('Canceled locally — profile changed; the robot may still be running.');
     setCurrentProfileId(newProfile.id);
     saveCurrentProfileId(newProfile.id);
     return true;
-  }, [profiles]);
+  }, [profiles, cancelActiveRun]);
 
   const handleProfileRename = useCallback((profileName) => {
     const cleaned = (profileName || '').trim();
@@ -728,7 +814,7 @@ export default function App() {
                 {!blocks.length ? (disconnectedCount ? 'No blocks connected to start.' : 'Start here: add a block from the library.') : checkRuntime ? (
                   !robotStatus.robotOnline ? 'Robot offline — you can keep editing.' :
                   !checkIsCurrent || programCheck?.checking ? 'Checking this program…' :
-                  programCheck?.runnable ? `Ready to run · ${programCheck.expandedCount ?? programCheck.compiledCount ?? '?'} / 32 robot steps` :
+                  programCheck?.runnable ? readinessSummary :
                   `Needs attention: ${programCheck?.error || 'This program cannot run on the connected robot.'}`
                 ) : 'Program support depends on the connected robot runtime.'}
               </div>

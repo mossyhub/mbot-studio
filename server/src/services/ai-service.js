@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI, { AzureOpenAI } from 'openai';
 import { formatCalibrationForPrompt } from './calibration-service.js';
+import { selectProgramProfile } from './program-encoding.js';
 
 // OpenAI-compatible API client.
 // Supports: direct OpenAI, Azure OpenAI, or any compatible endpoint (via AI_BASE_URL).
@@ -258,8 +259,19 @@ async function createCompletionWithAdaptiveParams({ messages, temperature, maxCo
   throw lastError;
 }
 
-function makeLocalDebugProgram(userMessage, currentBlocks = null) {
+function isAvRuntime(runtimeStatus) {
+  return runtimeStatus?.application === 'cooperative-v1' && runtimeStatus?.build === 'mbot-av-control-v1';
+}
+
+function makeLocalDebugProgram(userMessage, currentBlocks = null, runtimeStatus = null) {
   const text = String(userMessage || '').toLowerCase();
+  if (isAvRuntime(runtimeStatus) && /obstacle|avoid|sensor|\bline\b|\buntil\b|\bforever\b/.test(text)) {
+    const error = 'Live sensor loops and indefinite programs are unsupported by mbot-av-control-v1';
+    return { success: false, error, chat: `${error}. I cannot replace that with blind timed movement.`, model: 'local/debug-rule-engine' };
+  }
+  const turn = (type, angle, speed) => isAvRuntime(runtimeStatus)
+    ? { type, angle }
+    : { type, speed, angle };
 
   const startsWithCurrent = Array.isArray(currentBlocks) && currentBlocks.length > 0
     ? [...currentBlocks]
@@ -271,16 +283,16 @@ function makeLocalDebugProgram(userMessage, currentBlocks = null) {
     program.push(
       { type: 'repeat', times: 4, do: [
         { type: 'move_forward', speed: 50, duration: 1.5 },
-        { type: 'turn_right', speed: 40, angle: 90 },
+        turn('turn_right', 90, 40),
       ] },
       { type: 'stop' },
     );
   } else if (text.includes('dance')) {
     program.push(
       { type: 'repeat', times: 3, do: [
-        { type: 'turn_left', speed: 60, angle: 45 },
-        { type: 'turn_right', speed: 60, angle: 90 },
-        { type: 'turn_left', speed: 60, angle: 45 },
+        turn('turn_left', 45, 60),
+        turn('turn_right', 90, 60),
+        turn('turn_left', 45, 60),
         { type: 'play_tone', frequency: 880, duration: 0.2 },
       ] },
       { type: 'stop' },
@@ -410,13 +422,13 @@ export function initializeModelSelection() {
  */
 
 // ── System prompt cache ────────────────────────────────────────────
-// The system prompt only depends on robotConfig (which rarely changes).
-// We cache the built prompt keyed by a cheap hash of the config object,
+// The system prompt depends on robotConfig and the installed runtime contract.
+// We cache the built prompt keyed by those stable inputs (not heartbeat times),
 // so we don't rebuild string-heavy sections on every request.
 let _cachedSystemPrompt = null;
 let _cachedConfigHash = null;
 
-function configHash(robotConfig) {
+function configHash(robotConfig, runtimeStatus) {
   // JSON.stringify is deterministic for our config structure
   return JSON.stringify({
     name: robotConfig?.name,
@@ -425,15 +437,16 @@ function configHash(robotConfig) {
     taskPatterns: robotConfig?.taskPatterns,
     calibrations: robotConfig?.calibrations,
     physicalDescription: robotConfig?.physicalDescription,
+    runtime: isAvRuntime(runtimeStatus) ? { build: runtimeStatus.build, capabilities: runtimeStatus.capabilities } : null,
   });
 }
 
-function getCachedSystemPrompt(robotConfig) {
-  const hash = configHash(robotConfig);
+function getCachedSystemPrompt(robotConfig, runtimeStatus) {
+  const hash = configHash(robotConfig, runtimeStatus);
   if (_cachedSystemPrompt && _cachedConfigHash === hash) {
     return _cachedSystemPrompt;
   }
-  _cachedSystemPrompt = buildSystemPrompt(robotConfig);
+  _cachedSystemPrompt = buildSystemPrompt(robotConfig, runtimeStatus);
   _cachedConfigHash = hash;
   return _cachedSystemPrompt;
 }
@@ -443,7 +456,7 @@ function getCachedSystemPrompt(robotConfig) {
  * Hardware states are injected as a separate context message to keep
  * the system prompt identical across requests (enabling prompt caching).
  */
-function buildSystemPrompt(robotConfig) {
+function buildSystemPrompt(robotConfig, runtimeStatus) {
   const sections = [];
 
   // ── Identity & tone ──────────────────────────────────────────────
@@ -453,10 +466,10 @@ Use simple words, short sentences, and the occasional emoji. If something is unc
   );
 
   // ── Physical robot description (without runtime state) ──────────
-  sections.push(formatPhysicalDescription(robotConfig, null));
+  sections.push(formatPhysicalDescription(robotConfig, null, runtimeStatus));
 
   // ── Block reference ─────────────────────────────────────────────
-  sections.push(formatBlockReference(robotConfig));
+  sections.push(formatBlockReference(robotConfig, runtimeStatus));
 
   // ── Physical constraints ────────────────────────────────────────
   if (robotConfig?.constraints?.length) {
@@ -485,7 +498,7 @@ Use simple words, short sentences, and the occasional emoji. If something is unc
     `## Response Format
 - To generate a program: {"program": [...blocks...], "explanation": "friendly one-sentence description"}
 - To chat / ask a question: {"chat": "your friendly message"}
-- Speed 30–70 for driving safety. Keep programs short and simple.
+- ${isAvRuntime(runtimeStatus) ? 'Follow the runtime bounds above; prefer modest driving RPM. Hardware descriptions, saved actions and older conversation examples do not override runtime restrictions. If a saved action is incompatible, explain the conflict and ask for an explicit correction, never silently change its parameters.' : 'Speed 30–70 for driving safety.'} Keep programs short and simple.
 - ALWAYS respond with valid JSON — nothing outside the JSON object.`
   );
 
@@ -578,7 +591,7 @@ function compressHistory(history) {
  * Describe the robot as a physical object the AI can reason about.
  * Includes spatial relationships, sensor locations, and hardware attachments.
  */
-function formatPhysicalDescription(robotConfig, hardwareStates) {
+function formatPhysicalDescription(robotConfig, hardwareStates, runtimeStatus = null) {
   const name = robotConfig?.name || 'My mBot2';
   let desc = `## Your Robot: "${name}"\n`;
 
@@ -619,12 +632,12 @@ function formatPhysicalDescription(robotConfig, hardwareStates) {
     for (const [assembly, parts] of Object.entries(grouped)) {
       desc += `\n**${assembly}** (${parts.length} part${parts.length > 1 ? 's' : ''}):\n`;
       for (const a of parts) {
-        desc += formatHardwareAddition(a, hardwareStates);
+        desc += formatHardwareAddition(a, hardwareStates, runtimeStatus);
       }
     }
 
     for (const a of ungrouped) {
-      desc += formatHardwareAddition(a, hardwareStates);
+      desc += formatHardwareAddition(a, hardwareStates, runtimeStatus);
     }
 
     desc += `\n⚠️ CRITICAL RULE: When the child names an action (like "lower the arm" or "open the claw"), `;
@@ -638,7 +651,7 @@ function formatPhysicalDescription(robotConfig, hardwareStates) {
 /**
  * Format a single hardware addition with rich physical context.
  */
-function formatHardwareAddition(addition, hardwareStates) {
+function formatHardwareAddition(addition, hardwareStates, runtimeStatus = null) {
   const a = addition;
   let s = '';
 
@@ -659,7 +672,7 @@ function formatHardwareAddition(addition, hardwareStates) {
   // Feedback info + percentage positioning for 2-action DC motors
   if (a.type === 'dc_motor') {
     s += `  ⚠️ No position sensor — robot can't tell where this is, so track state carefully\n`;
-    if (a.actions?.length === 2 && a.homeState) {
+    if (!isAvRuntime(runtimeStatus) && a.actions?.length === 2 && a.homeState) {
       const homeAction = a.actions.find(act => act.targetState === a.homeState);
       const awayAction = a.actions.find(act => act.targetState !== a.homeState);
       const awayState = awayAction?.targetState || a.states?.find(st => st !== a.homeState) || 'other end';
@@ -708,7 +721,44 @@ function formatHardwareAddition(addition, hardwareStates) {
  * Format the block type reference section.
  * Only lists blocks that this robot can actually use.
  */
-function formatBlockReference(robotConfig) {
+function formatAvBlockReference(robotConfig, runtimeStatus) {
+  const caps = new Set(runtimeStatus.capabilities || []);
+  const { limits } = selectProgramProfile(runtimeStatus);
+  const power = caps.has('motor_power_100') ? 100 : 50;
+  const angle = caps.has('turn_angle_360') ? 360 : 30;
+  const examples = [
+    [{ type: 'move_forward', speed: 50, duration: 2 }, `driving RPM 0..${power}; duration 0..5 seconds`],
+    [{ type: 'move_backward', speed: 50, duration: 2 }, `driving RPM 0..${power}; duration 0..5 seconds`],
+    [{ type: 'turn_left', angle: Math.min(90, angle) }, `angle 0..${angle}; turn speed is unsupported (never include it)`],
+    [{ type: 'turn_right', angle: Math.min(90, angle) }, `angle 0..${angle}; requested native angle is not calibrated chassis rotation; never split a turn to evade limits`],
+    [{ type: 'stop' }, 'stops motors; does not terminate the remaining program'],
+    [{ type: 'wait', duration: 1 }, 'duration 0..60 seconds'],
+    [{ type: 'play_tone', frequency: 440, duration: 0.5 }, 'frequency 100..2000 Hz; duration 0..2 seconds'],
+    [{ type: 'play_sound', sound: 'laugh' }, 'sound must be hello|beeps|laugh|score'],
+    [{ type: 'set_volume', volume: 30 }, 'integer volume 0..60'],
+    [{ type: 'stop_sound' }, 'stops audio'],
+    [{ type: 'display_text', text: 'Hello!', size: 16 }, 'literal text up to 128 characters; size 8..32'],
+    [{ type: 'display_animation', frames: ['Hello', 'Bye'], interval: 0.5 }, '1..12 text frames, each up to 128 characters; interval 0.15..2 seconds; at most 12 seconds of animation per program; each frame counts as 2 instructions'],
+    [{ type: 'set_led', color: 'red' }, 'color red|green|blue|yellow|cyan|purple|white|orange|off'],
+  ];
+  const servo = robotConfig?.additions?.find(a => a.type === 'servo');
+  const motor = robotConfig?.additions?.find(a => a.type === 'dc_motor');
+  if (servo) examples.push([{ type: 'servo', port: servo.port, angle: 90 }, 'angle 0..180; servo speed must be omitted or 0, smooth servo speed is unsupported']);
+  if (motor) examples.push([{ type: 'dc_motor', port: motor.port, speed: 30, duration: 1 }, `signed percent power -${power}..${power}; duration 0..5 seconds; only configured attachments, not wheels`]);
+  const lines = examples.filter(([block]) => caps.has(block.type)).map(([block, rule]) =>
+    `- ${JSON.stringify(block).replace(/":/g, '": ').replace(/,/g, ', ')} — ${rule}`);
+  if (caps.has('wait')) lines.push('- {"type": "repeat", "times": 3, "do": [{"type": "wait", "duration": 1}]} — bounded static repeat, expanded by the server');
+  return `## Installed runtime: mbot-av-control-v1\n` +
+    `ONLY use the block examples below and their documented parameters. Omit unsupported fields, but never strip them from an existing program without explaining the incompatibility.\n` +
+    `Live sensor loops and live sensor reporters are unsupported. Cached readings are snapshots, not collision avoidance. Do not generate obstacle avoidance, line following, forever/while/until loops, or pretend timed motion is sensor feedback. Instead return chat explaining the limitation.\n` +
+    `read_sensors/status are telemetry commands, not Program statements. Physical hardware descriptions do not imply Program support. Do not generate melodies, LED effects, DC percentage-position blocks or unlisted reporters.\n` +
+    `Use configured ports and exact compatible action parameters. Never claim a generated program has executed or that an attachment position is measured.\n` +
+    `Limits: ${limits.nodes} source nodes, depth ${limits.depth}, repeat times integer 0..${limits.repeat}, ${limits.instructions} expanded instructions, ${limits.uniqueCommands} distinct primitives, requested holds <= ${limits.requestedHoldSeconds} seconds, full wire payload <= ${limits.wireBytes} bytes. All limits and full wire size are checked before returning a program.\n` +
+    lines.join('\n');
+}
+
+function formatBlockReference(robotConfig, runtimeStatus) {
+  if (isAvRuntime(runtimeStatus)) return formatAvBlockReference(robotConfig, runtimeStatus);
   let ref = `## Block Types (ONLY use these exact type names)\n`;
 
   ref += `\n### Driving (move the whole robot — wheels only)\n`;
@@ -803,8 +853,8 @@ function formatRobotConfig(config, hardwareStates) {
  *   [2…n] history — compressed conversation history
  *   [n+1] user    — the child's current message
  */
-function assembleMessages({ robotConfig, hardwareStates, conversationHistory, userContent, systemSuffix }) {
-  const systemPrompt = getCachedSystemPrompt(robotConfig)
+function assembleMessages({ robotConfig, hardwareStates, conversationHistory, userContent, systemSuffix, runtimeStatus }) {
+  const systemPrompt = getCachedSystemPrompt(robotConfig, runtimeStatus)
     + (systemSuffix ? `\n\n${systemSuffix}` : '');
 
   const messages = [{ role: 'system', content: systemPrompt }];
@@ -830,9 +880,9 @@ function assembleMessages({ robotConfig, hardwareStates, conversationHistory, us
 /**
  * Generate a block program from natural language
  */
-export async function generateProgram(userMessage, robotConfig, conversationHistory = [], currentBlocks = null, hardwareStates = null) {
+export async function generateProgram(userMessage, robotConfig, conversationHistory = [], currentBlocks = null, hardwareStates = null, runtimeStatus = null) {
   if (isLocalDebugEnabled()) {
-    return makeLocalDebugProgram(userMessage, currentBlocks);
+    return makeLocalDebugProgram(userMessage, currentBlocks, runtimeStatus);
   }
 
   // Build the user message, including current program context if available
@@ -856,6 +906,7 @@ Return the COMPLETE updated program (existing blocks + modifications) in your re
     hardwareStates,
     conversationHistory,
     userContent: enrichedMessage,
+    runtimeStatus,
   });
 
   try {
@@ -894,7 +945,7 @@ Return the COMPLETE updated program (existing blocks + modifications) in your re
 /**
  * Chat with the AI assistant (for questions, not program generation)
  */
-export async function chatWithAI(userMessage, robotConfig, conversationHistory = [], hardwareStates = null) {
+export async function chatWithAI(userMessage, robotConfig, conversationHistory = [], hardwareStates = null, runtimeStatus = null) {
   if (isLocalDebugEnabled()) {
     return {
       success: true,
@@ -908,6 +959,7 @@ export async function chatWithAI(userMessage, robotConfig, conversationHistory =
     hardwareStates,
     conversationHistory,
     userContent: userMessage,
+    runtimeStatus,
     systemSuffix: `The user is chatting, not necessarily requesting a program. 
 Be friendly, encouraging, and helpful. Explain robot concepts simply for an 8-year-old.
 If they seem to want a program, generate one using the JSON format above.

@@ -33,8 +33,8 @@ LABEL description="AI-powered mBot2 programming platform for kids"
 
 WORKDIR /app
 
-# Install dumb-init for proper signal handling
-RUN apk add --no-cache dumb-init
+# Local-only recording decode/transcode; no remote media conversion service.
+RUN apk add --no-cache dumb-init ffmpeg
 
 # Copy root workspace config + lockfile, then server package
 COPY package.json package-lock.json ./
