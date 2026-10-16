@@ -769,18 +769,49 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
     };
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', 'move');
+    // Move the existing DOM node, not a native screenshot copy. Leave its
+    // layout space intact until drop so connection targets don't jump around.
+    const blank = document.createElement('canvas');
+    blank.width = blank.height = 1;
+    blank.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none';
+    document.body.appendChild(blank);
+    e.dataTransfer.setDragImage(blank, 0, 0);
+    const board = sourceEl.closest('.se-canvas-board');
+    const script = sourceEl.closest('.se-script');
+    const boardRect = board.getBoundingClientRect();
+    const origin = { x: rect.left - boardRect.left, y: rect.top - boardRect.top };
+    const offset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const priorTransform = sourceEl.style.transform;
+    const priorZ = script.style.zIndex;
+    const follow = event => {
+      sourceEl.classList.add('se-moving-original');
+      const current = board.getBoundingClientRect();
+      sourceEl.style.transform = `translate(${(event.clientX - offset.x - current.left - origin.x) / zoom}px, ${(event.clientY - offset.y - current.top - origin.y) / zoom}px)`;
+    };
+    script.style.zIndex = '1000';
+    window.addEventListener('dragover', follow, true);
+    dragRef.current.sourceEl = sourceEl;
+    dragRef.current.restoreVisual = () => {
+      window.removeEventListener('dragover', follow, true);
+      sourceEl.style.transform = priorTransform;
+      sourceEl.classList.remove('se-moving-original');
+      script.style.zIndex = priorZ;
+      blank.remove();
+    };
     setIsDragging(true);
     setDraggingExisting(true);
     e.stopPropagation();
   };
 
   const endDrag = () => {
+    dragRef.current?.restoreVisual?.();
     dragRef.current = null;
     setDropHint(null);
     setDraggingExisting(false);
     setIsDragging(false);
     clearSnapTarget();
   };
+  useEffect(() => () => dragRef.current?.restoreVisual?.(), []);
 
   const canDropReporter = (parentId, key, slotKind) => {
     const drag = dragRef.current;
@@ -817,6 +848,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
         // Stack drag: nearest array slot vertically.
         const slots = document.querySelectorAll('.se-canvas [data-arr-slot]');
         slots.forEach((s) => {
+          if (drag.sourceEl?.contains(s)) return;
           const r = s.getBoundingClientRect();
           // Generous horizontal hit area, tight vertical
           if (cx < r.left - 40 || cx > r.right + 80) return;

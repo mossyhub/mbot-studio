@@ -60,6 +60,29 @@ async function startMouseDrag(page, source) {
 }
 
 for (const zoom of [0.5, 1.5]) {
+  test(`drag moves the original DOM block with no stationary duplicate at ${zoom * 100}% zoom`, async ({ page }) => {
+    const blocks = [{ type: 'wait', duration: 1, _id: 'original' }];
+    await mount(page, blocks);
+    for (let i = 0; i < 5; i++) await page.getByTitle(zoom < 1 ? 'Zoom out' : 'Zoom in', { exact: true }).click();
+    await page.waitForTimeout(150);
+    const original = page.getByRole('group', { name: 'wait block', exact: true });
+    await original.evaluate(el => { window.originalDragElement = el; });
+    const before = await original.boundingBox();
+    await startMouseDrag(page, original);
+    await page.mouse.move(950, 470, { steps: 12 });
+    await page.mouse.move(955, 475);
+    await expect.poll(async () => (await original.boundingBox()).x).toBeGreaterThan(before.x + 100);
+    expect(await original.evaluate(el => el === window.originalDragElement)).toBe(true);
+    await expect(page.getByRole('group', { name: 'wait block', exact: true })).toHaveCount(1);
+    expect(await saved(page)).toEqual(blocks); // No data edit until a valid drop.
+    await page.screenshot({ path: test.info().outputPath('original-in-motion.png') });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await expect.poll(async () => (await original.boundingBox()).x).toBeCloseTo(before.x, 0);
+    expect(await saved(page)).toEqual(blocks);
+    await expect(page.locator('.se-moving-original')).toHaveCount(0);
+  });
+
   test(`palette drop lands under the pointer at ${zoom * 100}% zoom after scrolling`, async ({ page }) => {
     await mount(page);
     for (let i = 0; i < 5; i++) await page.getByTitle(zoom < 1 ? 'Zoom out' : 'Zoom in', { exact: true }).click();
@@ -234,6 +257,31 @@ test('Delete inside a literal edits text instead of deleting the selected block'
   await input.press('Home');
   await input.press('Delete');
   await expect.poll(() => saved(page)).toEqual([{ type: 'say', _id: 'say', text: 'ello' }]);
+});
+
+test('native mouse drag moves a nested reporter then restores its exact parent on Escape', async ({ page }) => {
+  const blocks = [{type:'wait',_id:'wait',duration:{type:'op_add',_id:'sum',a:1,b:2}}];
+  await mount(page, blocks);
+  const reporter = page.locator('.se-script.main .reporter');
+  const before = await reporter.boundingBox();
+  await startMouseDrag(page, reporter);
+  await page.mouse.move(950, 490, { steps: 12 });
+  await expect.poll(async () => (await reporter.boundingBox()).x).toBeGreaterThan(before.x + 100);
+  await expect(page.locator('.se-moving-original')).toHaveCount(1);
+  expect(await saved(page)).toEqual(blocks);
+  await page.keyboard.press('Escape'); await page.mouse.up();
+  await expect.poll(async () => (await reporter.boundingBox()).x).toBeCloseTo(before.x, 0);
+  expect(await saved(page)).toEqual(blocks);
+});
+
+test('native nested move to trash removes exactly that child and cleans moving styles', async ({ page }) => {
+  const a={type:'wait',_id:'a',duration:1}, b={type:'stop_sound',_id:'b'};
+  await mount(page,[{type:'repeat',_id:'loop',times:2,do:[a,b]}]);
+  await startMouseDrag(page,page.getByRole('group',{name:'wait block',exact:true}));
+  const trash=page.locator('.se-trash');await expect(trash).toBeVisible();
+  const box=await trash.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2,{steps:15});await page.mouse.up();
+  await expect.poll(()=>saved(page)).toEqual([{type:'repeat',_id:'loop',times:2,do:[b]}]);
+  await expect(page.locator('.se-moving-original')).toHaveCount(0);
 });
 
 test('near-connection release inserts the block instead of silently losing the drop', async ({ page }) => {

@@ -9,6 +9,25 @@
   box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
 }
 
+/* Keep the desktop toolbar intact; give tablet navigation its own row. */
+@media (max-width: 1200px) {
+  .header {
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+
+  .header .header-tabs {
+    order: 1;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+  }
+
+  .header .header-right {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+}
+
 .header-brand {
   display: flex;
   align-items: center;

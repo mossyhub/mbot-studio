@@ -211,6 +211,13 @@
   transition: opacity 0.15s;
 }
 .se-script.floating:hover::before { opacity: 1; }
+.se-moving-original {
+  pointer-events: none !important;
+  position: relative;
+  z-index: 1000;
+  will-change: transform;
+}
+.se-moving-original * { pointer-events: none !important; }
 .se-disconnected-note {
   display: flex;
   align-items: center;

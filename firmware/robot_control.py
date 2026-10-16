@@ -9,7 +9,7 @@ OTA_BUILD_ID='mbot-av-control-v1'
 DIAGNOSTIC_REVISION='native-boundary-v1'
 CAPS=('move_forward','move_backward','dc_motor','servo','wait',
     'stop','display_text','set_led','read_sensors','status','turn_left','turn_right',
-    'play_tone','play_sound','set_volume','stop_sound','display_animation')
+    'play_tone','play_sound','set_volume','stop_sound','display_animation','drive_hold')
 COLORS=('red','green','blue','yellow','cyan','purple','white','orange','off')
 
 def number(p,key,default,low,high):
@@ -104,9 +104,11 @@ def validate(blocks):
 class Control:
   def __init__(self,ctx,a):
     self.ctx,self.io,self.clock=ctx,a['io'],a['clock']
+    self.identity=(ctx.device,ctx.boot,ctx.sha256)
     self.factory=a['mqtt_factory']
     self.network_ready=a.get('network_ready',lambda:True)
     self.prefix=ROBOT_TOPIC_PREFIX+'/robot/'
+    self.ota_topic=(ROBOT_TOPIC_PREFIX+'/ota/'+ROBOT_DEVICE+'/request').encode()
     self.client=self.pending=self.blocks=self.timer=None
     self.retry=self.reported=None
     self.lost=False
@@ -120,12 +122,23 @@ class Control:
     self.initial_stop=True
     self.reset_cause={'raw':None,'constants':{}}
     self.battery_snapshot=None
+    self.drive=None
+    self.drive_at=None
+    self.drive_started=False
+    self.drive_stopping=None
 
   def put(self,topic,payload):
+    # Observe loader requests only to fail closed; never interpret/execute OTA.
+    if topic==self.ota_topic:
+      if self.drive is not None or self.drive_stopping is not None:self.cancel('ota')
+      return
     if topic==(self.prefix+'emergency').encode():
       self.emergency=True
       return
     if self.emergency:return
+    if topic==(self.prefix+'drive').encode():
+      self.drive_request(payload)
+      return
     # Only validated standalone command stops bypass the bounded mailbox.
     if topic==(self.prefix+'command').encode() and len(payload)<=8192:
       try:
@@ -139,12 +152,83 @@ class Control:
             if run_id is not None and (type(run_id) is not str or len(run_id)>128):
               raise ValueError('run_id')
             validate([command])
+            if self.drive is not None or self.drive_stopping is not None:
+              self.cancel('stop')
+              return
             self.stop_pending=payload
             return
       except Exception:pass
+    # Live drive owns all native IO. Never leave work for after release.
+    if self.drive is not None or self.drive_stopping is not None:return
     if self.pending is None and self.stop_pending is None:
       if topic in ((self.prefix+'command').encode(),(self.prefix+'program').encode()):
         self.pending=payload if len(payload)<=8192 else b'null'
+
+  def drive_event(self,request,event,reason=None):
+    data={'hold_id':request['hold_id'],'boot':request['boot'],'event':event}
+    if reason is not None:data['reason']=reason
+    self.publish('drive_status',data)
+
+  def drive_request(self,payload):
+    self.expire_drive()
+    request=None
+    try:
+      if len(payload)>1024:raise ValueError('size')
+      request=json.loads(payload)
+      if type(request) is not dict:raise ValueError('request')
+      # ujson has no object_pairs_hook: count separators outside strings to
+      # reject duplicate keys in this flat, primitive-only wire schema.
+      quoted=escaped=False
+      fields=0
+      for char in payload:
+        if quoted:
+          if escaped:escaped=False
+          elif char==92:escaped=True
+          elif char==34:quoted=False
+        elif char==34:quoted=True
+        elif char==58:fields+=1
+      if fields!=len(request):raise ValueError('duplicate')
+      op=request.get('op')
+      keys=('op','hold_id','boot','direction','speed') if op=='start' else ('op','hold_id','boot')
+      if op not in ('start','renew','stop') or len(request)!=len(keys) or any(k not in keys for k in request):
+        raise ValueError('fields')
+      if type(request['hold_id']) is not str or not 1<=len(request['hold_id'])<=64:
+        raise ValueError('hold_id')
+      if type(request['boot']) is not str or request['boot']!=self.ctx.boot:raise ValueError('boot')
+      if op=='start':
+        if request['direction'] not in ('forward','backward','left','right'):raise ValueError('direction')
+        number(request,'speed',None,0,50)
+    except Exception:
+      hold_id=request.get('hold_id') if type(request) is dict else None
+      if type(hold_id) is not str or len(hold_id)>64:hold_id=''
+      self.drive_event({'hold_id':hold_id,'boot':self.ctx.boot},'rejected','malformed')
+      return
+    if op=='start':
+      if (self.initial_stop or self.client is None or self.drive is not None or self.drive_stopping is not None
+          or self.blocks is not None or self.pending is not None or self.native_pending is not None
+          or self.timer is not None or self.action is not None or self.stop_pending is not None
+          or self.sensor_index is not None):
+        self.drive_event(request,'rejected','busy')
+        return
+      self.drive=request
+      self.drive_at=self.clock.ticks_ms()
+      self.drive_started=False
+      self.action=('drive',request)
+    elif self.drive is not None and request['hold_id']==self.drive['hold_id']:
+      if op=='renew':
+        # Pending starts cannot extend their original deadline. Ignore early
+        # renewals: a rejection would incorrectly terminate the server owner.
+        if self.drive_started:self.drive_at=self.clock.ticks_ms()
+      elif op=='stop':self.cancel('released')
+    else:self.drive_event(request,'rejected','inactive')
+
+  def expire_drive(self):
+    if self.drive is not None and self.clock.ticks_diff(self.clock.ticks_ms(),self.drive_at)>=700:
+      self.cancel('expired')
+
+  def drive_stopped(self):
+    stopped,self.drive_stopping=self.drive_stopping,None
+    if stopped is not None:self.drive_event(stopped[0],'stopped',stopped[1])
 
   def publish(self,suffix,data):
     if len(self.outgoing)>=32:raise OSError('outgoing_full')
@@ -174,7 +258,13 @@ class Control:
       'uptime_ms':self.clock.ticks_ms(),'run_id':self.run_id,'block_path':[self.index],
       'battery_snapshot':self.battery_snapshot}
 
-  def cancel(self):
+  def cancel(self,reason='canceled'):
+    self.sensor_index=None
+    if self.drive is not None:
+      self.drive_stopping=(self.drive,reason)
+      self.drive=None
+      self.drive_at=None
+      self.drive_started=False
     self.native_pending=None
     self.pending=self.blocks=self.timer=None
     self.stop_pending=None
@@ -200,9 +290,11 @@ class Control:
           port=globals().get('ROBOT_MQTT_PORT',1883),keepalive=30)
         self.client.set_callback(self.put)
         self.client.connect(clean_session=True)
-        for name in ('command','program','emergency'):
+        for name in ('command','program','emergency','drive'):
           self.client.sock.settimeout(1)
           self.client.subscribe((self.prefix+name).encode(),qos=0)
+        self.client.sock.settimeout(1)
+        self.client.subscribe(self.ota_topic,qos=0)
         self.status()
         if self.lost:
           self.event('failed',error='network')
@@ -213,7 +305,7 @@ class Control:
         self.status()
       if self.emergency:
         self.emergency=False
-        self.cancel()
+        self.cancel('emergency')
         self.event('canceled')
         self.status()
         return
@@ -222,6 +314,7 @@ class Control:
         if self.blocks is not None:self.event('canceled')
         self.cancel()
         self.pending=payload
+      if self.drive is not None or self.drive_stopping is not None:return
       if self.native_pending is not None:return
       if self.timer is not None:
         start,duration,motor=self.timer
@@ -289,9 +382,10 @@ class Control:
     self.emergency=False
     # Pending cancellations own their original identity across reconnects.
     self.outgoing=[item for item in self.outgoing
-      if item[1].get('type')=='program' and item[1].get('event')=='canceled']
+      if (item[1].get('type')=='program' and item[1].get('event')=='canceled')
+      or (item[0]=='drive_status' and item[1].get('event')=='stopped')]
     try:
-      self.cancel()
+      self.cancel('network')
     finally:
       if client:
         try:client.sock.close()
@@ -309,6 +403,14 @@ def native():
     from umqtt.simple import MQTTClient
 
   class IO:
+    def drive(self,direction,speed):
+      # Vendor: yuque.com/makeblock-help-center-en/mcode/cyberpi-api-shields
+      # drive_power(EM1_power, EM2_power): percent, positive shaft CCW.
+      # EM1 is left, EM2 right: mirrored shafts need opposite signs forward.
+      # A single synchronous setpoint, NOT a timed/angle movement or sleep.
+      left=-speed if direction in ('backward','left') else speed
+      right=-speed if direction in ('forward','left') else speed
+      mbot2.drive_power(left,right)
     def stop(self):
       try:mbot2.EM_stop()
       finally:
@@ -379,12 +481,12 @@ def ota_init(context,adapters=None):
 
 def ota_step(context):
   if _app is None:raise ValueError('uninitialized')
-  c=_app.ctx
-  if (c.device,c.boot,c.sha256)!=(context.device,context.boot,context.sha256):
+  if _app.identity!=(context.device,context.boot,context.sha256):
     _app.sensor_index=None
-    _app.cancel()
+    _app.cancel('identity')
     _app.action=None
     _app.io.stop()
+    _app.drive_stopped()
     raise ValueError('identity')
   try:
     if _app.initial_stop:
@@ -400,13 +502,23 @@ def ota_step(context):
       diagnostic=_app.diagnostic('boot')
       diagnostic['reset_cause']=_app.reset_cause
       _app.publish('log',diagnostic)
+    if _app.emergency and _app.drive is not None:
+      _app.emergency=False
+      _app.cancel('emergency')
+    _app.expire_drive()
+    stopping=_app.drive_stopping is not None
+    if stopping:
+      _app.io.stop()
+      _app.drive_stopped()
+      _app.action=None
     prepared=_app.native_pending
-    _app.step()
+    if not stopping:_app.step()
+    _app.expire_drive()
     action,_app.action=_app.action,None
     if prepared is not None and _app.native_pending is prepared and prepared[2]:
       action=prepared[0]
       _app.native_pending=None
-    elif action is not None and action[0]=='execute':
+    elif action is not None and action[0] in ('execute','drive'):
       diagnostic=_app.diagnostic('native_before')
       diagnostic['command']=dict(action[1])
       _app.native_pending=[action,diagnostic,False]
@@ -419,7 +531,9 @@ def ota_step(context):
       action=('sensors',None)
     if action is not None:
       try:
-        if action[0]=='stop':_app.io.stop()
+        if action[0]=='stop':
+          _app.io.stop()
+          _app.drive_stopped()
         elif action[0]=='sensors':
           if _app.sensor_index is None:_app.sensor_index=0
           data=_app.io.sensors(_app.sensor_index)
@@ -429,38 +543,58 @@ def ota_step(context):
           _app.sensor_index=_app.sensor_index+1 if data.get('sampling') else None
         else:
           started=_app.clock.ticks_ms()
-          _app.io.execute(action[1])
+          if action[0]=='drive':_app.io.drive(action[1]['direction'],action[1]['speed'])
+          else:_app.io.execute(action[1])
           diagnostic=dict(prepared[1])
           diagnostic['event']='native_after'
           diagnostic['elapsed_ms']=_app.clock.ticks_diff(_app.clock.ticks_ms(),started)
           diagnostic['uptime_ms']=_app.clock.ticks_ms()
           _app.publish('log',diagnostic)
-          b=action[1]
-          duration=int(b.get('duration',0)*1000)
-          if duration>0:
-            _app.timer=(started if b['type']=='play_tone' else _app.clock.ticks_ms(),duration,
-              b['type'] in ('move_forward','move_backward','dc_motor'))
-          else:_app.complete()
+          if action[0]=='drive':
+            _app.drive_started=True
+            _app.drive_event(action[1],'started')
+          else:
+            b=action[1]
+            duration=int(b.get('duration',0)*1000)
+            if duration>0:
+              _app.timer=(started if b['type']=='play_tone' else _app.clock.ticks_ms(),duration,
+                b['type'] in ('move_forward','move_backward','dc_motor'))
+            else:_app.complete()
       except Exception as error:
         _app.sensor_index=None
-        if action[0]=='execute':
+        if action[0] in ('execute','drive'):
           diagnostic=dict(prepared[1])
           diagnostic.update({'event':'native_exception','error':str(error)[:128],
             'error_type':type(error).__name__,'uptime_ms':_app.clock.ticks_ms(),
             'elapsed_ms':_app.clock.ticks_diff(_app.clock.ticks_ms(),started)})
-          try:
-            _app.client.sock.settimeout(1)
-            _app.client.publish((_app.prefix+'log').encode(),json.dumps(diagnostic).encode(),retain=False,qos=0)
-          except Exception:pass
+          if action[0]=='execute':
+            # Preserve ordinary command diagnostics before recovery Stop.
+            try:
+              _app.client.sock.settimeout(1)
+              _app.client.publish((_app.prefix+'log').encode(),json.dumps(diagnostic).encode(),retain=False,qos=0)
+            except Exception:pass
         # Drop speculative completions, not the preempted run's terminal event.
         _app.outgoing=[item for item in _app.outgoing
           if item[1].get('type')=='program' and item[1].get('event')=='canceled']
-        _app.cancel()
+        _app.cancel('native_error')
         _app.action=None
-        try:_app.io.stop()
-        except Exception:pass
+        if action[0]=='drive':
+          # Queue locally: native drive may have moved before throwing. No
+          # network diagnostic may delay Stop, including a failed Stop retry.
+          _app.publish('log',diagnostic)
+        try:
+          _app.io.stop()
+          _app.drive_stopped()
+        except Exception:
+          # Keep the stop obligation latched; retry before any network/work.
+          if _app.drive_stopping is not None:return
         _app.event('failed',error=error)
     for _ in range(8):
+      _app.expire_drive()
+      if _app.drive_stopping is not None:
+        _app.io.stop()
+        _app.drive_stopped()
+        _app.action=None
       if _app.client is None or not _app.outgoing:break
       suffix,data=_app.outgoing[0]
       try:
@@ -474,7 +608,13 @@ def ota_step(context):
         _app.disconnect(_app.clock.ticks_ms())
         _app.action=None
         _app.io.stop()
+        _app.drive_stopped()
         break
+    _app.expire_drive()
+    if _app.drive_stopping is not None:
+      _app.io.stop()
+      _app.drive_stopped()
+      _app.action=None
     if _app.client is None:_app.sensor_index=None
     # Retain correlation through final native IO and all queued publications.
     if _app.blocks is None and not _app.outgoing and not _app.lost:

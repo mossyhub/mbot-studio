@@ -1,218 +1,26 @@
-/* === Challenges Panel === */
-.challenges-panel {
-  height: 100%;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.challenges-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-
-.challenges-header-left {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.challenges-header h2 {
-  font-size: 20px;
-  font-weight: 800;
-}
-
-.challenges-progress {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-light);
-}
-
-.challenges-stars-total {
-  font-size: 16px;
-  font-weight: 800;
-  color: var(--color-accent);
-  background: #fef3c7;
-  padding: 4px 14px;
-  border-radius: 20px;
-}
-
-/* Category tabs */
-.challenges-categories {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 14px;
-}
-
-.ch-cat-btn {
-  padding: 5px 12px;
-  border-radius: 16px;
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--color-bg);
-  color: var(--color-text-light);
-  border: 1px solid var(--color-border);
-}
-
-.ch-cat-btn:hover {
-  background: var(--color-border);
-  transform: none;
-  box-shadow: none;
-}
-
-.ch-cat-active {
-  background: var(--color-primary);
-  color: white;
-  border-color: var(--color-primary);
-}
-
-.ch-cat-active:hover {
-  background: var(--color-primary-dark);
-}
-
-/* Active challenge detail */
-.challenge-detail {
-  background: linear-gradient(135deg, #ede9fe 0%, #e0e7ff 100%);
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 14px;
-  border: 1px solid var(--color-primary-light);
-}
-
-.challenge-detail-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.challenge-detail-icon {
-  font-size: 36px;
-}
-
-.challenge-detail-info {
-  flex: 1;
-}
-
-.challenge-detail-info h3 {
-  font-size: 16px;
-  font-weight: 800;
-  margin-bottom: 2px;
-}
-
-.challenge-detail-info p {
-  font-size: 13px;
-  color: var(--color-text-light);
-  line-height: 1.4;
-}
-
-.challenge-detail-stars {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  margin-bottom: 10px;
-}
-
-.star-icon {
-  font-size: 18px;
-}
-
-.star-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-text-light);
-  margin-left: 6px;
-}
-
-.challenge-hint {
-  background: #fef9c3;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  margin-bottom: 10px;
-  border: 1px solid #fde68a;
-}
-
-.hint-icon {
-  margin-right: 4px;
-}
-
-.hint-btn {
-  margin-bottom: 10px;
-}
-
-.challenge-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.challenge-done-label {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--color-success);
-}
-
-/* Challenge grid */
-.challenges-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 8px;
-}
-
-.challenge-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  text-align: left;
-  position: relative;
-  transition: all 0.15s;
-}
-
-.challenge-card:hover {
-  border-color: var(--color-primary-light);
-  transform: none;
-}
-
-.challenge-card.active {
-  border-color: var(--color-primary);
-  background: #f5f3ff;
-  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
-}
-
-.challenge-card.done {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-}
-
-.challenge-card-icon {
-  font-size: 24px;
-  flex-shrink: 0;
-}
-
-.challenge-card-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.challenge-card-title {
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.challenge-card-stars {
-  font-size: 12px;
-  letter-spacing: 1px;
-  color: var(--color-accent);
-}
-
-.challenge-check {
-  font-size: 14px;
-  flex-shrink: 0;
-}
+/* Miro-inspired soft surfaces; inherit Studio's local font, no CDN. */
+.challenges-panel{height:100%;overflow-y:auto;padding:28px clamp(16px,4vw,56px);color:#242535;background:#fff;}
+.mission-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;max-width:1120px;margin:auto;}
+.mission-eyebrow{font-size:11px;letter-spacing:.12em;font-weight:800;color:#52546a;}
+.mission-hero h2{font-size:clamp(24px,3vw,36px);line-height:1.15;letter-spacing:-.03em;margin:8px 0;}
+.mission-hero p,.mission-explainer{color:#555a6a;line-height:1.5;font-size:14px;}
+.mission-score{display:flex;flex-direction:column;min-width:170px;padding:14px 20px;background:#fff3c4;border-radius:18px;font-size:12px;color:#584b20;}
+.mission-score strong{font-size:32px;color:#242535;}.mission-score strong span{font-size:18px;font-weight:500;}.mission-score b{margin-top:8px;font-size:11px;}
+.mission-explainer{max-width:1120px;margin:20px auto;}
+.mission-levels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;max-width:1120px;margin:0 auto 24px;}
+.mission-level{display:flex;align-items:flex-start;flex-direction:column;text-align:left;gap:4px;padding:16px 20px;border:2px solid transparent;border-radius:16px;color:#252539;box-shadow:none;}
+.level-1{background:#fff0bd;}.level-2{background:#d7f5ee;}.level-3{background:#e9e2ff;}
+.mission-level span{font-size:11px;font-weight:700;}.mission-level strong{font-size:20px;}.mission-level small{font-size:12px;font-weight:400;}.mission-level[aria-pressed=true]{border-color:#4659c5;}.mission-level:hover{transform:none;box-shadow:none;}
+.challenges-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:1120px;margin:auto;}
+.challenge-card{display:flex;align-items:flex-start;gap:16px;background:#fff;border:1px solid #dfe1e8;border-radius:16px;padding:20px;text-align:left;color:#242535;box-shadow:none;min-width:0;}
+.challenge-card:hover,.challenge-card.active{border-color:#5367d4;box-shadow:0 0 0 1px #5367d4;transform:none;}.challenge-card.done{border-color:#82bdab;background:#f3fcf8;}
+.challenge-card-icon{display:grid;place-items:center;width:46px;height:46px;border-radius:13px;font-size:24px;flex-shrink:0;}
+.challenge-card-info{display:flex;flex:1;flex-direction:column;gap:7px;min-width:0;}.challenge-card-info strong{font-size:18px;}.challenge-card-info>span{font-size:13px;font-weight:400;line-height:1.45;color:#555a6a;}.challenge-card-info small{font-size:10px;letter-spacing:.04em;color:#555a6a;}.challenge-card-info .mission-card-state{margin-top:8px;font-size:12px;letter-spacing:0;color:#385b54;}
+.challenge-detail{max-width:1120px;margin:0 auto 20px;border:1px solid #bfc9ed;border-radius:18px;padding:22px;background:#f7f8ff;}.challenge-detail-top{display:flex;justify-content:space-between;gap:12px;}.challenge-detail h3{font-size:24px;margin:8px 0;}.challenge-detail p{font-size:14px;line-height:1.5;}.challenge-detail h4{font-size:13px;margin-top:16px;}.challenge-detail>small{display:block;margin-top:10px;color:#555a6a;}
+.mission-checklist{list-style:none;padding:0;margin:10px 0;font-size:13px;line-height:1.55;}.mission-checklist li{margin:4px 0;}.mission-checklist small{color:#5c6792;}
+.mission-hint{font-size:13px;margin:10px 0;}.mission-hint summary{cursor:pointer;color:#354bb7;font-weight:700;}.mission-hint p{margin:8px 0;line-height:1.5;}.mission-safety{padding:12px;background:#fff1d9;border-radius:10px;color:#684923;}.mission-observation{border-left:3px solid #b2b7cc;padding-left:12px;color:#555a6a;}
+.challenge-actions{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin-top:16px;font-size:13px;}.mission-link{border:0;background:transparent;color:#3649aa;font-size:13px;padding:4px 8px;box-shadow:none;}.mission-link:hover{transform:none;box-shadow:none;}
+.mission-footer,.mission-legacy{max-width:1120px;margin:24px auto 0;color:#555a6a;font-size:12px;line-height:1.6;}.mission-legacy{padding:14px;border:1px solid #dfe1e8;border-radius:12px;}.mission-legacy summary{cursor:pointer;font-weight:700;}
+.mission-strip{margin:8px 16px;padding:12px 16px;border:1px solid #c6d4eb;border-radius:12px;background:#f2f6ff;flex-shrink:0;color:#242535;}.mission-strip-heading{display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:14px;}.mission-state{flex:1;font-size:12px;color:#385b54;}.mission-strip .mission-checklist{margin:6px 0;}.mission-strip .mission-hint{margin:4px 0;}
+.challenges-panel button:focus-visible,.mission-strip button:focus-visible,.mission-hint summary:focus-visible{outline:3px solid #334ec2;outline-offset:3px;}
+@media(max-width:680px){.mission-hero{align-items:flex-start;}.mission-score{min-width:120px;padding:12px;}.mission-score strong{font-size:24px;}.mission-level{padding:12px 8px;}.mission-level strong{font-size:16px;}.mission-level small{display:none;}.challenges-grid{grid-template-columns:1fr;}.challenge-card{padding:16px;}.mission-strip{margin:6px 8px;padding:10px;}}

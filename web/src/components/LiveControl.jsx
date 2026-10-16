@@ -5,6 +5,16 @@ import './LiveControl.css';
 
 const MAX_MISSION_EVENTS = 500;
 
+function createHoldId() {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  // LAN HTTP origins lack randomUUID, but still expose cryptographic entropy.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function getMissionStorageKey(profileId) {
   return `mbot-studio-missions:${profileId || 'default'}`;
 }
@@ -43,6 +53,136 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
   const directQueueRunningRef = useRef(false);
   const directQueueTimerRef = useRef(null);
   const directQueueGenerationRef = useRef(0);
+  const driveRef = useRef(null);
+  const [activeDirection, setActiveDirection] = useState(null);
+  const supportsDriveHold = Array.isArray(avStatus?.capabilities) && avStatus.capabilities.includes('drive_hold');
+  const driveReady = supportsDriveHold && robotConnected && wsConnected && avStatus.armed === true && avStatus.motion_enabled === true
+    && avStatus.robotOnline !== false && ![avStatus.status, avStatus.state, avStatus.robotState].includes('offline');
+
+  const cancelDrive = useCallback(() => {
+    const hold = driveRef.current;
+    if (!hold) return;
+    // Invalidate first: late timers, capture events and old device replies are inert.
+    driveRef.current = null;
+    clearInterval(hold.renewTimer);
+    clearTimeout(hold.ackTimer);
+    setActiveDirection(null);
+    if (hold.socket.readyState === WebSocket.OPEN) {
+      try { hold.socket.send(JSON.stringify({ type: 'drive_stop', hold_id: hold.id })); } catch { /* lease expires if transport is lost */ }
+    }
+    if (hold.pointerId !== undefined && hold.element.hasPointerCapture?.(hold.pointerId)) {
+      hold.element.releasePointerCapture(hold.pointerId);
+    }
+  }, []);
+
+  const startDrive = (direction, owner) => {
+    if (!driveReady || driveRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    cancelDirectQueue();
+    aiRequestController.current?.abort();
+    aiRequestController.current = null;
+    setSending(false);
+    const now = performance.now();
+    const hold = { id: createHoldId(), socket: wsRef.current, direction, boot: avStatus.boot,
+      startedAt: now, lastAck: now, startAcknowledged: false, pendingRenews: 0, ...owner };
+    driveRef.current = hold;
+    setActiveDirection(direction);
+    const checkAck = () => {
+      if (driveRef.current !== hold) return false;
+      const now = performance.now();
+      if ((!hold.startAcknowledged && now - hold.startedAt > 500) || now - hold.lastAck > 500) {
+        cancelDrive();
+        addLog('error', 'Drive canceled: server submission acknowledgement timed out. Release and press again.');
+        return false;
+      }
+      return true;
+    };
+    hold.armAckWatchdog = () => {
+      if (driveRef.current !== hold) return;
+      clearTimeout(hold.ackTimer);
+      const deadline = Math.min(hold.startAcknowledged ? Infinity : hold.startedAt + 501, hold.lastAck + 501);
+      hold.ackTimer = setTimeout(() => {
+        if (checkAck()) hold.armAckWatchdog();
+      }, Math.max(1, deadline - performance.now()));
+    };
+    hold.armAckWatchdog();
+    try {
+      hold.socket.send(JSON.stringify({ type: 'drive_start', hold_id: hold.id, direction, speed: 30 }));
+    } catch {
+      cancelDrive();
+      addLog('error', 'Drive canceled: transport failed.');
+      return;
+    }
+    if (driveRef.current !== hold) return;
+    hold.renewTimer = setInterval(() => {
+      if (!checkAck()) return;
+      hold.pendingRenews++;
+      try {
+        if (hold.socket.readyState !== WebSocket.OPEN) { cancelDrive(); return; }
+        hold.socket.send(JSON.stringify({ type: 'drive_renew', hold_id: hold.id }));
+      } catch {
+        cancelDrive();
+        addLog('error', 'Drive canceled: transport failed.');
+      }
+    }, 200);
+  };
+
+  const directionProps = (direction, command) => ({
+    'aria-label': direction,
+    'aria-describedby': 'drive-help',
+    'aria-pressed': activeDirection === direction,
+    disabled: supportsDriveHold && !driveReady,
+    onMouseDown: () => { if (!supportsDriveHold) enqueueDirectCommand(command); },
+    onPointerDown: event => {
+      if (!supportsDriveHold) return;
+      event.preventDefault();
+      if (event.button !== 0 || event.isPrimary === false || driveRef.current) return;
+      const element = event.currentTarget;
+      element.focus();
+      startDrive(direction, { element, pointerId: event.pointerId });
+      if (driveRef.current?.element === element) {
+        try { element.setPointerCapture(event.pointerId); } catch { /* synthetic events have no active pointer */ }
+      }
+    },
+    onPointerUp: event => { if (driveRef.current?.pointerId === event.pointerId) cancelDrive(); },
+    onPointerCancel: event => { if (driveRef.current?.pointerId === event.pointerId) cancelDrive(); },
+    onLostPointerCapture: event => { if (driveRef.current?.pointerId === event.pointerId) cancelDrive(); },
+    onBlur: event => { if (driveRef.current?.element === event.currentTarget) cancelDrive(); },
+    onKeyDown: event => {
+      if (!supportsDriveHold || ![' ', 'Enter'].includes(event.key)) return;
+      event.preventDefault();
+      if (!event.repeat && !driveRef.current) startDrive(direction, { element: event.currentTarget, key: event.key });
+    },
+    onKeyUp: event => {
+      if (!supportsDriveHold || ![' ', 'Enter'].includes(event.key)) return;
+      event.preventDefault();
+      if (driveRef.current?.key === event.key && driveRef.current.element === event.currentTarget) cancelDrive();
+    },
+  });
+
+  const receiveDriveStatus = useCallback(status => {
+    const hold = driveRef.current;
+    if (hold && (status?.boot !== hold.boot || status?.armed !== true || status?.motion_enabled !== true
+      || !status?.capabilities?.includes('drive_hold') || status?.robotOnline === false
+      || [status?.status, status?.state, status?.robotState].includes('offline'))) cancelDrive();
+    setAvStatus(status);
+  }, [cancelDrive]);
+
+  useEffect(() => {
+    if (!driveReady) cancelDrive();
+  }, [driveReady, cancelDrive]);
+
+  useEffect(() => {
+    const visibility = () => { if (document.visibilityState === 'hidden') cancelDrive(); };
+    window.addEventListener('blur', cancelDrive);
+    window.addEventListener('pagehide', cancelDrive);
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      window.removeEventListener('blur', cancelDrive);
+      window.removeEventListener('pagehide', cancelDrive);
+      document.removeEventListener('visibilitychange', visibility);
+      cancelDrive();
+    };
+  }, [cancelDrive]);
 
   const cancelDirectQueue = useCallback(() => {
     // Fence callbacks already ready to run as well as canceling the timer.
@@ -126,6 +266,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (wsRef.current !== ws) return;
         setWsConnected(true);
         // Bootstrap on each socket connection; a newer WS status always wins.
         const revision = statusRevision;
@@ -133,7 +274,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         fetch('/api/robot/status', { signal: statusController.signal })
           .then(response => response.ok ? response.json() : null)
           .then(status => {
-            if (wsRef.current === ws && ws.readyState === WebSocket.OPEN && revision === statusRevision) setAvStatus(status);
+            if (wsRef.current === ws && ws.readyState === WebSocket.OPEN && revision === statusRevision) receiveDriveStatus(status);
           })
           .catch(() => {}); // Unknown status stays disabled; never infer support.
         reconnectAttempts.current = 0;
@@ -142,14 +283,43 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       };
 
       ws.onmessage = (event) => {
+        if (wsRef.current !== ws) return;
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === 'mqtt' && msg.topic === 'robot/sensors') {
+          if (msg.type === 'drive_ack') {
+            const hold = driveRef.current;
+            if (!hold || hold.id !== msg.hold_id) return;
+            const now = performance.now();
+            if ((!hold.startAcknowledged && now - hold.startedAt > 500) || now - hold.lastAck > 500) {
+              cancelDrive();
+              return;
+            }
+            if (msg.op === 'start' && !hold.startAcknowledged) {
+              hold.startAcknowledged = true;
+              hold.lastAck = now;
+              addLog('system', `Drive submitted [hold_id=${hold.id}] — submission only, not confirmed movement`);
+            } else if (msg.op === 'renew' && hold.pendingRenews > 0) {
+              hold.pendingRenews--;
+              hold.lastAck = now;
+            }
+            hold.armAckWatchdog();
+          } else if (msg.type === 'drive_error') {
+            if (driveRef.current?.id !== msg.hold_id) return;
+            cancelDrive();
+            addLog('error', `Drive rejected: ${msg.message}`);
+          } else if (msg.type === 'mqtt' && msg.topic === 'robot/drive_status') {
+            const status = msg.data;
+            const hold = driveRef.current;
+            if (!hold || hold.id !== status?.hold_id) return;
+            if (status.boot !== hold.boot || ['stopped', 'rejected'].includes(status.event)) cancelDrive();
+            addLog('robot', `Device drive ${status.event} [hold_id=${status.hold_id}]${status.reason ? `: ${status.reason}` : ''}`);
+            recordMissionEvent('drive_status', status);
+          } else if (msg.type === 'mqtt' && msg.topic === 'robot/sensors') {
             setSensorData(msg.data);
             recordMissionEvent('telemetry', msg.data);
           } else if (msg.type === 'mqtt' && msg.topic === 'robot/status') {
             statusRevision++;
-            setAvStatus(msg.data);
+            receiveDriveStatus(msg.data);
             if (msg.data?.status === 'offline' || msg.data?.state === 'offline' || msg.data?.robotOnline === false) cancelDirectQueue();
             addLog('robot', `Robot: ${JSON.stringify(msg.data)}`);
             recordMissionEvent('robot_status', msg.data);
@@ -179,6 +349,8 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       };
 
       ws.onclose = () => {
+        if (wsRef.current !== ws) return;
+        cancelDrive();
         statusController?.abort();
         statusRevision++;
         setAvStatus(null);
@@ -196,7 +368,11 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       };
 
       ws.onerror = () => {
-        // onclose will fire after this
+        if (wsRef.current !== ws) return;
+        cancelDrive();
+        cancelDirectQueue();
+        setWsConnected(false);
+        setAvStatus(null);
       };
     }
 
@@ -205,6 +381,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     return () => {
       // Abandon pending AI work before this Live Control instance goes away.
       statusController?.abort();
+      cancelDrive();
       cancelDirectQueue();
       aiRequestController.current?.abort();
       aiRequestController.current = null;
@@ -215,11 +392,11 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
       }
       if (missionPlayTimer.current) clearInterval(missionPlayTimer.current);
     };
-  }, [addLog, recordMissionEvent, cancelDirectQueue]);
+  }, [addLog, recordMissionEvent, cancelDirectQueue, cancelDrive, receiveDriveStatus]);
 
   const sendLiveCommand = async (voiceText) => {
     const text = voiceText || liveInput.trim();
-    if (!text || sending) return;
+    if (!text || sending || driveRef.current) return;
 
     setSending(true);
     setLiveInput('');
@@ -300,7 +477,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
     const runNext = () => {
       if (generation !== directQueueGenerationRef.current) return;
       directQueueTimerRef.current = null;
-      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      if (driveRef.current || wsRef.current?.readyState !== WebSocket.OPEN) {
         cancelDirectQueue();
         return;
       }
@@ -319,6 +496,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
   }, [cancelDirectQueue]);
 
   const enqueueDirectCommand = useCallback((command) => {
+    if (driveRef.current) return; // Never queue a command behind held movement.
     if (!robotConnected) {
       addLog('error', '❌ Robot not connected');
       recordMissionEvent('direct_command_blocked', { command, reason: 'robot_not_connected' });
@@ -342,6 +520,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
   }, []);
 
   const handleStop = () => {
+    cancelDrive();
     cancelDirectQueue();
     onStop();
     addLog('system', '🛑 EMERGENCY STOP!');
@@ -407,12 +586,12 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
               onChange={(e) => setLiveInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && sendLiveCommand()}
               placeholder='e.g., "Go forward slowly" or "Open the claw"'
-              disabled={sending}
+              disabled={sending || !!activeDirection}
             />
             <button
               className="btn-primary"
               onClick={() => sendLiveCommand()}
-              disabled={!liveInput.trim() || sending}
+              disabled={!liveInput.trim() || sending || !!activeDirection}
             >
               {sending ? '⏳' : '▶️ Go!'}
             </button>
@@ -430,12 +609,19 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         {/* Direction Pad */}
         <div className="direction-pad">
           <h3>Quick Controls</h3>
+          <p id="drive-help" className="live-subtext" role="status">
+            {supportsDriveHold
+              ? 'Hold a direction to drive; release to stop. Space or Enter works on a focused direction. ACK means submission, not confirmed movement.'
+              : 'Firmware update required for hold-to-drive. Tap-only fallback: each press sends one bounded movement; release does not shorten it. Use STOP to cancel.'}
+            {supportsDriveHold && !driveReady && ' Connect and arm the robot with motion enabled to drive.'}
+            {activeDirection && ` Requesting ${activeDirection}. Other commands are paused until release.`}
+          </p>
           <div className="dpad">
             <div className="dpad-row">
               <div className="dpad-spacer" />
               <button
                 className="dpad-btn dpad-up"
-                onMouseDown={() => enqueueDirectCommand({ type: 'move_forward', speed: 50, duration: 0.5 })}
+                {...directionProps('forward', { type: 'move_forward', speed: 50, duration: 0.5 })}
               >
                 ⬆️
               </button>
@@ -445,7 +631,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
               <button
                 className="dpad-btn dpad-left"
                 title="Small left turn — native angle request, not calibrated heading"
-                onMouseDown={() => enqueueDirectCommand({ type: 'turn_left', angle: 30 })}
+                {...directionProps('left', { type: 'turn_left', angle: 30 })}
               >
                 ⬅️
               </button>
@@ -458,7 +644,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
               <button
                 className="dpad-btn dpad-right"
                 title="Small right turn — native angle request, not calibrated heading"
-                onMouseDown={() => enqueueDirectCommand({ type: 'turn_right', angle: 30 })}
+                {...directionProps('right', { type: 'turn_right', angle: 30 })}
               >
                 ➡️
               </button>
@@ -467,7 +653,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
               <div className="dpad-spacer" />
               <button
                 className="dpad-btn dpad-down"
-                onMouseDown={() => enqueueDirectCommand({ type: 'move_backward', speed: 50, duration: 0.5 })}
+                {...directionProps('backward', { type: 'move_backward', speed: 50, duration: 0.5 })}
               >
                 ⬇️
               </button>
@@ -477,7 +663,9 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
         </div>
 
         {/* Live Telemetry Dashboard */}
-        <TelemetryPanel wsRef={wsRef} wsConnected={wsConnected} robotConnected={robotConnected} />
+        <fieldset className="drive-telemetry" disabled={!!activeDirection}>
+          <TelemetryPanel wsRef={wsRef} wsConnected={wsConnected} robotConnected={robotConnected} />
+        </fieldset>
       </div>
 
       {/* Middle: Hardware Ports */}
@@ -494,7 +682,7 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
                   key={`${port}_${angle}`}
                   className="btn-small btn-secondary"
                   onClick={() => enqueueDirectCommand({ type: 'servo', port, angle })}
-                  disabled={!robotConnected}
+                  disabled={!robotConnected || !!activeDirection}
                 >
                   {angle}°
                 </button>
@@ -509,9 +697,9 @@ export default function LiveControl({ robotConfig, robotConnected, currentProfil
           {['M1', 'M2', 'M3', 'M4'].map((port) => (
             <div key={port} className="hw-port-row">
               <span className="hw-port-label">{port}</span>
-              <button className="btn-small btn-success" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: 50, duration: 1 })} disabled={!robotConnected}>FWD</button>
-              <button className="btn-small btn-secondary" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: -50, duration: 1 })} disabled={!robotConnected}>REV</button>
-              <button className="btn-small btn-danger" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: 0, duration: 0 })} disabled={!robotConnected}>OFF</button>
+              <button className="btn-small btn-success" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: 50, duration: 1 })} disabled={!robotConnected || !!activeDirection}>FWD</button>
+              <button className="btn-small btn-secondary" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: -50, duration: 1 })} disabled={!robotConnected || !!activeDirection}>REV</button>
+              <button className="btn-small btn-danger" onClick={() => enqueueDirectCommand({ type: 'dc_motor', port, speed: 0, duration: 0 })} disabled={!robotConnected || !!activeDirection}>OFF</button>
             </div>
           ))}
         </div>

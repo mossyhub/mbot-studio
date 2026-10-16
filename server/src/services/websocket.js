@@ -50,6 +50,7 @@ export function setupWebSocket(wss) {
         const msg = JSON.parse(data.toString());
         handleWebSocketMessage(ws, msg);
       } catch (e) {
+        mqtt.driveHold.releaseOwner(ws);
         if (mqtt.isCooperativeApp()) {
           ws.send(JSON.stringify({ type: 'error', message: e.message, code: e.code || 'COOPERATIVE_INVALID' }));
           return;
@@ -59,9 +60,11 @@ export function setupWebSocket(wss) {
     });
 
     ws.on('close', () => {
+      mqtt.driveHold.releaseOwner(ws);
       wsClients.delete(ws);
       console.log('🔌 WebSocket client disconnected');
     });
+    ws.on('error', () => mqtt.driveHold.releaseOwner(ws));
   });
 
   // Forward MQTT messages from robot to all WebSocket clients
@@ -96,6 +99,15 @@ function handleWebSocketMessage(ws, msg) {
   const mqtt = MqttService.getInstance();
 
   switch (msg.type) {
+    case 'drive_start':
+    case 'drive_renew':
+    case 'drive_stop':
+      try {
+        ws.send(JSON.stringify(mqtt.driveHold.submit(ws, msg)));
+      } catch (error) {
+        ws.send(JSON.stringify({ type: 'drive_error', hold_id: msg.hold_id ?? null, message: error.message }));
+      }
+      break;
     case 'command': {
       // Validate command structure
       const cmdValidation = validateCommand(msg.command);
