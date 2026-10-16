@@ -545,7 +545,7 @@ function descendantIds(block) {
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robotConfig, robotStatus }) {
+export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDisconnectedBlocksChange, robotConfig, robotStatus }) {
   const [allBlocks, setAllBlocks] = useState(false);
   const [search, setSearch] = useState('');
   const definitionFor = type => getProgramBlockDefinition(type, BLOCK_DEFS[type], robotStatus);
@@ -685,11 +685,19 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
           : { type: 'dc_motor', port: hw.port,
               speed: action.motorDirection === 'reverse' ? -(action.speed ?? 50) : (action.speed ?? 50),
               duration: action.duration ?? 1 };
+        // These are NEW palette defaults, not saved program blocks or a config
+        // migration. Apply the connected runtime's power bounds before dragging
+        // an action; hydration and execution must still preserve/validate imports.
+        if (block.type === 'dc_motor' && robotStatus?.build === AV_PROGRAM_BUILD && Number.isFinite(block.speed)) {
+          const power = getProgramBlockDefinition('dc_motor', BLOCK_DEFS.dc_motor, robotStatus)
+            .slots.find(slot => slot.key === 'speed');
+          block.speed = Math.max(power.min, Math.min(power.max, block.speed));
+        }
         items.push({ id: `${hw.port}_${action.name}`, label: `${hw.label || hw.port}: ${action.name}`, icon: hw.type === 'servo' ? '🦾' : '⚡', block });
       }
     }
     return items;
-  }, [robotConfig]);
+  }, [robotConfig, robotStatus]);
 
   // ── Drag start ──────────────────────────────────────────────────────────
   // dragRef.current shape:
@@ -1365,6 +1373,15 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
   };
 
   const canvasRef = useRef(null);
+  const disconnectedCount = useMemo(() => floating.reduce((n, s) => n + countAll(s.blocks), 0), [floating]);
+  useEffect(() => { onDisconnectedBlocksChange?.(disconnectedCount); }, [disconnectedCount, onDisconnectedBlocksChange]);
+  const connectScript = id => {
+    const script = floating.find(s => s.id === id);
+    if (!script?.blocks.length) return;
+    // Explicitly connect the entire stack; never execute or change its values.
+    commit([...internal, ...script.blocks]);
+    setFloating(scripts => scripts.filter(s => s.id !== id));
+  };
   const totalCount = useMemo(
     () => countAll(internal) + floating.reduce((n, s) => n + countAll(s.blocks), 0),
     [internal, floating]
@@ -1424,7 +1441,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
 
       <div className="se-canvas-wrap">
         <div className="se-canvas-toolbar">
-          <span className="se-count">{totalCount} block{totalCount !== 1 ? 's' : ''}</span>
+          <span className="se-count">{totalCount} block{totalCount !== 1 ? 's' : ''}{disconnectedCount > 0 && ` · ${disconnectedCount} not connected`}</span>
           <div className="se-zoom">
             <button onClick={zoomOut} title="Zoom out">−</button>
             <span className="se-zoom-pct" onClick={zoomReset}>{Math.round(zoom * 100)}%</span>
@@ -1507,6 +1524,10 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, robot
                     onPointerDown={(e) => onScriptHandlePointerDown(e, s.id)}
                     title="Drag to move this script"
                   />
+                  <div className="se-disconnected-note">
+                    <span>Not connected — won't run</span>
+                    <button type="button" onClick={() => connectScript(s.id)}>Connect to program</button>
+                  </div>
                   <ArrSlot kind="top" index={0} scriptId={scriptId}
                     dropHint={dropHint} setDropHint={setDropHint}
                     onDrop={dropOnArrSlot} draggingExisting={draggingExisting} />

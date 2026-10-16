@@ -85,6 +85,7 @@ function saveCurrentProjectId(profileId, id) {
 export default function App() {
   const [activeTab, setActiveTab] = useState(TABS.PROGRAM);
   const [blocks, setBlocks] = useState([]);
+  const [disconnectedCount, setDisconnectedCount] = useState(0);
   const [preview, setPreview] = useState(null);
   const restoredPreview = useRef(null);
   const pythonCode = preview?.blocks === blocks && preview.status === 'ready' ? preview.code : '';
@@ -708,8 +709,9 @@ export default function App() {
                 </div>
               </div>
 
-              <div className={`program-readiness ${programBlocked ? 'needs-attention' : ''}`} role="status" data-testid="program-readiness">
-                {!blocks.length ? 'Start here: add a block from the library.' : checkRuntime ? (
+              <div className={`program-readiness ${programBlocked || disconnectedCount ? 'needs-attention' : ''}`} role="status" data-testid="program-readiness">
+                {disconnectedCount > 0 && <span>{disconnectedCount} block{disconnectedCount === 1 ? '' : 's'} not connected — won't run. Use “Connect to program” or snap them under “when program starts”. </span>}
+                {!blocks.length ? (disconnectedCount ? 'No blocks connected to start.' : 'Start here: add a block from the library.') : checkRuntime ? (
                   !robotStatus.robotOnline ? 'Robot offline — you can keep editing.' :
                   !checkIsCurrent || programCheck?.checking ? 'Checking this program…' :
                   programCheck?.runnable ? `Ready to run · ${programCheck.expandedCount ?? programCheck.compiledCount ?? '?'} / 32 robot steps` :
@@ -754,6 +756,7 @@ export default function App() {
                 <BlocklyEditor
                   blocks={blocks}
                   onBlocksChange={handleBlocksChange}
+                  onDisconnectedBlocksChange={setDisconnectedCount}
                   robotConfig={robotConfig}
                   robotStatus={robotStatus}
                 />
