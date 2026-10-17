@@ -948,15 +948,23 @@ def ota_step(context):
         request=json.loads(payload)
         stage='schema'
         if type(request) is not dict:raise ValueError('request')
-        quoted=escaped=False
-        fields=0
-        for char in payload:
-          if quoted:
-            if escaped:escaped=False
-            elif char==92:escaped=True
-            elif char==34:quoted=False
-          elif char==34:quoted=True
-          elif char==58:fields+=1
+        # Jump over string bodies in native bytes operations. A per-byte
+        # Python scan of a 512-byte hex chunk takes seconds on CyberPi.
+        fields=cursor=0
+        while True:
+          start=payload.find(b'"',cursor)
+          if start<0:
+            fields+=payload.count(b':',cursor)
+            break
+          fields+=payload.count(b':',cursor,start)
+          end=start
+          while True:
+            end=payload.find(b'"',end+1)
+            if end<0:raise ValueError('request')
+            back=end-1
+            while back>start and payload[back]==92:back-=1
+            if (end-back)%2:break
+          cursor=end+1
         if fields!=len(request):raise ValueError('duplicate')
         op=request.get('op')
         keys=('op','transfer_id','boot')
@@ -971,7 +979,9 @@ def ota_step(context):
         if op=='chunk':
           data=request['data']
           if type(request['offset']) is not int or not 0<=request['offset']<=24576:raise ValueError('offset')
-          if type(data) is not str or not 2<=len(data)<=1024 or len(data)%2 or any(c not in '0123456789abcdefABCDEF' for c in data):raise ValueError('data')
+          if type(data) is not str or not 2<=len(data)<=1024 or len(data)%2:raise ValueError('data')
+          try:binascii.unhexlify(data)
+          except Exception:raise ValueError('data')
         store=_app.recordings
         if store is None or not getattr(_app.io,'recording_available',False):raise ValueError('unsupported')
         stage='metadata'

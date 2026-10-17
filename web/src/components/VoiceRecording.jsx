@@ -1,6 +1,6 @@
 import React, {useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {MAX_RECORDING_MS, canUseRecordings, recordingSupport, listRecordings,
-  uploadRecording, deleteRecording, syncRecording, recordingBlock, recordingAudioUrl} from '../services/voice-recording.js';
+  uploadRecording, deleteRecording, syncRecording, recordingBlock, recordingAudioUrl, recordingTransferStatus} from '../services/voice-recording.js';
 import './VoiceRecording.css';
 
 /** onSelect receives a new {type:'play_recording', recording:id} block only on Use clip. */
@@ -11,6 +11,9 @@ export default function VoiceRecording({runtimeStatus, onSelect, onRecordingsCha
   const [phase, setPhase] = useState('idle');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [progress, setProgress] = useState(null);
+  const [progressError, setProgressError] = useState('');
+  const feedback = useRef(null);
   const [name, setName] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const [draft, setDraft] = useState(null);
@@ -44,7 +47,10 @@ export default function VoiceRecording({runtimeStatus, onSelect, onRecordingsCha
     setDraft(null);
   };
   const stopTracks = session => session?.stream?.getTracks().forEach(track => { try { track.stop(); } catch { /* Stop other tracks too. */ } });
-  const stopTimers = session => { clearTimeout(session?.limit); clearInterval(session?.ticker); };
+  const stopTimers = session => {
+    clearTimeout(session?.limit); clearInterval(session?.ticker);
+    clearTimeout(session?.progressTimer); clearTimeout(session?.progressDeadline); session?.progressAbort?.abort();
+  };
   const cancel = () => {
     generation.current++;
     const session = current.current;
@@ -58,12 +64,17 @@ export default function VoiceRecording({runtimeStatus, onSelect, onRecordingsCha
     stopTracks(session);
     clearDraft();
     setPhase('idle'); setElapsed(0);
+    setProgress(null); setProgressError('');
   };
   const refresh = async () => {
     const token = ++listGeneration.current;
     listAbort.current?.abort();
     const controller = new AbortController(); listAbort.current = controller;
     setLoading(true);
+    // One passive snapshot on mount/Refresh; only an owned Sync polls repeatedly.
+    recordingTransferStatus({signal:controller.signal}).then(value => {
+      if (mounted.current && token === listGeneration.current) setProgress(value);
+    }).catch(() => { /* Older servers can still list and sync clips. */ });
     try {
       const rows = await listRecordings({signal:controller.signal});
       if (!mounted.current || token !== listGeneration.current) return;
@@ -84,6 +95,15 @@ export default function VoiceRecording({runtimeStatus, onSelect, onRecordingsCha
       mounted.current = false; listGeneration.current++; listAbort.current?.abort(); cancel();
     };
   }, [identity]);
+
+  useLayoutEffect(() => {
+    // Scroll only the palette, never the document or a held robot control.
+    const element = feedback.current, container = element?.closest('.se-palette-list');
+    if (!container) return;
+    const box = element.getBoundingClientRect(), viewport = container.getBoundingClientRect();
+    if (box.bottom > viewport.bottom) container.scrollTop += box.bottom - viewport.bottom;
+    else if (box.top < viewport.top) container.scrollTop -= viewport.top - box.top;
+  }, [phase, error, notice, progress?.phase, progress?.totalBytes, progressError]);
 
   const record = async () => {
     if (!enabled || support.error || current.current) return;
@@ -156,17 +176,44 @@ export default function VoiceRecording({runtimeStatus, onSelect, onRecordingsCha
     }
   };
   const sync = async () => {
-    if (!enabled || !selected || current.current) return;
+    if (!enabled || !selected || current.current || transferBusy) return;
     stopPreview(); setError(''); setNotice(''); setPhase('syncing');
-    const token=++generation.current, abort=new AbortController(); current.current={token,abort};
+    setProgress(null); setProgressError('');
+    const token=++generation.current, abort=new AbortController(), session={token,abort}; current.current=session;
     listGeneration.current++; listAbort.current?.abort(); setLoading(false);
+    const active = () => mounted.current && token===generation.current && current.current===session;
+    const poll = async () => {
+      if (!active()) return;
+      const controller=new AbortController();session.progressAbort=controller;
+      session.progressDeadline=setTimeout(()=>controller.abort(),4000);
+      try {
+        const value=await recordingTransferStatus({signal:controller.signal});
+        if (!active()) return;
+        // A terminal snapshot never settles this POST or grants a ready receipt.
+        if (value.active && value.assetId===selected && (!runtimeStatus?.boot || value.bootId===runtimeStatus.boot)) {
+          setProgress(previous => previous?.generation > value.generation ? previous : value);
+        }
+        setProgressError('');
+      } catch {
+        if (active()) setProgressError('Progress is temporarily unavailable. Sync is still awaiting robot confirmation.');
+      } finally {
+        clearTimeout(session.progressDeadline);
+        if (active()) session.progressTimer=setTimeout(poll,1000);
+      }
+    };
+    poll();
     try {
       const row=await syncRecording(selected,{signal:abort.signal});
       if (!mounted.current || token!==generation.current) return;
       setAssets(rows=>rows.map(old=>old.id===row.id?row:old));
+      setProgress(value=>value?{...value,active:false,phase:'succeeded'}:null);
       setNotice(row.ready ? 'Clip verified on the robot. Choose Use clip to add it to your program.' : 'Robot verification is not ready. Refresh or try syncing again.');
-    } catch(err) { if(mounted.current && token===generation.current && err.name!=='AbortError')setError(err.message); }
-    finally { if(mounted.current && token===generation.current){current.current=null;setPhase(draft?'draft':'idle');} }
+    } catch(err) {
+      if(mounted.current && token===generation.current && err.name!=='AbortError') {
+        setError(err.message);setProgress(value=>value?{...value,active:false,phase:'failed',error:err.message}:null);
+      }
+    }
+    finally { if(mounted.current && token===generation.current){stopTimers(session);current.current=null;setProgress(value=>value?{...value,active:false}:null);setProgressError('');setPhase(draft?'draft':'idle');} }
   };
   const remove = async () => {
     if (!selected || current.current) return;
@@ -189,6 +236,8 @@ export default function VoiceRecording({runtimeStatus, onSelect, onRecordingsCha
   };
   const asset=assets.find(row=>row.id===selected);
   const busy=['permission','recording','finishing','uploading','deleting','syncing'].includes(phase);
+  const transferBusy=enabled && progress?.active && (!runtimeStatus?.boot || progress.bootId===runtimeStatus.boot) && phase!=='syncing';
+  const progressText = {loading:'Preparing clip',beginning:'Starting transfer',transferring:'Sending clip — waiting for robot confirmation',verifying:'Verifying clip on robot',committing:'Completing verification',checking:'Checking recording',deleting:'Deleting recording'}[progress?.phase] || 'Preparing sync — waiting for robot confirmation';
   return <section className="voice-recording" aria-labelledby={`${id}-heading`}>
     <h3 id={`${id}-heading`}>Voice clips</h3>
     <p className="voice-help">Record up to 3 seconds. Preview here, then save to this Studio server.</p>
@@ -200,9 +249,9 @@ export default function VoiceRecording({runtimeStatus, onSelect, onRecordingsCha
       <button type="button" className="voice-primary" disabled={!enabled || !!support.error || busy || !!draft} onClick={record}>Record</button>
       <button type="button" disabled={phase!=='recording'} onClick={()=>current.current?.stop?.()}>Stop</button>
       <span className="voice-timer" aria-label="Recording time">{(elapsed/1000).toFixed(1)} / 3 s</span>
-      {busy && <button type="button" onClick={()=>{cancel();setNotice('Canceled here. A save or sync already received by the server may finish. Refresh to check.');}}>Cancel</button>}
+      {busy && phase!=='syncing' && <button type="button" onClick={()=>{cancel();setNotice('Canceled here. A save or sync already received by the server may finish. Refresh to check.');}}>Cancel</button>}
     </div>
-    <p role="status" className="voice-help">{phase==='permission'?'Waiting for microphone permission…':phase==='recording'?'Recording… stops automatically at 3 seconds.':phase==='finishing'?'Finishing clip…':phase==='uploading'?'Saving clip…':phase==='deleting'?'Deleting clip…':phase==='syncing'?'Sending clip to robot and waiting for verification…':notice}</p>
+    <p role="status" className="voice-help">{phase==='permission'?'Waiting for microphone permission…':phase==='recording'?'Recording… stops automatically at 3 seconds.':phase==='finishing'?'Finishing clip…':phase==='uploading'?'Saving clip…':phase==='deleting'?'Deleting clip…':''}</p>
     {draft && <div className="voice-actions" aria-label="Draft clip">
       <button type="button" disabled={busy} onClick={()=>preview(draft.url)}>Preview draft</button>
       <button type="button" disabled={busy || !enabled} className="voice-primary" onClick={save}>Save clip</button>
@@ -216,13 +265,26 @@ export default function VoiceRecording({runtimeStatus, onSelect, onRecordingsCha
       </select>
       <div className="voice-actions">
         <button type="button" disabled={!asset || busy} onClick={()=>preview(recordingAudioUrl(asset.id))}>Preview</button>
-        {asset && !asset.ready && <button type="button" disabled={!enabled || busy} onClick={sync}>Sync to robot</button>}
+        {asset && !asset.ready && <button type="button" disabled={!enabled || busy || transferBusy} onClick={sync}>Sync to robot</button>}
+        {phase==='syncing' && <button type="button" onClick={()=>{cancel();setNotice('Canceled here. The robot may already have saved the clip. Refresh to check.');}}>Cancel</button>}
         <button type="button" disabled={!enabled || !asset?.ready || busy || !onSelect} className="voice-primary" onClick={()=>onSelect(recordingBlock(asset))}>Use clip</button>
         <button type="button" disabled={!asset || busy} onClick={remove}>Delete</button>
         <button type="button" disabled={loading || busy} onClick={()=>{setError('');refresh();}}>Refresh</button>
       </div>
+      {(phase==='syncing' || transferBusy || error || notice) && <div ref={feedback} className={`voice-sync-feedback${error?' has-error':''}`}>
+        {error ? <p className="voice-error" role="alert">{error}</p> : <p role="status">{phase==='syncing' || transferBusy ? `${transferBusy?'Robot busy. ':''}${progressText}.` : notice}</p>}
+        {error && progress?.phase==='failed' && error===progress.error && progress?.totalBytes != null && <span>Last confirmed: {progress.ackedBytes} / {progress.totalBytes} bytes. Verification did not complete.</span>}
+        {(phase==='syncing' || transferBusy) && <>
+          {progress?.totalBytes != null ? <>
+            <progress aria-label="Robot-confirmed recording bytes" value={progress.ackedBytes} max={progress.totalBytes}/>
+            <span>{progress.ackedBytes} / {progress.totalBytes} bytes confirmed{progress.assetCount>1?` · clip ${progress.assetIndex} of ${progress.assetCount}`:''}</span>
+          </> : <progress aria-label="Waiting for recording progress"/>}
+          {progressError && <p>{progressError}</p>}
+          <p>{transferBusy?'Another operation owns the robot. Refresh to check again, or use emergency Stop.':'Keep this panel open. Robot is busy until sync finishes. Cancel stops this request.'}</p>
+        </>}
+      </div>}
+      {asset && <p className="voice-help">{asset.ready?'Verified on this robot boot.':'Saved on Studio — needs robot sync before Use clip.'}</p>}
     </div>
-    {error && <p className="voice-error" role="alert">{error}</p>}
     <audio ref={audio} preload="none" onError={()=>setError('Preview could not load. Refresh the clip list or record a new clip.')} />
     <p className="voice-help">Microphone access starts only when you choose Record. The server checks the duration and converts supported audio for the robot. Preview plays on this device, not on the robot.</p>
   </section>;

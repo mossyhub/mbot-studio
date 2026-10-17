@@ -9,6 +9,90 @@ import pytest
 import test_robot_control as base
 
 
+def test_asset_chunk_admission_python_work_does_not_scale_with_hex_bytes(tmp_path):
+    """Native JSON/find/hex operations, not per-byte interpreted wire scans."""
+    counts = []
+    for size in (1, 512):
+        root = tmp_path / str(size)
+        root.mkdir()
+        rig = recording_rig(root)
+        m, ctx, clock, io, client = rig
+        assert request(rig, 'begin', id='a' * 64, sha256='a' * 64,
+                       size=512, duration_ms=125)['ok']
+        message = dict(op='chunk', transfer_id='transfer', boot=ctx.boot,
+                       offset=0, data='ab' * size)
+        base.send(client, message, 'asset')
+        events = []
+        def trace(frame, event, arg):
+            if event == 'line' and frame.f_code.co_filename == m.__file__:
+                events.append(frame.f_lineno)
+            return trace
+        previous = sys.gettrace()
+        try:
+            sys.settrace(trace)
+            m.ota_step(ctx)
+        finally:
+            sys.settrace(previous)
+        counts.append(len(events))
+        for _ in range(3): m.ota_step(ctx)
+        acks = [data for topic, data in client.events
+                if topic.endswith(b'/asset_status') and data['op'] == 'chunk']
+        assert acks[-1]['ok'] and acks[-1]['offset'] == size
+    assert counts[1] <= counts[0] + 150, counts
+
+
+@pytest.mark.parametrize('token', ['transfer', 'with:colon', 'with"quote',
+    'with\\backslash', 'end\\', 'slash\\"quote', 'two\\\\"quote', ':"\\\\:'])
+def test_asset_field_scan_preserves_escaped_string_values(tmp_path, token):
+    rig = recording_rig(tmp_path)
+    m, ctx, clock, io, client = rig
+    begin = dict(op='begin', transfer_id=token, boot=ctx.boot, id='a' * 64,
+                 sha256='a' * 64, size=1, duration_ms=125)
+    base.send(client, begin, 'asset')
+    for _ in range(4): m.ota_step(ctx)
+    chunk = dict(op='chunk', transfer_id=token, boot=ctx.boot, offset=0, data='aA')
+    # JSON-escaped field names and data characters are valid after decoding.
+    wire = json.dumps(chunk).encode().replace(b'"data"', b'"\\u0064ata"')
+    wire = wire.replace(b'"aA"', b'"a\\u0041"')
+    client.callback((m._app.prefix + 'asset').encode(), wire)
+    for _ in range(4): m.ota_step(ctx)
+    acks = [data for topic, data in client.events if topic.endswith(b'/asset_status')]
+    assert len(acks) == 2 and all(ack['ok'] for ack in acks), acks
+    assert acks[-1]['offset'] == 1
+    assert (tmp_path / 'voice' / 'upload.part').read_bytes() == b'\xaa'
+
+
+@pytest.mark.parametrize('tail', [
+    b'"data":"aa","data":"aa"}',
+    b'"data":"aa","\\u0064ata":"aa"}',
+    b'"data":"aa","offset":0}',
+    b'"data":"aa","\\u006fffset":0}',
+    b'"data":{"x":"aa"}}', b'"data":["aa"]}',
+    b'"data":null}', b'"data":true}', b'"data":12}',
+    b'"data":""}', b'"data":"a"}', b'"data":"ag"}',
+    b'"data":"aa bb "}', b'"data":"aa\\nbb "}',
+    b'"data":"\\u0100a"}', b'"data":"aa\\"}',
+    b'"data":"aa"oops"}', b'"data":"aa\\x00"}',
+    b'"data":"aa","extra":1}',
+])
+def test_asset_native_scan_rejects_duplicates_bad_shapes_and_hex(tmp_path, tail):
+    rig = recording_rig(tmp_path)
+    m, ctx, clock, io, client = rig
+    assert request(rig, 'begin', id='a' * 64, sha256='a' * 64,
+                   size=512, duration_ms=125)['ok']
+    before = len(client.events)
+    wire = b'{"op":"chunk","transfer_id":"transfer","boot":"boot","offset":0,' + tail
+    client.callback((m._app.prefix + 'asset').encode(), wire)
+    for _ in range(3): m.ota_step(ctx)
+    acks = [data for topic, data in client.events[before:]
+            if topic.endswith(b'/asset_status')]
+    assert len(acks) == 1 and not acks[0]['ok'], acks
+    assert (tmp_path / 'voice' / 'upload.part').read_bytes() == b''
+    assert m._app.recordings.transfer['offset'] == 0
+    assert m._app.recordings.request is None
+    assert m._app.recordings.job is None
+
+
 def test_recording_primitive_strict_and_indexed_hold_accounting():
     m = base.load()
     command = {'type': 'play_recording', 'recording': 'a' * 64, 'duration': 0.125}

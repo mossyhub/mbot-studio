@@ -2,6 +2,13 @@ import { createHash, randomUUID } from 'node:crypto';
 
 export const RECORDING_ID = /^[0-9a-f]{64}$/;
 const error = message => Object.assign(new Error(message), { status: 409, code: 'RECORDING_TRANSFER_REJECTED' });
+// Never return device-provided rejection text, paths or raw transport errors.
+export function recordingTransferMessage(reason = '') {
+  if (/timeout/i.test(reason)) return 'Recording sync timed out waiting for robot confirmation. The clip is still saved on Studio. Try Sync again when the robot is idle.';
+  if (/progress|busy|idle robot/i.test(reason)) return 'Another operation is using the robot. Wait for it to finish or choose Stop, then try Sync again.';
+  if (/cancel|stop|disconnect|offline|stale|identity|OTA|capability|MQTT/i.test(reason)) return 'Recording sync was canceled or the robot connection changed. The clip is still saved on Studio. Reconnect and try Sync again.';
+  return 'The robot did not confirm recording sync. The clip is still saved on Studio. Refresh or try Sync again when the robot is idle.';
+}
 export function recordingMetadata(value, id) {
   if (typeof id !== 'string' || !RECORDING_ID.test(id) || !value || value.id !== id || value.sha256 !== id ||
       !Number.isInteger(value.size) || value.size < 1 || value.size > 24576 ||
@@ -23,6 +30,26 @@ export class RecordingTransfer {
     this.sessionTimeoutMs = sessionTimeoutMs;
     this.active = null;
     this.verifications = new Map();
+    this.generation = 0;
+    this.lastProgress = { active: false, generation: 0, phase: 'idle', ackedBytes: 0, totalBytes: null };
+  }
+
+  getProgress() {
+    this.checkStatus();
+    // Explicit public fields only: never expose session, pending payload or bytes.
+    return { ...(this.active?.progress || this.lastProgress) };
+  }
+
+  updateProgress(session, values) {
+    if (this.active !== session) return;
+    Object.assign(session.progress, values, { updatedAt: Date.now() });
+  }
+
+  finishProgress(session, phase, reason) {
+    if (this.active !== session) return;
+    this.updateProgress(session, { active: false, phase, endedAt: Date.now(),
+      error: reason ? recordingTransferMessage(reason) : null });
+    this.lastProgress = { ...session.progress };
   }
 
   identity() {
@@ -87,13 +114,14 @@ export class RecordingTransfer {
     if (this.active) throw error('Recording transfer in progress');
   }
 
-  invalidate(reason, abort = true) {
+  invalidate(reason, abort = true, outcome = 'canceled') {
     this.verifications.clear();
-    this.cancelSession(this.active, reason, abort);
+    this.cancelSession(this.active, reason, abort, outcome);
   }
 
-  cancelSession(session, reason, abort = true) {
+  cancelSession(session, reason, abort = true, outcome = 'canceled') {
     if (!session || this.active !== session) return;
+    this.finishProgress(session, outcome, reason);
     this.active = null; // Revoke BEFORE any callback or publication.
     for (const [id, receipt] of this.verifications) {
       if (receipt.owner === session.owner) this.verifications.delete(id);
@@ -113,7 +141,9 @@ export class RecordingTransfer {
     if (!Array.isArray(ids) || ids.length < 1 || new Set(ids).size > 8 || ids.some(id => typeof id !== 'string' || !RECORDING_ID.test(id))) throw error('Recording requires 1..8 valid asset IDs');
     return this.withSession(async (session, canceled) => {
       const assets = [];
+      this.updateProgress(session, { assetCount: new Set(ids).size });
       for (const id of new Set(ids)) {
+        this.updateProgress(session, { assetId: id });
         const asset = await Promise.race([load(id), canceled]);
         this.assertSession(session);
         const metadata = recordingMetadata(asset, id);
@@ -122,14 +152,19 @@ export class RecordingTransfer {
         if (bytes.length !== metadata.size || createHash('sha256').update(bytes).digest('hex') !== id) throw error('Recording bytes do not match trusted digest');
         assets.push({ metadata, bytes });
       }
-      for (const { metadata, bytes } of assets) {
+      for (const [index, { metadata, bytes }] of assets.entries()) {
         session.id = metadata.id;
         session.transfer_id = randomUUID();
+        this.updateProgress(session, { assetId: metadata.id, assetIndex: index + 1, totalBytes: bytes.length, ackedBytes: 0, phase: 'beginning' });
         await this.request(session, { op: 'begin', ...metadata }, 0);
         for (let offset = 0; offset < bytes.length; offset += 512) {
           const chunk = bytes.subarray(offset, offset + 512);
+          this.updateProgress(session, { phase: 'transferring' });
           await this.request(session, { op: 'chunk', offset, data: chunk.toString('hex') }, offset + chunk.length);
+          this.assertSession(session);
+          this.updateProgress(session, { ackedBytes: offset + chunk.length });
         }
+        this.updateProgress(session, { phase: 'verifying' });
         await this.request(session, { op: 'finish' }, bytes.length);
         this.assertSession(session);
         if (this.verifications.size >= 8 && !this.verifications.has(metadata.id)) this.verifications.clear();
@@ -137,6 +172,7 @@ export class RecordingTransfer {
         session.started = false;
       }
       this.assertSession(session);
+      this.updateProgress(session, { phase: 'committing' });
       return commit(session);
     }, { signal });
   }
@@ -146,16 +182,21 @@ export class RecordingTransfer {
     this.rejectCompetingCommand();
     this.validateStatus();
     const session = { boot: this.mqtt.robotStatusMetadata.boot, identity: this.identity(), signal, owner: Symbol('recording session') };
+    session.progress = { active: true, generation: ++this.generation, sessionId: randomUUID(), bootId: session.boot,
+      assetId: null, assetIndex: 0, assetCount: 0, phase: 'loading', ackedBytes: 0, totalBytes: null,
+      startedAt: Date.now(), updatedAt: Date.now(), endedAt: null, error: null };
     const canceled = new Promise((resolve, reject) => { session.cancel = reject; });
     canceled.catch(() => {});
     this.active = session;
     const cancel = () => this.cancelSession(session, 'Recording sync request canceled');
     signal?.addEventListener('abort', cancel, { once: true });
-    session.timer = setTimeout(() => this.active === session && this.invalidate('Recording session timeout'), this.sessionTimeoutMs);
+    session.timer = setTimeout(() => this.active === session && this.invalidate('Recording session timeout', true, 'failed'), this.sessionTimeoutMs);
     try {
-      return await Promise.race([work(session, canceled), canceled]);
+      const result = await Promise.race([work(session, canceled), canceled]);
+      this.finishProgress(session, 'succeeded');
+      return result;
     } catch (err) {
-      if (this.active === session) this.invalidate(err.message);
+      if (this.active === session) this.invalidate(err.message, true, 'failed');
       throw err;
     } finally {
       signal?.removeEventListener('abort', cancel);
@@ -169,6 +210,7 @@ export class RecordingTransfer {
     return this.withSession(async session => {
       session.id = id;
       session.transfer_id = randomUUID();
+      this.updateProgress(session, { assetId: id, assetIndex: 1, assetCount: 1, phase: op === 'delete' ? 'deleting' : 'checking' });
       const ack = await this.request(session, { op, id }, op === 'status' ? null : 0);
       this.assertSession(session);
       if (op === 'delete') this.verifications.delete(id);

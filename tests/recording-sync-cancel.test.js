@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { MqttService } from '../server/src/services/mqtt-service.js';
 import { RecordingService } from '../server/src/services/recording-service.js';
 import { createRecordingRoutes } from '../server/src/routes/recordings.js';
+import { robotRoutes } from '../server/src/routes/robot.js';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(predicate) {
@@ -85,6 +86,21 @@ async function fixture(t) {
     release() { const ack = heldAck; heldOp = null; heldAck = undefined; if (ack) transfer.handleAck(ack); },
   };
 }
+
+test('real emergency Stop route returns a clear409 to pending Sync and keeps the local clip', async t => {
+  const f=await fixture(t), previous=MqttService.instance;MqttService.instance=f.mqtt;
+  const app=express();app.use('/api/robot/recordings',createRecordingRoutes({service:f.service}));app.use('/api/robot',robotRoutes);
+  const server=app.listen(0,'127.0.0.1');await once(server,'listening');
+  t.after(async()=>{MqttService.instance=previous;server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+  const base=`http://127.0.0.1:${server.address().port}/api/robot`;
+  const sync=fetch(`${base}/recordings/${f.id}/sync`,{method:'POST'});await waitFor(()=>f.held());
+  assert.equal((await fetch(`${base}/stop`,{method:'POST'})).status,200);
+  const response=await sync;assert.equal(response.status,409);const failure=await response.json();
+  assert.equal(failure.code,'RECORDING_TRANSFER_REJECTED');assert.match(failure.error,/canceled/);assert.doesNotMatch(failure.error,/sync-cancel-|audio\.mp3|Traceback/);
+  const progress=await (await fetch(`${base}/recordings/transfer-status`)).json();assert.equal(progress.active,false);assert.equal(progress.phase,'canceled');
+  assert.equal((await f.service.getAsset(f.id)).metadata.ready,false);
+  f.release();await f.drain();const recovered=await fetch(`${base}/recordings/${f.id}/sync`,{method:'POST'});assert.equal(recovered.status,200);assert.equal((await recovered.json()).ready,true);
+});
 
 test('loopback HTTP disconnect cancels sync; a fresh HTTP sync survives normal response close', async t => {
   const f = await fixture(t), app = express();

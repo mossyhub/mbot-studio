@@ -26,6 +26,7 @@ async function mount(page,{kind='voice',list=[asset],holdStatus=false}={}) {
     if(path==='/api/ai/model')return route.fulfill({json:{model:'fixture'}});
     if(path==='/api/ai/blocks-to-code')return route.fulfill({json:{code:'# fixture'}});
     if(path==='/api/robot/status')return route.fulfill({json:baseStatus});
+  if(path==='/api/robot/recordings/transfer-status')return route.fulfill({json:{active:false,generation:0,phase:'idle',ackedBytes:0,totalBytes:null}});
     if(path==='/api/robot/recordings')return route.fulfill({json:{recordings:list}});
     if(path==='/api/robot/recordings/clip-1/sync')return route.fulfill({json:asset});
     unexpected.push(path);return route.abort();

@@ -2,6 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as voice from '../web/src/services/voice-recording.js';
 
+test('progress uses read-only same-origin snapshot API and rejects invented byte counts', async () => {
+  const signal=new AbortController().signal;
+  const snapshot={active:true,generation:1,sessionId:'session-1',bootId:'boot-A',assetId:'a'.repeat(64),phase:'transferring',ackedBytes:512,totalBytes:8064};
+  const calls=[];const fetcher=async(url,options)=>{calls.push({url,options});return {ok:true,status:200,json:async()=>snapshot};};
+  assert.deepEqual(await voice.recordingTransferStatus({signal,fetcher}),snapshot);
+  assert.equal(calls[0].url,'/api/robot/recordings/transfer-status');assert.equal(calls[0].options.signal,signal);assert.equal(calls[0].options.cache,'no-store');
+  for(const bad of [{...snapshot,ackedBytes:9000},{...snapshot,totalBytes:-1},{...snapshot,phase:'fake'},{...snapshot,active:'yes'}])await assert.rejects(voice.recordingTransferStatus({fetcher:async()=>({ok:true,status:200,json:async()=>bad})}),/progress/i);
+});
+
 test('browser support checks secure context and actual offered MIME types', () => {
   const Recorder = {isTypeSupported: mime => mime === 'audio/webm;codecs=opus'};
   const env = {isSecureContext:true, MediaRecorder:Recorder, navigator:{mediaDevices:{getUserMedia(){}}}};

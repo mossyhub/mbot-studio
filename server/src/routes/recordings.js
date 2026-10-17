@@ -1,5 +1,6 @@
 import express from 'express';
 import { RecordingError, RECORDING_LIMITS } from '../services/recording-service.js';
+import { recordingTransferMessage } from '../services/recording-transfer.js';
 
 // Mount before broad /api/robot handlers/body parsers. No singleton or MQTT side effects.
 export function createRecordingRoutes({ service }) {
@@ -16,6 +17,8 @@ export function createRecordingRoutes({ service }) {
     res.status(201).json(metadata);
   }));
   router.get('/', asyncRoute(async (_req, res) => res.json({ recordings: await service.list() })));
+  router.get('/transfer-status', (_req, res) => res.json(service.syncAdapter?.getProgress?.() ||
+    { active: false, generation: 0, phase: 'idle', ackedBytes: 0, totalBytes: null }));
   router.get('/:id/audio', asyncRoute(async (req, res) => {
     const { audio } = await service.getAsset(req.params.id);
     res.type('audio/mpeg').send(audio);
@@ -43,6 +46,7 @@ export function createRecordingRoutes({ service }) {
     if (error.type === 'entity.too.large') error = new RecordingError('recording_upload_too_large', 'Recording upload exceeds 1 MiB.', 413);
     else if (error.type === 'encoding.unsupported') error = new RecordingError('recording_encoding_unsupported', 'Compressed HTTP bodies are not supported.', 415);
     if (error instanceof RecordingError) return res.status(error.status).json({ error: error.message, code: error.code });
+    if (error.code === 'RECORDING_TRANSFER_REJECTED') return res.status(409).json({ error: recordingTransferMessage(error.message), code: error.code });
     // Never expose ffmpeg stderr, local filesystem paths, raw recordings or internal exceptions.
     return res.status(500).json({ error: 'Recording operation failed.', code: 'recording_internal_error' });
   });

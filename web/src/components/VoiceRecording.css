@@ -14,6 +14,13 @@
 .voice-recording .voice-timer { font-variant-numeric: tabular-nums; margin-left: 4px; white-space: nowrap; }
 .voice-recording .voice-error { color: #991b1b; margin: 12px 0; overflow-wrap: anywhere; }
 .voice-recording audio { display: none; }
+.voice-recording .voice-sync-feedback { width: 100%; box-sizing: border-box; padding: 10px; margin: 8px 0; border: 1px solid #64748b; border-radius: 6px; background: #eff6ff; color: #1e293b; overflow-wrap: anywhere; }
+.voice-recording .voice-sync-feedback p { margin: 0 0 6px; }
+.voice-recording .voice-sync-feedback p:last-child { margin-bottom: 0; }
+.voice-recording .voice-sync-feedback [role=status], .voice-recording .voice-sync-feedback [role=alert] { font-weight: 600; }
+.voice-recording .voice-sync-feedback progress { display: block; width: 100%; height: 14px; margin: 8px 0; accent-color: var(--color-primary, #4f46e5); }
+.voice-recording .voice-sync-feedback span { display: block; font-variant-numeric: tabular-nums; margin-bottom: 6px; }
+.voice-recording .voice-sync-feedback.has-error { background: #fff1f2; border-color: #991b1b; }
 .voice-recording ::selection { color: #fff; background: var(--color-primary, #4f46e5); }
 @media (max-width: 420px) { .voice-recording button { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { .voice-recording button { transition: none; } }
