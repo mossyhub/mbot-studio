@@ -159,6 +159,7 @@ class Recordings:
     self.request=None
     self.reply_id=''
     self.cleanup=False
+    self.temp_dirty=True  # Startup has not yet ruled out orphaned temp files.
     self.at=None
     self.action=self.io_result=self.io_error=None
 
@@ -208,13 +209,14 @@ class Recordings:
         for action in self.verify(meta,ident+'.mp3'):yield action
         self.assets[ident]=meta
       except (OSError,ValueError):pass
+    self.temp_dirty=False
     self.ready=True
 
   def cancel(self):
     # No disk IO here: invoked from MQTT cancellation paths too.
     self.transfer=self.last=self.request=None
     self.job=None
-    self.cleanup=True
+    self.cleanup=self.cleanup or self.temp_dirty or not self.ready
     self.at=None
     self.action=self.io_result=self.io_error=None
 
@@ -223,6 +225,7 @@ class Recordings:
       try:yield ('remove',self.path(name))
       except OSError as error:
         if error.args[0]!=2:raise
+    self.temp_dirty=False
     self.cleanup=False
 
   def operation(self,r):
@@ -239,6 +242,7 @@ class Recordings:
       yield ('statvfs',self.root)
       space=self.io_result
       if space[1]*space[4]<262144+meta['size']+2*space[1]:raise ValueError('space')
+      self.temp_dirty=True  # Set before create: a failing IO may leave a file.
       yield ('create',self.path('upload.part'))
       self.transfer={'transfer_id':r['transfer_id'],'meta':meta,'offset':0,'last_chunk':None}
       self.last=None
@@ -265,6 +269,7 @@ class Recordings:
         try:yield ('remove',self.path(name))
         except OSError as error:
           if error.args[0]!=2:raise
+      self.temp_dirty=False
       self.cleanup=False
     elif op=='finish' and self.transfer is None and self.last is not None and self.last['transfer_id']==r['transfer_id']:
       return
@@ -288,6 +293,7 @@ class Recordings:
         # Metadata is the commit marker. Both renames stay in our directory.
         yield ('rename',self.path('upload.part'),self.path(meta['id']+'.mp3'),meta['id'])
         yield ('rename',self.path('metadata.part'),self.path(meta['id']+'.json'))
+        self.temp_dirty=False
         self.assets[meta['id']]=meta
         self.last=transfer
         self.transfer=None

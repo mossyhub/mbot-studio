@@ -889,6 +889,122 @@ def test_asset_failure_ack_has_bounded_stage_and_correlation(tmp_path, monkeypat
             'begin', 'transfer', 'a' * 64, ctx.boot, 0)
 
 
+@pytest.mark.parametrize('completed_upload', [False, True])
+def test_real_loader_idle_recordings_stop_admits_fresh_indexed_wait_next_tick(tmp_path, completed_upload):
+    from test_ota_loader import ControllerTests
+    rig = recording_rig(tmp_path)
+    m, ctx, clock, io, client = rig
+    if completed_upload: upload(rig)
+    store = m._app.recordings
+    assert store.ready and store.transfer is None and store.request is None
+    controller, events, engine, transport, mailbox, app = ControllerTests().fixture()
+    engine.trial = None
+    controller.start(); controller.context = ctx; app['ota_step'] = m.ota_step
+    program = {'format': 'indexed-v1', 'commands': [{'type': 'wait', 'duration': 5}], 'order': '00'}
+    base.send(client, {'run_id': 'waiting', 'program': program}, 'program')
+    controller.cycle(clock.now)
+    assert m._app.timer is not None
+    base.send(client, {}, 'emergency')
+    controller.cycle(clock.now)
+    canceled = [e for _, e in client.events if e.get('run_id') == 'waiting'
+                and e.get('type') == 'program' and e.get('event') == 'canceled']
+    assert len(canceled) == 1 and canceled[0]['boot'] == ctx.boot
+    assert not m._app.motor_stop_needed and io.calls[-1] == ('stop',)
+    # No grace ticks after the correlated terminal: submit immediately.
+    program['commands'][0]['duration'] = 0
+    base.send(client, {'run_id': 'fresh', 'program': program}, 'program')
+    controller.cycle(clock.now)
+    assert any(e.get('run_id') == 'fresh' and e.get('type') == 'program'
+               and e.get('event') == 'completed' for _, e in client.events)
+    assert controller.app is not None and not store.cleanup
+
+
+@pytest.mark.parametrize('cause', ['emergency', 'abort'])
+def test_real_loader_partial_upload_cleanup_keeps_asset_ownership(tmp_path, cause):
+    from test_ota_loader import ControllerTests
+    m, ctx, clock, io, client = recording_rig(tmp_path)
+    controller, events, engine, transport, mailbox, app = ControllerTests().fixture()
+    engine.trial = None
+    controller.start(); controller.context = ctx; app['ota_step'] = m.ota_step
+    module = SimpleNamespace(ota_step=lambda context: controller.cycle(clock.now), _app=m._app)
+    rig = module, ctx, clock, io, client
+    assert request(rig, 'begin', id='a' * 64, sha256='a' * 64, size=3, duration_ms=1)['ok']
+    assert request(rig, 'chunk', offset=0, data='aabb')['ok']
+    root = tmp_path / 'voice'
+    assert (root / 'upload.part').read_bytes() == b'\xaa\xbb'
+    if cause == 'emergency':
+        base.send(client, {}, 'emergency')
+        controller.cycle(clock.now)
+        assert m._app.recordings.cleanup and (root / 'upload.part').exists()
+    else:
+        base.send(client, dict(op='abort', transfer_id='transfer', boot=ctx.boot), 'asset')
+    base.send(client, {'run_id': 'blocked', 'type': 'wait', 'duration': 0})
+    assert m._app.pending is None and m._app.asset_busy()
+    for _ in range(6): controller.cycle(clock.now)
+    assert controller.app is not None and not list(root.iterdir())
+    assert not m._app.asset_busy() and not m._app.recordings.temp_dirty
+    assert not any(e.get('run_id') == 'blocked' for _, e in client.events)
+    if cause == 'abort':
+        assert any(t.endswith(b'/asset_status') and e['op'] == 'abort' and e['ok']
+                   for t, e in client.events)
+    base.send(client, {'run_id': 'fresh', 'type': 'wait', 'duration': 0})
+    controller.cycle(clock.now)
+    assert any(e.get('run_id') == 'fresh' and e.get('type') == 'program'
+               and e.get('event') == 'completed' for _, e in client.events)
+
+
+@pytest.mark.parametrize('phase', ['startup', 'startup_restart', 'created', 'failed_create', 'metadata_rename'])
+def test_cancel_retains_possible_temp_files_until_cleanup(tmp_path, monkeypatch, phase):
+    rig = recording_rig(tmp_path)
+    m, ctx, clock, io, client = rig
+    root = tmp_path / 'voice'
+    if phase in ('startup', 'startup_restart'):
+        (root / 'upload.part').write_bytes(b'orphan')
+        (root / 'metadata.part').write_text('{}')
+        m._app.recordings = m.Recordings(str(root))
+        if phase == 'startup_restart':
+            base.send(client, {}, 'emergency')
+            m.ota_step(ctx)
+            for _ in range(6):
+                m.ota_step(ctx)
+                if not m._app.recordings.cleanup: break
+            assert not m._app.recordings.ready and m._app.recordings.job is not None
+    else:
+        store = m._app.recordings
+        execute = store.execute
+        def disk(action):
+            result = execute(action)
+            if phase == 'failed_create' and action[0] == 'create':
+                raise OSError(28, 'create left a file')
+            if phase == 'metadata_rename' and action[0] == 'rename' and action[1].endswith('metadata.part'):
+                raise OSError(5, 'rename returned an error after side effect')
+            return result
+        monkeypatch.setattr(store, 'execute', disk)
+        data = b'abc'; ident = hashlib.sha256(data).hexdigest()
+        base.send(client, dict(op='begin', transfer_id='transfer', boot=ctx.boot,
+                              id=ident, sha256=ident, size=3, duration_ms=1), 'asset')
+        for _ in range(5):
+            m.ota_step(ctx)
+            if (root / 'upload.part').exists(): break
+        assert (root / 'upload.part').exists() and store.transfer is None
+        if phase == 'failed_create':
+            m.ota_step(ctx)  # Error path clears request before invoking cancel.
+            assert store.cleanup and store.transfer is None
+        elif phase == 'metadata_rename':
+            m.ota_step(ctx)
+            assert request(rig, 'chunk', offset=0, data=data.hex())['ok']
+            assert not request(rig, 'finish')['ok']
+            assert store.cleanup and ident in store.ids
+    base.send(client, {}, 'emergency')
+    m.ota_step(ctx)
+    assert m._app.recordings.cleanup
+    # Repeated cancellation must not erase an existing cleanup obligation.
+    base.send(client, {}, 'emergency')
+    for _ in range(20): m.ota_step(ctx)
+    assert not (root / 'upload.part').exists() and not (root / 'metadata.part').exists()
+    assert m._app.recordings.ready and not m._app.recordings.cleanup
+
+
 def test_new_raw_request_after_idle_timeout_is_not_expired_as_old_work(tmp_path):
     rig = recording_rig(tmp_path)
     m, ctx, clock, io, client = rig
