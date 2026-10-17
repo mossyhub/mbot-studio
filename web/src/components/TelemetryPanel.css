@@ -446,3 +446,23 @@
   margin-left: -1px;
   transition: transform 0.3s ease;
 }
+
+/* Guided telemetry stays explicit and readable, including stale snapshots. */
+.live-control .telemetry-panel { border-radius: 6px; }
+.live-control .telemetry-panel.telemetry-stale { opacity: 1; }
+.live-control .telemetry-header { background: #edf3f7; color: #172b3a; flex-wrap: wrap; gap: 12px; }
+.live-control .telemetry-header-left { flex-wrap: wrap; min-width: 0; }
+.live-control .telemetry-title { font-size: 16px; }
+.live-control .telemetry-live { color: #00645f; animation: none; }
+.live-control .telemetry-collapse-btn { background: white; color: #172b3a; border: 1px solid #a9bac6; width: 44px; height: 44px; }
+.live-control .telemetry-stale-badge { background: #fff2d0; color: #745018; }
+.live-control .telemetry-offline, .live-control .alert-critical { color: #b42318; background: #fcebea; }
+.live-control .alert-warning { color: #745018; background: #fff2d0; }
+.live-control .alert-info { color: #2446a3; background: #e6edff; }
+.live-control .telemetry-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); padding: 16px; gap: 16px; }
+.live-control .telem-card { border-radius: 0; background: transparent; padding: 8px 0; }
+.live-control .telem-card:hover { box-shadow: none; }
+.live-control .telem-value { font-variant-numeric: tabular-nums; }
+.live-control .telem-label { color: #526575; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.live-control .telemetry-hint { opacity: 1; }
+.live-control .actuator-motor.motor-active .actuator-val { color: #00645f; }

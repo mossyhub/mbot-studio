@@ -1,12 +1,15 @@
 import { test, expect } from '@playwright/test';
+import { openHelper, closeHelper } from './guided-navigation.js';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-let bundle;
+let bundle, stylesheet;
 test.beforeAll(async () => {
-  const result = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import App from './web/src/App.jsx';createRoot(document.getElementById('root')).render(<App/>);`, resolveDir: fileURLToPath(new URL('..', import.meta.url)), loader: 'jsx' }, bundle: true, write: false, outdir: '/virtual', format: 'iife', logLevel: 'silent' });
+  const result = await build({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import App from './web/src/App.jsx';import './web/src/index.css';createRoot(document.getElementById('root')).render(<App/>);`, resolveDir: fileURLToPath(new URL('..', import.meta.url)), loader: 'jsx' }, bundle: true, write: false, outdir: '/virtual', format: 'iife', logLevel: 'silent' });
   bundle = result.outputFiles.find(f => f.path.endsWith('.js')).text;
+  stylesheet = result.outputFiles.find(f => f.path.endsWith('.css')).text;
 });
 async function setup(page) {
+  await page.routeWebSocket('**/*', () => {});
   await page.route('**/*', r => r.fulfill(r.request().url() === 'http://preview.test/' ? { contentType: 'text/html', body: '<div id="root"></div>' } : { json: {} }));
   await page.addInitScript(() => {
     localStorage.setItem('mbot-studio-current-profile', 'profile_default');
@@ -23,6 +26,7 @@ async function setup(page) {
     }) : original(url, options);
   });
   await page.goto('http://preview.test/');
+  await page.addStyleTag({ content: stylesheet });
   await page.addScriptTag({ content: bundle });
   await expect(page.locator('.se-script.main input[type="number"]')).toHaveValue('1');
 }
@@ -42,19 +46,23 @@ test('AI drafts leave preview intact; Apply is fenced from later edits and Dismi
   await prompt.fill('wait');
   await prompt.press('Enter');
   await expect(page.getByRole('button', { name: 'Dismiss', exact: true })).toBeVisible();
+  await closeHelper(page);
   await page.getByRole('button', { name: 'Show Python' }).click();
   await expect(page.locator('.code-block')).toHaveText('# saved first');
+  await openHelper(page);
   await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
   await expect(page.locator('.code-block')).toHaveText('# saved first');
   await prompt.fill('wait again');
   await prompt.press('Enter');
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
+  await closeHelper(page);
   await expect(page.getByText('Generating Python preview…', { exact: true })).toBeVisible();
   await expect(page.locator('.code-preview')).toHaveCount(0);
   await page.getByRole('button', { name: 'Show Blocks' }).click();
   await edit(page, 5);
   await resolve(page, 5, { code: '# edited after apply' });
   await resolve(page, 4, { code: '# late apply' });
+  await closeHelper(page);
   await page.getByRole('button', { name: 'Show Python' }).click();
   await expect(page.locator('.code-block')).toHaveText('# edited after apply');
 });
@@ -63,12 +71,14 @@ for (const failure of ['http', 'missing', 'network']) test(`generation ${failure
   await edit(page, 2);
   if (failure === 'network') await page.evaluate(() => window.previewRequests.at(-1).reject(new Error('offline')));
   else await resolve(page, 2, failure === 'http' ? { error: 'Unsupported block', code: '# invalid' } : {}, failure !== 'http');
+  await closeHelper(page);
   await page.getByRole('button', { name: 'Show Python' }).click();
   await expect(page.getByRole('alert')).toContainText('Python generation failed');
   await expect(page.locator('.code-preview')).toHaveCount(0);
   await page.getByRole('button', { name: 'Show Blocks' }).click();
   await edit(page, 3);
   await resolve(page, 3, { code: '# recovered' });
+  await closeHelper(page);
   await page.getByRole('button', { name: 'Show Python' }).click();
   await expect(page.locator('.code-block')).toHaveText('# recovered');
 });
@@ -78,6 +88,7 @@ test('project load and new project fence old requests and preserve saved source'
   await page.getByTitle('Project menu', { exact: true }).click();
   await page.locator('.project-option').filter({ hasText: 'Second' }).click();
   await resolve(page, 2, { code: '# old project' });
+  await closeHelper(page);
   await page.getByRole('button', { name: 'Show Python' }).click();
   await expect(page.locator('.code-block')).toHaveText('# saved second');
   await page.getByTitle('Save project', { exact: true }).click();
@@ -86,6 +97,7 @@ test('project load and new project fence old requests and preserve saved source'
   await edit(page, 9);
   await page.getByTitle('New project', { exact: true }).click();
   await resolve(page, 9, { code: '# late reset' });
+  await closeHelper(page);
   await page.getByRole('button', { name: 'Show Python' }).click();
   await expect(page.locator('.code-block')).not.toContainText('# late reset');
   await expect(page.getByRole('button', { name: 'Undo' })).toBeDisabled();
@@ -96,6 +108,7 @@ test('late edit response cannot replace newer preview, including undo/redo', asy
   await edit(page, 3);
   await resolve(page, 3, { code: '# newest' });
   await resolve(page, 2, { code: '# stale' });
+  await closeHelper(page);
   await page.getByRole('button', { name: 'Show Python' }).click();
   await expect(page.locator('.code-block')).toHaveText('# newest');
   await page.getByRole('button', { name: 'Undo', exact: false }).click();

@@ -4,7 +4,7 @@ import CalibrationChat from './CalibrationChat.jsx';
 import FirmwareFlasher from './FirmwareFlasher.jsx';
 import HardwareWizard from './HardwareWizard.jsx';
 
-export default function RobotConfig({ config, onConfigUpdate, robotConnected, onAchievement }) {
+export default function RobotConfig({ config, onConfigUpdate, robotConnected, onAchievement, onStop }) {
   const [robotName, setRobotName] = useState(config?.name || 'My mBot2');
   const [additions, setAdditions] = useState(config?.additions || []);
   const [notes, setNotes] = useState(config?.notes || '');
@@ -16,6 +16,9 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
   const [assumptions, setAssumptions] = useState([]);
   const [completeness, setCompleteness] = useState([]);
   const [showWizard, setShowWizard] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showFirmware, setShowFirmware] = useState(false);
+  const [showCalibration, setShowCalibration] = useState(false);
   const [physicalDescription, setPhysicalDescription] = useState(config?.physicalDescription || '');
   const [constraints, setConstraints] = useState(config?.constraints || []);
   const [taskPatterns, setTaskPatterns] = useState(config?.taskPatterns || []);
@@ -211,7 +214,7 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
         body: JSON.stringify({ port, action, type }),
       });
       const data = await res.json();
-      if (data.sent) {
+      if (res.ok && data.sent && !data.error) {
         setTestStatus(prev => ({ ...prev, [port + action.name]: 'done' }));
       } else {
         setTestStatus(prev => ({ ...prev, [port + action.name]: 'error' }));
@@ -240,7 +243,7 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
     }
 
     try {
-      await fetch('/api/robot/hardware-state/home', {
+      const res = await fetch('/api/robot/hardware-state/home', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -249,7 +252,9 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           homeAction: command,
         }),
       });
-      setSaveStatus(`🏠 ${addition.label || addition.port} homed to "${addition.homeState}"`);
+      const data = await res.json();
+      if (!res.ok || data.error || data.success === false) throw new Error(data.error || 'Home request rejected');
+      setSaveStatus(`Home request accepted for ${addition.label || addition.port}: "${addition.homeState}" — position unverified.`);
       setTimeout(() => setSaveStatus(''), 3000);
     } catch {
       setSaveStatus('❌ Could not home hardware');
@@ -301,15 +306,34 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           robotConnected={robotConnected}
           onComplete={handleWizardComplete}
           onCancel={() => setShowWizard(false)}
+          onStop={onStop}
         />
       )}
       <div className="config-content">
+        <header className="robot-overview">
+          <div><h1>{robotName || 'Your robot'}</h1>
+            <p className="section-desc">Your hardware names connect Robot settings, Live Control and programs.</p></div>
+          <span className={`robot-connection ${robotConnected ? 'connected' : ''}`}>{robotConnected ? 'Robot connected' : 'Robot disconnected'}</span>
+        </header>
+        <section className="robot-hardware-overview" aria-labelledby="robot-hardware-heading">
+          <h2 id="robot-hardware-heading">Named controls</h2>
+          <dl className="robot-connections">
+            <div><dt>Drive wheels</dt><dd>Encoder motors</dd></div>
+            {additions.map((addition, index) => <div key={index}>
+              <dt>{addition.label || 'Unnamed hardware'}</dt>
+              <dd>{addition.port || 'Port not set'} · {addition.type === 'dc_motor' ? 'DC Motor' : addition.type === 'servo' ? 'Servo' : addition.type}</dd>
+            </div>)}
+            <div><dt>Display &amp; signals</dt><dd>CyberPi</dd></div>
+          </dl>
+          <p className="section-desc">Configured hardware, not automatic discovery. Names and saved states do not confirm physical position or grip.</p>
+        </section>
         {/* Robot Identity */}
-        <section className="config-section">
-          <h2>🤖 Your Robot</h2>
+        <details className="config-section config-details">
+          <summary>Robot name &amp; description</summary>
           <div className="config-field">
-            <label>Robot Name</label>
+            <label htmlFor="robot-name">Robot Name</label>
             <input
+              id="robot-name"
               type="text"
               value={robotName}
               onChange={(e) => setRobotName(e.target.value)}
@@ -317,43 +341,22 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
             />
           </div>
           <div className="config-field">
-            <label>What does your robot look like?</label>
+            <label htmlFor="robot-description">What does your robot look like?</label>
             <p className="field-hint">Tell the AI about your robot! What's attached to it? What can it do? This helps the AI write better programs for you.</p>
             <textarea
               className="config-notes"
+              id="robot-description"
               value={physicalDescription}
               onChange={(e) => setPhysicalDescription(e.target.value)}
               placeholder="Example: A small wheeled rover with a robot arm on top. The arm moves up and down, and has a gripper claw at the end that opens and closes to pick up small objects like ping pong balls."
               rows={3}
             />
           </div>
-        </section>
-
-        <section className="config-section">
-          <h2>🔌 First-Time Setup</h2>
-          <p className="section-desc">
-            You only need to do this once! This uploads the robot brain software so your mBot2 can talk to this app over WiFi.
-          </p>
-          <details>
-            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 14, color: '#4f46e5' }}>📦 Upload Robot Software (for parents/grown-ups)</summary>
-            <div style={{ marginTop: 8 }}>
-              <p className="section-desc">
-                <strong>Required:</strong> Download and install <strong>mLink2</strong> from Makeblock, then keep it running while you upload.
-              </p>
-              <FirmwareFlasher />
-              <ol className="setup-steps">
-                <li>Install and run <strong>mLink2</strong> on this computer.</li>
-                <li>Connect your mBot2/CyberPi with a USB-C cable.</li>
-                <li>Fill in your WiFi name and password, then click <strong>Upload</strong>.</li>
-                <li>Wait for it to restart — the status bar will say "Robot Online" when it's ready!</li>
-              </ol>
-            </div>
-          </details>
-        </section>
+        </details>
 
         {/* Hardware List + Add Buttons */}
         <section className="config-section">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div className="config-section-heading">
             <h2>🔧 Extra Hardware</h2>
             <button className="btn-primary btn-small" onClick={() => setShowWizard(true)}>
               + Add Hardware
@@ -370,7 +373,8 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           ) : (
             <div className="additions-list">
               {additions.map((addition, index) => (
-                <div key={index} className="addition-card">
+                <details key={index} className="addition-card">
+                  <summary>{addition.label || 'Unnamed hardware'} · {addition.port || 'Choose a port'} · {addition.type === 'dc_motor' ? 'DC Motor' : addition.type === 'servo' ? 'Servo' : addition.type}</summary>
                   <div className="addition-header">
                     <span className="addition-type-icon">
                       {addition.type === 'dc_motor' ? '⚡' :
@@ -556,6 +560,7 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                   {/* Named actions with motor parameters */}
                   <div className="addition-actions">
                     <label className="actions-label">⚡ Actions:</label>
+                    <p className="section-desc">Tests submit the configured action. Submission does not confirm movement, position or grip.</p>
                     {(addition.actions || []).map((action, ai) => (
                       <div key={ai} className="action-card">
                         <div className="action-main-row">
@@ -595,9 +600,9 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                             title="Test this action on the robot now"
                             disabled={testStatus[addition.port + action.name] === 'testing'}
                           >
-                            {testStatus[addition.port + action.name] === 'testing' ? '⏳' :
-                             testStatus[addition.port + action.name] === 'done' ? '✅' :
-                             testStatus[addition.port + action.name] === 'error' ? '❌' : '🧪 Test'}
+                            {testStatus[addition.port + action.name] === 'testing' ? 'Sending…' :
+                             testStatus[addition.port + action.name] === 'done' ? 'Submitted' :
+                             testStatus[addition.port + action.name] === 'error' ? 'Not sent' : '🧪 Test'}
                           </button>
                           <button
                             className="action-remove"
@@ -713,10 +718,12 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
                       rows={2}
                     />
                   </div>
-                </div>
+                </details>
               ))}
             </div>
           )}
+
+          <button className="btn-secondary btn-small" onClick={handleAddManual}>Add manually</button>
 
           {completeness.length > 0 && (
             <div className="clarification-box">
@@ -733,7 +740,7 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           )}
 
           <details style={{ marginTop: 12 }}>
-            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13, color: '#666' }}>� Or describe hardware with AI...</summary>
+            <summary>Describe hardware with AI</summary>
             <div style={{ marginTop: 8 }}>
               <div className="nl-input-area">
                 <textarea
@@ -757,28 +764,18 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           </details>
         </section>
 
-        {/* Calibration Teaching */}
-        <section className="config-section">
-          <details>
-            <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 16 }}>🎓 Teach Your Robot</summary>
-            <p className="section-desc" style={{ marginTop: 8 }}>
-              Chat with the AI to help your robot learn how far it moves and how fast it turns!
-            </p>
-            <CalibrationChat robotConnected={robotConnected} onAchievement={onAchievement} />
-          </details>
-        </section>
-
         {/* Notes */}
-        <section className="config-section">
-          <h2>📝 Notes</h2>
+        <details className="config-section config-details">
+          <summary>Setup notes</summary>
           <textarea
             className="config-notes"
+            aria-label="Setup notes"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Any other notes about your robot setup..."
             rows={3}
           />
-        </section>
+        </details>
 
         {/* Physical Constraints */}
         {constraints.length > 0 && (
@@ -798,9 +795,39 @@ export default function RobotConfig({ config, onConfigUpdate, robotConnected, on
           </section>
         )}
 
+        <details className="config-section config-details advanced-setup" onToggle={event => {
+          setShowAdvanced(event.currentTarget.open);
+          if (!event.currentTarget.open) { setShowFirmware(false); setShowCalibration(false); }
+        }}>
+          <summary>Advanced setup &amp; calibration</summary>
+          <p className="section-desc">For setup, recovery and measured calibration. Opening the software tools starts local mLink discovery; everyday controls do not.</p>
+          {showAdvanced && <>
+            <details onToggle={event => setShowFirmware(event.currentTarget.open)}>
+              <summary>Upload Robot Software (for parents/grown-ups)</summary>
+              {showFirmware && <>
+                <p className="section-desc">First-time setup and recovery: install and run Makeblock mLink2, then connect your CyberPi with USB-C. Check the selected software before uploading.</p>
+                <FirmwareFlasher />
+                <ol className="setup-steps">
+                  <li>Install and run <strong>mLink2</strong> on this computer.</li>
+                  <li>Connect your mBot2/CyberPi with a USB-C cable.</li>
+                  <li>Fill in your WiFi name and password, then click <strong>Upload</strong>.</li>
+                  <li>Wait for restart and check the robot connection status.</li>
+                </ol>
+              </>}
+            </details>
+            <details onToggle={event => setShowCalibration(event.currentTarget.open)}>
+              <summary>Teach Your Robot</summary>
+              {showCalibration && <>
+                <p className="section-desc">Calibration can send movement commands. Clear the area, measure what happens, and keep STOP within reach.</p>
+                <CalibrationChat robotConnected={robotConnected} onAchievement={onAchievement} />
+              </>}
+            </details>
+          </>}
+        </details>
+
         {/* Save Button */}
         <div className="config-save-area">
-          {saveStatus && <span className="save-status">{saveStatus}</span>}
+          {saveStatus && <span className="save-status" role="status">{saveStatus}</span>}
           <button className="btn-primary btn-save" onClick={handleSave}>
             💾 Save Robot Settings
           </button>

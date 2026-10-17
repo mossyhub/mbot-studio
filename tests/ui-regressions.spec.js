@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openHelper, closeHelper } from './guided-navigation.js';
 
 const forward = { type: 'move_forward', speed: 50, duration: 1, _id: 'block-a' };
 const backward = { type: 'move_backward', speed: 50, duration: 1, _id: 'block-b' };
@@ -16,16 +17,36 @@ async function readFloating(page) {
 }
 
 async function dragBlockToSlot(page, source, target) {
+  await source.scrollIntoViewIfNeeded();
+  // Zero-height connection slots need room for the grabbed label below them.
+  // Scrolling only the slot into view can leave the release point off-canvas.
+  await target.evaluate(element => {
+    const canvas = element.closest('.se-canvas');
+    const r = element.getBoundingClientRect(), view = canvas.getBoundingClientRect();
+    if (r.bottom + 48 > view.bottom) canvas.scrollTop += r.bottom + 48 - view.bottom;
+  });
+  await expect(source).toBeInViewport();
   const from = await source.boundingBox();
-  const to = await target.boundingBox();
-  await page.mouse.move(from.x + 12, from.y + 5);
+  const block = await source.evaluate(element => {
+    const r = element.closest('.se-block-shape').getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  const start = { x: from.x + 12, y: from.y + 5 };
+  const reporter = await target.getAttribute('data-reporter-slot') !== null;
+  await page.mouse.move(start.x, start.y);
   await page.mouse.down();
-  await page.mouse.move(from.x + 30, from.y + 6, { steps: 5 });
-  await page.mouse.move(to.x + 25, to.y, { steps: 15 });
-  // Array slots expand on drag-over. Follow their real browser geometry.
+  await page.mouse.move(start.x + 18, start.y + 1, { steps: 5 });
+  // Guided statements snap their physical top connector, not the grabbed label.
+  // Reporters still target the compatible input socket's center.
+  const point = box => reporter
+    ? { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    : { x: box.x + start.x - block.x, y: box.y + start.y - block.y };
+  let end = point(await target.boundingBox());
+  await page.mouse.move(end.x, end.y, { steps: 15 });
   await page.waitForTimeout(200);
-  const expanded = await target.boundingBox();
-  await page.mouse.move(expanded.x + 25, expanded.y + Math.max(1, expanded.height / 2));
+  end = point(await target.boundingBox());
+  await page.mouse.move(end.x + 0.1, end.y);
+  await expect(target).toHaveClass(reporter ? /\b(active|snap-grow)\b/ : /snap-active/);
   await page.mouse.up();
 }
 
@@ -105,6 +126,7 @@ test('U3 moving a stack through main and back preserves blocks and run state', a
 });
 
 async function generateDraft(page, message) {
+  await openHelper(page);
   await page.locator('.chat-input').fill(message);
   await page.locator('.chat-send-btn').click();
   await expect(page.locator('.suggestion-bar')).toBeVisible();
@@ -115,6 +137,7 @@ async function applyDraft(page) {
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   const result = await generated;
   expect(result.ok()).toBeTruthy();
+  await closeHelper(page);
   return result.json();
 }
 
@@ -128,6 +151,7 @@ test('U2 dismissed draft cannot change current preview, saved code or run blocks
   await expect(preview).toHaveText(applied.code);
   await generateDraft(page, 'draw a square');
   await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await closeHelper(page);
   await expect(preview).toHaveText(applied.code);
   await page.getByTitle('Save project', { exact: true }).click();
   const saved = await page.evaluate(() => {
@@ -223,7 +247,7 @@ for (const cancelVia of ['tab unmount', 'tab unmount then STOP', 'live STOP']) {
     }
     if (cancelVia.includes('STOP')) {
       const stopped = page.waitForResponse(r => r.url().endsWith('/api/robot/stop'));
-      await page.getByRole('button', { name: '🛑 STOP', exact: true }).click();
+      await page.getByRole('button', { name: 'Emergency Stop', exact: true }).click();
       expect((await stopped).ok()).toBeTruthy();
     }
     release();

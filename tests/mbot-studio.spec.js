@@ -7,6 +7,7 @@
  *   - Real AI (Azure/GitHub creds in .env): actual model calls, slower
  */
 import { test, expect } from './fixtures.js';
+import { closeHelper } from './guided-navigation.js';
 
 // ─── Health & Connectivity ──────────────────────────────────────
 
@@ -283,6 +284,7 @@ test.describe('UI end-to-end', () => {
     // Click "Run Program"
     const runBtn = page.locator('button', { hasText: 'Run Program' });
     await expect(runBtn).toBeEnabled({ timeout: 5000 });
+    await closeHelper(page);
     await runBtn.click();
 
     // Verify the program reached the simulator
@@ -296,7 +298,7 @@ test.describe('UI end-to-end', () => {
     simulator.clearLog();
 
     // Click the STOP button
-    const stopBtn = page.locator('button', { hasText: 'STOP' });
+    const stopBtn = page.getByRole('button', { name: 'Emergency Stop', exact: true });
     await stopBtn.click();
 
     // Verify emergency stop reached the simulator
@@ -328,6 +330,7 @@ test.describe('UI end-to-end', () => {
     // Send to robot
     const runBtn = page.locator('button', { hasText: 'Run Program' });
     await expect(runBtn).toBeEnabled({ timeout: 5000 });
+    await closeHelper(page);
     await runBtn.click();
 
     // Verify the simulator received the program

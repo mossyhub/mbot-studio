@@ -1,5 +1,6 @@
 import {test,expect} from '@playwright/test';
 import {build} from 'esbuild';
+import { openBlocks } from './guided-navigation.js';
 import {fileURLToPath} from 'node:url';
 test.use({viewport:{width:1280,height:800},launchOptions:{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,args:['--no-sandbox']}});
 let js,css;
@@ -15,6 +16,7 @@ async function mount(page,blocks=[]){
  return posts;
 }
 async function dragLooseWait(page){
+ await openBlocks(page);
  await page.getByTitle('Control',{exact:true}).click();
  const source=page.getByRole('button',{name:'Add wait',exact:true});const box=await source.boundingBox();
  await page.mouse.move(box.x+12,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+30,box.y+box.height/2,{steps:5});await page.mouse.move(900,460,{steps:12});await page.mouse.up();
@@ -35,6 +37,7 @@ test('loose blocks explain why Run is disabled and explicitly connect without ex
 });
 test('mixed workspace warns and connects an entire loose stack once in order',async({page})=>{
  const posts=await mount(page,[{type:'wait',duration:0.1,_id:'main'}]);await dragLooseWait(page);
+ await openBlocks(page);
  const transfer=await page.evaluateHandle(()=>new DataTransfer());const source=page.getByRole('button',{name:'Add wait',exact:true});
  await source.dispatchEvent('dragstart',{dataTransfer:transfer});const slot=page.locator('.se-script.floating [data-arr-slot]').last();await slot.dispatchEvent('dragover',{dataTransfer:transfer});await slot.dispatchEvent('drop',{dataTransfer:transfer});await transfer.dispose();
  await expect(page.locator('.se-script.floating .se-prim.num')).toHaveCount(2);

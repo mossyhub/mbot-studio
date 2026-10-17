@@ -1,7 +1,10 @@
 import {test,expect} from '@playwright/test';
+import { openSetup } from './guided-navigation.js';
 import {createHash} from 'node:crypto';
 test('OTA bootstrap commissioning is explicit and rejects an invalid artifact without flashing',async({page})=>{
- await page.goto('/');await page.getByRole('button',{name:/Setup/}).click();await page.locator('summary').filter({hasText:'Upload Robot Software'}).click();
+ // Setup discovery must never reach a local mLink/device during this UI-only test.
+ await page.routeWebSocket('**/*',()=>{});
+ await page.goto('/');await openSetup(page);await page.locator('summary').filter({hasText:'Advanced setup & calibration'}).click();await page.locator('summary').filter({hasText:'Upload Robot Software'}).click();
  await expect(page.getByText('OTA recovery loader — commissioning')).toBeVisible();
  const install=page.getByRole('button',{name:'Install OTA recovery loader via USB'});await expect(install).toBeDisabled();
  await page.getByLabel('Private OTA bootstrap file').setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from('{"kind":"ordinary-program"}')});

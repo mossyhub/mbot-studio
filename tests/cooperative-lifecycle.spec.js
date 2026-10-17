@@ -81,7 +81,7 @@ for (const stopOutcome of ['ack', 'http-error', 'network-error']) test(`STOP ${s
       json: stopOutcome === 'ack' ? {sent:true} : {error:'Stop unavailable'},
     });
   });
-  await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();
+  await page.getByRole('button',{name:'Emergency Stop',exact:true}).click();
   await expect.poll(() => stops).toBe(1);
   await expect(status).toContainText('device stop is not confirmed');
   await expect(status).not.toContainText('device confirmed');
@@ -92,7 +92,7 @@ for (const stopOutcome of ['ack', 'http-error', 'network-error']) test(`STOP ${s
     ['canceled', 'unrelated', 'program'], ['canceled', 'run-current', 'wait'],
   ]) await emit(event, id, type);
   await expect(status).toContainText('device stop is not confirmed');
-  await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();
+  await page.getByRole('button',{name:'Emergency Stop',exact:true}).click();
   await expect.poll(() => stops).toBe(2);
   await emit('canceled');
   await expect(status).toContainText('Canceled — device confirmed (run-current)');
@@ -118,8 +118,8 @@ test('repeated Stop retains the original observation deadline; timeout is unveri
   const run = page.getByRole('button',{name:'Run Program'});
   await expect(status).toContainText('Submitted');
   await page.clock.runFor(119000);
-  await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();
-  await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();
+  await page.getByRole('button',{name:'Emergency Stop',exact:true}).click();
+  await page.getByRole('button',{name:'Emergency Stop',exact:true}).click();
   await expect(status).toContainText('device stop is not confirmed');
   await expect(run).toBeDisabled();
   await page.clock.runFor(1001);
@@ -137,7 +137,7 @@ test('device failure after Stop remains a failure, not confirmation of successfu
   const emit = await setup(page);
   const status = page.getByTestId('program-lifecycle');
   await expect(status).toContainText('Submitted');
-  await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();
+  await page.getByRole('button',{name:'Emergency Stop',exact:true}).click();
   await expect(status).toContainText('device stop is not confirmed');
   await emit('failed');
   await expect(status).toContainText('Failed — device confirmed (run-current)');

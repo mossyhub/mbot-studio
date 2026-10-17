@@ -93,7 +93,7 @@ for (const mode of ['source-map mismatch','encoding mismatch','Stop','profile sw
   const f = await mount(page,{tamper:mode==='source-map mismatch',responseOverrides:mode==='encoding mismatch'?{encoding:'unknown-v2'}:{}});
   await page.getByRole('button',{name:'Run Program'}).click();
   await expect(page.getByTestId('program-lifecycle')).toContainText('Submitted');
-  if (mode === 'Stop') await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();
+  if (mode === 'Stop') await page.getByRole('button',{name:'Emergency Stop',exact:true}).click();
   if (mode === 'profile switch') {
     await page.getByTitle('Switch child profile').click();
     await page.getByRole('button',{name:'Blair',exact:true}).click();

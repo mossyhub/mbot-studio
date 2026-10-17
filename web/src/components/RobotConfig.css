@@ -592,3 +592,73 @@
   padding: 12px 28px;
   font-size: 16px;
 }
+
+/* Guided Robot: everyday overview, explicit editors, opt-in service tools. */
+.robot-config { min-width: 0; width: 100%; box-shadow: none; border-radius: 0; background: transparent; scrollbar-color: #a5b6c2 #f3f6f8; }
+.robot-config .config-content { max-width: 1120px; padding: 24px; }
+.robot-overview { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 28px; }
+.robot-overview h1 { font-size: 26px; letter-spacing: -.025em; margin: 0 0 6px; }
+.robot-config .section-desc { max-width: 72ch; font-size: 14px; line-height: 1.55; color: #526575; }
+.robot-connection { background: #fff2d0; color: #745018; font-size: 13px; font-weight: 600; padding: 6px 10px; border-radius: 5px; }
+.robot-connection.connected { background: #e2f1ec; color: #00645f; }
+.robot-hardware-overview { margin-bottom: 28px; }
+.robot-hardware-overview h2 { font-size: 20px; }
+.robot-connections { margin: 16px 0; }
+.robot-connections > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 14px 0; border-bottom: 1px solid #d7e0e6; }
+.robot-connections dt { font-weight: 650; }
+.robot-connections dd { margin: 0; color: #526575; overflow-wrap: anywhere; }
+.robot-config .config-section { margin-bottom: 24px; }
+.robot-config .config-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.robot-config .config-section-heading h2 { margin: 0; }
+.robot-config details { min-width: 0; }
+.robot-config summary { min-height: 48px; padding: 14px 16px; font-size: 16px; font-weight: 650; cursor: pointer; overflow-wrap: anywhere; }
+.robot-config details[open] > summary { border-bottom: 1px solid #d7e0e6; margin-bottom: 16px; }
+.robot-config .config-details { border: 1px solid #d7e0e6; border-radius: 6px; background: #fff; padding: 0 16px; }
+.robot-config .config-details > summary { margin-left: -16px; margin-right: -16px; }
+.robot-config .config-details[open] { padding-bottom: 16px; }
+.robot-config .config-field + .config-field { margin-top: 20px; }
+.robot-config .config-field input { max-width: 100%; width: 100%; }
+.robot-config .field-hint { color: #526575; font-size: 13px; line-height: 1.5; }
+.robot-config .addition-card { border: 1px solid #d7e0e6; border-radius: 6px; overflow: visible; background: #fff; }
+.robot-config .additions-list { margin: 16px 0; gap: 12px; }
+.robot-config .addition-header { background: transparent; }
+.robot-config .addition-fields { min-width: 0; }
+.robot-config .addition-field-row { flex-wrap: wrap; gap: 8px; }
+.robot-config .addition-field-row label { width: 90px; font-size: 13px; }
+.robot-config .addition-field-row input, .robot-config .addition-field-row select { min-width: 0; max-width: 100%; flex: 1 1 160px; }
+.robot-config :is(input, select, textarea) { box-sizing: border-box; max-width: 100%; min-width: 0; font-size: 14px; padding: 10px; caret-color: #2e56c5; }
+.robot-config :is(input, select, button) { min-height: 44px; }
+.robot-config textarea { resize: vertical; }
+.robot-config :is(button, input, select, textarea, summary):focus-visible { outline: 3px solid #2e56c5; outline-offset: 3px; }
+.robot-config ::selection { background: #c9d7ff; color: #172b3a; }
+.robot-config .addition-semantic, .robot-config .addition-physical { background: transparent; padding-top: 16px; padding-bottom: 16px; }
+.robot-config .addition-actions { padding-top: 16px; }
+.robot-config .action-card { background: #f3f6f8; border: 0; padding: 14px; margin-bottom: 12px; }
+.robot-config .action-main-row, .robot-config .action-params-row { flex-wrap: wrap; gap: 10px; }
+.robot-config .action-name { flex: 1 1 140px; width: auto; }
+.robot-config .action-target-state { flex: 1 1 150px; width: auto; }
+.robot-config .param-field { flex-wrap: wrap; }
+.robot-config .param-field label { font-size: 13px; }
+.robot-config .param-field input { width: 80px; font-variant-numeric: tabular-nums; }
+.robot-config .param-field select { width: 112px; }
+.robot-config .action-desc-full { font-size: 13px; }
+.robot-config .btn-tiny { font-size: 13px; padding: 8px 12px; }
+.robot-config .addition-remove, .robot-config .action-remove, .robot-config .state-tag-remove { opacity: 1; min-width: 36px; }
+.robot-config .state-tag { border-radius: 5px; }
+.robot-config .state-add-input { width: 150px; }
+.robot-config .config-save-area { flex-wrap: wrap; }
+.robot-config .save-status { flex: 1 1 240px; color: #172b3a; }
+.robot-config .nl-input-area { flex-wrap: wrap; }
+.robot-config .nl-input-area textarea { min-width: 0; flex-basis: 260px; }
+.robot-config .advanced-setup .firmware-flasher { min-width: 0; }
+@media (max-width: 600px) {
+  .robot-config .config-content { padding: 16px; }
+  .robot-config .addition-header { flex-wrap: wrap; padding: 12px; }
+  .robot-config .addition-type-icon { font-size: 20px; }
+  .robot-config .addition-fields { flex-basis: calc(100% - 40px); }
+  .robot-config .addition-field-row label { width: 100%; }
+  .robot-config .home-state-row label { width: 100% !important; }
+  .robot-config .addition-field-row input, .robot-config .addition-field-row select { flex-basis: 100%; }
+  .robot-config .config-save-area .btn-save { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .robot-config * { transition: none !important; animation: none !important; } }

@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+import { openLearning } from './guided-navigation.js';
 import {build} from 'esbuild';
 import {fileURLToPath} from 'node:url';
 import {lowerProgram} from '../server/src/services/program-lowering.js';
@@ -26,7 +27,7 @@ async function mount(page,{ack=true,early=false}={}) {
   return {posts,send,unexpected};
 }
 async function start(page) {
-  await page.getByRole('button',{name:'Challenges',exact:false}).click();
+  await openLearning(page);
   await page.getByRole('button',{name:/First Steps/}).click();
   await page.getByRole('button',{name:'Start Programming',exact:false}).click();
   await expect(page.getByTestId('mission-strip')).toContainText('First Steps');
@@ -46,7 +47,7 @@ test('real App Start → edit → Run → correlated completion → automatic ch
  await page.locator('.se-script.main input[type="number"]').last().fill('1');
  fixture.send();await expect(page.getByTestId('mission-strip')).toContainText('Device-confirmed');
  fixture.send();
- await page.getByRole('button',{name:'Challenges',exact:false}).click();
+ await openLearning(page);
  await expect(page.locator('.challenge-card').filter({hasText:'First Steps'})).toContainText('Device-confirmed');
  expect((await saved(page)).ch_forward.verification).toBe('device-completed');
  const stats=await page.evaluate(()=>JSON.parse(localStorage.getItem('mbot-studio-achievements:a')).stats);
@@ -66,7 +67,7 @@ test('Stop invalidates earning before the cancellation event arrives',async({pag
  const status=page.getByTestId('program-lifecycle');
  const run=page.getByRole('button',{name:'Run Program'});
  await run.click();await expect(status).toContainText('Submitted');
- await page.getByRole('button',{name:'🛑 STOP',exact:true}).click();
+ await page.getByRole('button',{name:'Emergency Stop',exact:true}).click();
  await expect(status).toContainText('device stop is not confirmed');
  // An in-flight completion can arrive after Stop. It cannot become success or credit.
  f.send();await expect(status).toContainText('Unverified');
@@ -85,7 +86,7 @@ test('historical reused badge IDs keep original meanings and dates while current
  const f=await mount(page);
  const history={first_program:11,used_condition:22,five_programs:33,all_beginner:44};
  await page.evaluate(earned=>localStorage.setItem('mbot-studio-achievements:a',JSON.stringify({earned,stats:{programs_run:19}})),history);
- await page.getByRole('button',{name:/🏆/}).click();
+ await openLearning(page, 'Achievements');
  const current=page.locator('.achievements-panel > .achievements-grid');
  const legacy=page.locator('.achievement-legacy');
  await expect(current.locator('.achievement-card.earned')).toHaveCount(0);
@@ -101,7 +102,7 @@ test('historical reused badge IDs keep original meanings and dates while current
  await start(page);
  await page.getByRole('button',{name:'Run Program'}).click();await expect.poll(()=>f.posts.length).toBe(1);
  f.send();await expect(page.getByTestId('mission-strip')).toContainText('Device-confirmed');
- await page.getByRole('button',{name:/🏆/}).click();
+ await openLearning(page, 'Achievements');
  const hello=current.locator('.achievement-card').filter({has:page.getByRole('heading',{name:'Hello Robot!',exact:true})});
  await expect(hello).toHaveClass(/earned/);
  await expect(hello).toContainText('Finish a program with matching device confirmation.');
@@ -117,9 +118,9 @@ test('historical reused badge IDs keep original meanings and dates while current
 test('all three levels are navigable; configured hardware gate and legacy collections are honest',async({page})=>{
  await mount(page);
  await page.evaluate(()=>{localStorage.setItem('mbot-studio-challenges:a',JSON.stringify({ch_square:{stars:2,completedAt:42},ch_forward:{stars:1,completedAt:43}}));localStorage.setItem('mbot-studio-achievements:a',JSON.stringify({earned:{night_coder:42,unknown_old_badge:43},stats:{programs_run:12}}));});
- await page.getByRole('button',{name:'Challenges',exact:false}).click();await expect(page.locator('.challenge-card').filter({hasText:'First Steps'})).toContainText('Previously earned');await expect(page.getByRole('button',{name:'I Did It',exact:false})).toHaveCount(0);
+ await openLearning(page);await expect(page.locator('.challenge-card').filter({hasText:'First Steps'})).toContainText('Previously earned');await expect(page.getByRole('button',{name:'I Did It',exact:false})).toHaveCount(0);
  await page.getByRole('button',{name:/LEVEL 2 Builder/}).click();await expect(page.locator('.challenge-card')).toHaveCount(5);
  await page.getByRole('button',{name:/LEVEL 3 Inventor/}).click();await page.locator('.challenge-card').filter({hasText:'Gentle Claw Pulses'}).click();await expect(page.getByRole('button',{name:'Start Programming'})).toBeDisabled();await expect(page.locator('.challenge-detail')).toContainText('Configure M1');
  await page.getByText('Legacy collection · 1 past missions').click();await expect(page.locator('.mission-legacy')).toContainText('Square Dance');
- await page.getByRole('button',{name:/🏆/}).click();await expect(page.locator('.achievement-legacy')).toContainText('Night Owl');await expect(page.locator('.achievement-legacy')).toContainText('unknown_old_badge');await expect(page.getByRole('button',{name:/Reset/})).toHaveCount(0);await page.screenshot({path:test.info().outputPath('achievements-desktop.png')});
+ await openLearning(page, 'Achievements');await expect(page.locator('.achievement-legacy')).toContainText('Night Owl');await expect(page.locator('.achievement-legacy')).toContainText('unknown_old_badge');await expect(page.getByRole('button',{name:/Reset/})).toHaveCount(0);await page.screenshot({path:test.info().outputPath('achievements-desktop.png')});
 });

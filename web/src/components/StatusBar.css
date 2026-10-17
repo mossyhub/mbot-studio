@@ -25,12 +25,12 @@
 
 .status-connected {
   background: #ecfdf5;
-  color: #059669;
+  color: #006c67;
 }
 
 .status-waiting {
   background: #fffbeb;
-  color: #d97706;
+  color: #85560a;
 }
 
 .status-disconnected {
@@ -40,7 +40,7 @@
 
 .status-hint {
   font-style: italic;
-  color: #d97706;
+  color: #85560a;
   font-size: 10px;
 }
 
@@ -61,4 +61,9 @@
 
 .status-sound-btn:hover {
   background: #fee2e2;
+}
+
+@media (max-width: 820px) {
+  .status-bar { flex-wrap: wrap; gap: 6px; padding: 6px 12px; }
+  .status-left, .status-right { flex-wrap: wrap; gap: 6px 12px; }
 }

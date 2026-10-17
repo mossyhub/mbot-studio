@@ -1,14 +1,20 @@
 .sound-screen-controls {
-  padding: 12px;
-  border-top: 1px solid var(--color-border);
+  padding: 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+  gap: 16px 20px;
 }
-.sound-screen-controls h3 { font-size: 13px; margin-bottom: 6px; }
-.sound-screen-controls .av-help { font-size: 11px; color: var(--color-text-light); margin: 6px 0; line-height: 1.4; }
-.sound-screen-controls fieldset { border: 1px solid var(--color-border); border-radius: 6px; margin: 10px 0; padding: 8px; min-width: 0; }
-.sound-screen-controls legend { font-size: 12px; font-weight: 600; padding: 0 4px; }
-.sound-screen-controls label { display: block; font-size: 11px; flex: 1; min-width: 0; }
-.sound-screen-controls input, .sound-screen-controls textarea, .sound-screen-controls select { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px; margin-top: 4px; }
+.sound-screen-controls h3 { grid-column: 1 / -1; font-size: 20px; margin: 0; }
+.sound-screen-controls .av-help { font-size: 13px; color: var(--color-text-light, #526575); margin: 6px 0; line-height: 1.5; }
+.sound-screen-controls > .av-help { grid-column: 1 / -1; margin: 0; }
+.sound-screen-controls fieldset { border: 0; border-top: 1px solid var(--color-border, #d7e0e6); border-radius: 0; margin: 0; padding: 12px 0; min-width: 0; }
+.sound-screen-controls legend { font-size: 15px; font-weight: 650; padding: 0 8px 0 0; }
+.sound-screen-controls label { display: block; font-size: 13px; flex: 1 1 120px; min-width: 0; }
+.sound-screen-controls input, .sound-screen-controls textarea, .sound-screen-controls select { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; font-size: 14px; padding: 10px; margin-top: 6px; }
 .sound-screen-controls textarea { resize: vertical; }
-.sound-screen-controls .av-row { display: flex; align-items: end; gap: 8px; margin-top: 6px; }
-.sound-screen-controls button { white-space: nowrap; }
-.sound-screen-controls fieldset:disabled { opacity: 0.6; }
+.sound-screen-controls .av-row { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-top: 8px; }
+.sound-screen-controls button { white-space: normal; min-height: 44px; margin-top: 8px; justify-self: start; align-self: start; }
+.sound-screen-controls .av-row select { flex: 1 1 100px; }
+.sound-screen-controls fieldset:disabled { opacity: .65; }
+.sound-screen-controls :focus-visible { outline: 3px solid #2e56c5; outline-offset: 3px; }
+@media (max-width: 700px) { .sound-screen-controls { padding: 16px; } }

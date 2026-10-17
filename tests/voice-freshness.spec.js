@@ -1,5 +1,6 @@
 import {test, expect} from '@playwright/test';
 import {build} from 'esbuild';
+import { openBlocks } from './guided-navigation.js';
 import {fileURLToPath} from 'node:url';
 
 // Adapted from the independent review's real-App and boot-change reproductions.
@@ -65,7 +66,7 @@ async function mount(page,{kind='voice',list=[asset],holdStatus=false}={}) {
   await page.addStyleTag({content:bundles[kind].css+'*{animation:none!important;transition:none!important}'});
   await page.addScriptTag({content:bundles[kind].js});
   await expect(page.locator(kind==='app'?'.scratch-editor':'.voice-recording')).toBeVisible();
-  if(kind==='app')await page.getByTitle('Sound',{exact:true}).click();
+  if(kind==='app'){await openBlocks(page);await page.getByTitle('Sound',{exact:true}).click();}
   return {unexpected};
 }
 const setRule=(page,url,rule)=>page.evaluate(({url,rule})=>{rules[url]=rule;},{url,rule});

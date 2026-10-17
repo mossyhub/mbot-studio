@@ -17,6 +17,8 @@ import { playProgramSent, playSuccess, playError, playStop, playConnect, playDis
 import { tryEarnBadge, getProgress, setAchievementsProfile } from './services/achievements';
 import './App.css';
 import RobotDiagnostics from './components/RobotDiagnostics.jsx';
+import StudioIcon from './components/StudioIcon.jsx';
+import './GuidedTheme.css';
 
 const TABS = {
   PROGRAM: 'program',
@@ -122,6 +124,25 @@ export default function App() {
   }, [blocks]);
   const [showCode, setShowCode] = useState(false);
   const [showHelper, setShowHelper] = useState(false);
+  const helperGeneration = useRef(0);
+  const [helperEpoch, setHelperEpoch] = useState(0);
+  const helperOpener = useRef(null);
+  const helperCloseButton = useRef(null);
+  const openHelper = event => {
+    helperOpener.current = event.currentTarget;
+    setShowHelper(true);
+  };
+  const closeHelper = useCallback(() => {
+    setShowHelper(false);
+    helperOpener.current?.focus();
+  }, []);
+  useEffect(() => {
+    if (!showHelper) return;
+    helperCloseButton.current?.focus();
+    const escape = event => { if (event.key === 'Escape') closeHelper(); };
+    window.addEventListener('keydown', escape);
+    return () => window.removeEventListener('keydown', escape);
+  }, [showHelper, closeHelper]);
   const [programCheck, setProgramCheck] = useState(null);
   const [showTemplates, setShowTemplates] = useState(false);
   const [robotConfig, setRobotConfig] = useState(null);
@@ -135,6 +156,13 @@ export default function App() {
   const currentProfileRef = useRef(currentProfileId);
   currentProfileRef.current = currentProfileId;
   const [activeMission, setActiveMission] = useState(null);
+  const [guidanceOpen, setGuidanceOpen] = useState(() => window.matchMedia('(min-width: 601px)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(min-width: 601px)');
+    const update = () => setGuidanceOpen(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
   const [progressVersion, setProgressVersion] = useState(0);
   const [messages, setMessages] = useState([DEFAULT_WELCOME]);
   const [blockHistory, setBlockHistory] = useState([[]]);
@@ -529,6 +557,13 @@ export default function App() {
   }, [blocks, robotStatus.application, programBlocked, programEncoding, currentProfileId, robotConfig]);
 
   const handleStop = useCallback(async () => {
+    // Abandon any pending helper continuation and draft. Remount resets its
+    // pending UI; epoch-bound callbacks cannot apply a late generated response.
+    helperGeneration.current++;
+    setHelperEpoch(helperGeneration.current);
+    setPendingSuggestion(null);
+    // Children cancel local holds/queues synchronously, without calling us back.
+    window.dispatchEvent(new CustomEvent('mbot-global-stop'));
     // An already received HTTP request may still run server-side: always send
     // emergency Stop as well (including during recording asset synchronization).
     const run = activeRun.current;
@@ -717,7 +752,7 @@ export default function App() {
   const achievementProgress = getProgress(currentProfileId);
 
   return (
-    <div className="app">
+    <div className="app guided-app">
       <Header
         activeTab={activeTab}
         onTabChange={(tab) => { playClick(); setActiveTab(tab); }}
@@ -738,16 +773,39 @@ export default function App() {
         achievementTotal={achievementProgress.total}
         soundMuted={soundMuted}
         onSoundToggle={handleSoundToggle}
+        onStop={handleStop}
       />
+
+      <div className="test-workspace-banner">Test workspace — shares robot and settings with main Studio</div>
 
       <div className="app-content">
         {activeTab === TABS.PROGRAM && (
           <div className="program-layout">
-            <div className="panel chat-panel-container" hidden={!showHelper}>
+            <aside className="mission-rail" aria-label="Mission checklist">
+              {activeMission ? <MissionStrip challenge={activeMission} blocks={blocks} currentProfileId={currentProfileId} robotConfig={robotConfig}
+                onClose={() => setActiveMission(null)} onViewChallenges={() => setActiveTab(TABS.CHALLENGES)} /> : (
+                <div className="mission-empty">
+                  <h2><StudioIcon name="flag" /> Your mission</h2>
+                  <p>Build freely, or choose a small programming goal to work toward.</p>
+                  <button className="btn-primary" onClick={() => setActiveTab(TABS.CHALLENGES)}>Choose a mission</button>
+
+                </div>
+              )}
+              <details className="editing-hints" open={guidanceOpen} onToggle={event => setGuidanceOpen(event.currentTarget.open)}>
+                <summary>A little guidance</summary>
+                <p>Add blocks, then connect them under “when program starts”. Select a value to edit it.</p>
+                <p>Check the program before running. Keep space around the robot clear.</p>
+                <p className="mission-credit-note">Mission credit needs a matching, device-completed program. Editing alone does not earn it.</p>
+                <button className="mission-link" onClick={openHelper}><StudioIcon name="helper" /> Open Helper</button>
+              </details>
+            </aside>
+            <div className="panel chat-panel-container" hidden={!showHelper} role="complementary" aria-label="AI helper">
+              <div className="helper-panel-heading"><h2>AI helper</h2><button ref={helperCloseButton} className="btn-secondary" aria-label="Close helper" onClick={closeHelper}><StudioIcon name="close" /> Close</button></div>
               <ChatPanel
+                key={helperEpoch}
                 messages={messages}
-                setMessages={setMessages}
-                onAIResponse={handleAIResponse}
+                setMessages={next => { if (helperEpoch === helperGeneration.current) setMessages(next); }}
+                onAIResponse={response => { if (helperEpoch === helperGeneration.current) handleAIResponse(response); }}
                 currentBlocks={blocks}
               />
             </div>
@@ -755,19 +813,19 @@ export default function App() {
             <div className="panel blocks-panel-container">
               <div className="panel-header">
                 <div>
-                  <h2>🧩 Block Program</h2>
+                  <h2>Block Program</h2>
                   <div className="panel-subtitle">Build a sequence, check it, then run it on your robot.</div>
                 </div>
                 <div className="panel-actions">
                   <RobotDiagnostics onStop={handleStop} />
-                  <button className="btn-secondary btn-small" aria-label="AI helper" aria-expanded={showHelper} onClick={() => setShowHelper(value => !value)}>💬 AI helper</button>
+                  <button className="btn-secondary btn-small" aria-label="AI helper" aria-expanded={showHelper} onClick={showHelper ? closeHelper : openHelper}><StudioIcon name="helper" /> Helper</button>
                   <button
                     className="btn-secondary btn-small"
                     onClick={handleUndo}
                     disabled={historyIndex <= 0}
                     title="Undo"
                   >
-                    ↶ Undo
+                    <StudioIcon name="undo" /> Undo
                   </button>
                   <button
                     className="btn-secondary btn-small"
@@ -775,40 +833,33 @@ export default function App() {
                     disabled={historyIndex >= blockHistory.length - 1}
                     title="Redo"
                   >
-                    ↷ Redo
+                    <StudioIcon name="redo" /> Redo
                   </button>
                   <button
                     className="btn-secondary btn-small"
                     onClick={() => setShowTemplates(!showTemplates)}
                     title="Program templates"
                   >
-                    📚 Templates
+                    <StudioIcon name="book" /> Templates
                   </button>
                   <button
                     className="btn-secondary"
                     onClick={() => setShowCode(!showCode)}
                   >
-                    {showCode ? '🧩 Show Blocks' : '🐍 Show Python'}
+                    <StudioIcon name={showCode ? 'program' : 'code'} /> {showCode ? 'Show Blocks' : 'Show Python'}
                   </button>
-                  <button
-                    className="btn-danger"
-                    onClick={handleStop}
-                    title="Emergency Stop"
-                  >
-                    🛑 STOP
-                  </button>
+                  <button className="btn-danger" onClick={handleStop} title="Stop program" aria-label="🛑 STOP"><StudioIcon name="stop" /> STOP</button>
                   <button
                     className="btn-primary"
                     onClick={handleRunProgram}
                     disabled={blocks.length === 0 || programLifecycle?.pending || programBlocked}
                   >
-                    ▶️ Run Program
+                    <StudioIcon name="play" /> Run Program
                   </button>
                 </div>
               </div>
 
-              <MissionStrip challenge={activeMission} blocks={blocks} currentProfileId={currentProfileId} robotConfig={robotConfig}
-                onClose={() => setActiveMission(null)} onViewChallenges={() => setActiveTab(TABS.CHALLENGES)} />
+
               <div className={`program-readiness ${programBlocked || disconnectedCount ? 'needs-attention' : ''}`} role="status" data-testid="program-readiness">
                 {disconnectedCount > 0 && <span>{disconnectedCount} block{disconnectedCount === 1 ? '' : 's'} not connected — won't run. Use “Connect to program” or snap them under “when program starts”. </span>}
                 {!blocks.length ? (disconnectedCount ? 'No blocks connected to start.' : 'Start here: add a block from the library.') : checkRuntime ? (
@@ -854,6 +905,7 @@ export default function App() {
                 ) : <CodePreview code={pythonCode} blocks={blocks} />
               ) : (
                 <BlocklyEditor
+                  guidedMode={true}
                   blocks={blocks}
                   onBlocksChange={handleBlocksChange}
                   onDisconnectedBlocksChange={setDisconnectedCount}
@@ -895,6 +947,7 @@ export default function App() {
 
         {activeTab === TABS.CONFIG && (
           <RobotConfig
+            onStop={handleStop}
             config={robotConfig}
             onConfigUpdate={handleConfigUpdate}
             robotConnected={robotStatus.connected}

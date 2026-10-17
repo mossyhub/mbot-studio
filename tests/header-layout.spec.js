@@ -90,7 +90,7 @@ for (const width of [820, 1280]) {
     await expectHeaderFits(page);
 
     const header = page.locator('header.header');
-    const names = ['🧩 Program', '🎮 Live Control', '🎯 Challenges', '🏆 0', '⚙️ Setup'];
+    const names = ['Program', 'Live Control', 'Learn', 'Robot'];
     for (const name of names) {
       const button = header.getByRole('button', { name, exact: true });
       await button.click();
@@ -117,17 +117,30 @@ for (const width of [820, 1280]) {
       await expect(header.locator(menu)).toBeInViewport({ ratio: 1 });
       await header.getByTitle(title, { exact: true }).click();
     }
-    await header.getByRole('button', { name: '🎯 Challenges', exact: true }).click();
+    // Section navigation is deliberately a separate row; exercise it by keyboard
+    // as well as checking every full rectangle and center-point hit target.
+    await header.getByRole('button', { name: 'Learn', exact: true }).click();
+    const learning = header.getByRole('navigation', { name: 'Learning content' });
+    await learning.getByRole('button', { name: /^Achievements/ }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.achievements-panel')).toBeVisible();
+    await expectHeaderFits(page);
+    await learning.getByRole('button', { name: 'Challenges', exact: true }).focus();
+    await page.keyboard.press('Enter');
     await expect(page.locator('.challenge-card').first()).toBeVisible();
     await expectHeaderFits(page);
-    if (width === 1280) {
-      const centers = await header.evaluate(element => [...element.children].map(child => {
-        const box = child.getBoundingClientRect();
-        return box.y + box.height / 2;
-      }));
-      expect(Math.max(...centers) - Math.min(...centers), 'desktop keeps its existing single-row layout').toBeLessThan(2);
-    }
-    await expect(header.getByRole('button', { name: '🎯 Challenges', exact: true })).toHaveClass(/tab-active/);
+    const rows = await header.evaluate(element => {
+      const box = selector => { const r = element.querySelector(selector).getBoundingClientRect(); return {top:r.top,bottom:r.bottom,center:r.y+r.height/2}; };
+      return {brand:box('.header-brand'),nav:box('.header-tabs'),safety:box('.header-right'),project:box('.project-controls'),profile:box('.profile-controls'),section:box('.section-tabs')};
+    });
+    expect(Math.abs(rows.brand.center - rows.safety.center), 'brand and emergency controls share the top row').toBeLessThan(2);
+    expect(Math.abs(rows.project.center - rows.profile.center), 'project and profile share their own row').toBeLessThan(2);
+    expect(rows.project.top).toBeGreaterThanOrEqual(rows.nav.bottom);
+    expect(rows.section.top).toBeGreaterThanOrEqual(Math.max(rows.project.bottom, rows.profile.bottom));
+    if (width === 1280) expect(Math.abs(rows.nav.center - rows.brand.center), 'desktop main navigation shares the top row').toBeLessThan(2);
+    else expect(rows.nav.top, 'tablet main navigation has its own row').toBeGreaterThanOrEqual(rows.brand.bottom);
+    await expect(header.getByRole('button', { name: 'Learn', exact: true })).toHaveClass(/tab-active/);
+    await expect(learning.getByRole('button', { name: 'Challenges', exact: true })).toHaveClass(/tab-active/);
     await page.screenshot({ path: testInfo.outputPath(`header-${width}-challenges.png`), animations: 'disabled' });
     expect(fixture.unexpected, 'no unhandled HTTP or physical commands').toEqual([]);
     // Setup probes local mLink discovery; these sockets are intercepted too.

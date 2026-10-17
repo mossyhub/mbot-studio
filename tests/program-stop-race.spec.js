@@ -11,7 +11,7 @@ test.beforeAll(async () => {
 });
 const blocks = [{type:'move_forward',duration:2,speed:20,_id:'move'}];
 const runButton = page => page.getByRole('button',{name:'Run Program'});
-const stopButton = page => page.getByRole('button',{name:'🛑 STOP',exact:true});
+const stopButton = page => page.getByRole('button',{name:'Emergency Stop',exact:true});
 const lifecycle = page => page.getByTestId('program-lifecycle');
 async function mount(page, {stopFailure = false, holdHttp = false, holdBody = false} = {}) {
   const posts = [], stops = [], unexpected = [];

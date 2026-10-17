@@ -38,7 +38,9 @@ async function setup(page, status = ready, origin = 'http://127.0.0.1:15190/') {
   });
   await page.routeWebSocket('**/*', socket => sockets.push(socket));
   await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
-  await page.clock.pauseAt(new Date('2026-01-01T00:00:00Z'));
+  // Pause at a future instant before mounting; installation-to-pause latency
+  // must not turn the same timestamp into a past time on a busy CI worker.
+  await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
   await page.goto(origin);
   await page.evaluate(() => {
     window.sent = []; window.ack = true; window.callbacks = []; window.sockets = [];
@@ -66,6 +68,12 @@ async function setup(page, status = ready, origin = 'http://127.0.0.1:15190/') {
   await expect.poll(() => page.locator('.direction-pad').innerText()).toContain('Quick Controls');
   // Wait for bootstrap separately from socket readiness.
   await expect(page.locator('.direction-pad')).toContainText(status.capabilities?.includes('drive_hold') ? 'Hold' : 'Firmware update required');
+  // Guided groups are collapsed by default. Open the controls this safety
+  // fixture intentionally exercises, including the replay input used for blur.
+  await page.getByText('Advanced port controls', { exact: true }).click();
+  await page.getByText('Activity log & replay', { exact: true }).click();
+  // The raw mouse-coordinate cases below deliberately do not auto-scroll.
+  await page.locator('.dpad').scrollIntoViewIfNeeded();
   return {
     sockets, requests,
     messages: () => page.evaluate(() => window.sent),

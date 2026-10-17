@@ -21,7 +21,15 @@ mkdirSync(out,{recursive:true});
 const browser=providedBrowser || await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,args:['--no-sandbox','--disable-dev-shm-usage']});
 const results=[],allNetwork=[];
 function validate(blocks, runtime=status){const s=new MqttService();s.robotStatusMetadata=runtime;s.robotLastSeen=s.robotStatusLastSeen=Date.now();assert.equal(s.client,null);try{const lowered=lowerProgram(blocks,{validateBlock:b=>s.validateCooperativeProgram([b])});s.validateCooperativeProgram(lowered.program);return {ok:true,program:lowered.program};}catch(e){return {ok:false,error:e.message,path:e.path,sourceId:e.sourceId};}}
-async function mount(page,blocks=[],runtime=status,cfg=config,mode='editor'){await page.evaluate(a=>window.mount(...a),[blocks,runtime,cfg,mode]);await page.waitForTimeout(40);}
+async function mount(page,blocks=[],runtime=status,cfg=config,mode='editor'){
+  await page.evaluate(a=>window.mount(...a),[blocks,runtime,cfg,mode]);await page.waitForTimeout(40);
+  if(mode==='config') {
+    // Setup keeps configured actions behind each hardware disclosure.
+    for(const card of await page.locator('details.addition-card').all()) {
+      if(await card.getAttribute('open')===null) await card.locator(':scope > summary').click();
+    }
+  }
+}
 async function saved(page){return page.evaluate(()=>window.saved);}
 async function add(page,name){await page.getByRole('searchbox',{name:'Search blocks'}).fill(name);await page.getByRole('button',{name:'Add '+name,exact:true}).click();return saved(page);}
 async function dragAction(page,name){await page.getByRole('button',{name:/My Robot/}).click();const dt=await page.evaluateHandle(()=>new DataTransfer());await page.locator('.se-palette-list [draggable="true"]').filter({hasText:name}).dispatchEvent('dragstart',{dataTransfer:dt});await page.locator('.se-script.main > [data-arr-slot]').last().dispatchEvent('drop',{dataTransfer:dt});await dt.dispose();return saved(page);}

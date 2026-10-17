@@ -16,6 +16,7 @@ async function setup(page, response = { sent: true, run_id: 'live-run' }) {
   } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Live Control' }).click();
+  await page.getByText('Activity log & replay', { exact: true }).click();
   await expect(page.locator('.live-log')).toContainText('Connected to server');
   return {
     emit: msg => socket.send(JSON.stringify(msg)),
@@ -29,7 +30,7 @@ async function setup(page, response = { sent: true, run_id: 'live-run' }) {
       return data;
     },
     savedEvents: async () => {
-      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await page.locator('.live-log-panel').getByRole('button', { name: 'Save', exact: true }).click();
       return page.evaluate(() => JSON.parse(localStorage.getItem('mbot-studio-missions:profile_default'))[0].events);
     },
   };

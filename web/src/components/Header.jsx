@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './Header.css';
+import StudioIcon from './StudioIcon.jsx';
 
 export default function Header({
   activeTab, onTabChange, robotConnected, robotStatus,
   currentModel,
   projectName, onProjectSave, onProjectLoad, onProjectNew, savedProjects,
   profiles, currentProfileId, onProfileSwitch, onProfileCreate, onProfileRename,
-  achievementCount, achievementTotal, soundMuted, onSoundToggle,
+  achievementCount, achievementTotal, soundMuted, onSoundToggle, onStop,
 }) {
   const [showProjectMenu, setShowProjectMenu] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -82,7 +83,7 @@ export default function Header({
             setShowDebugTab(prev => !prev);
             debugClickCount.current = 0;
           }
-        }}>🤖</span>
+        }}><StudioIcon name="robot" /></span>
         <h1 className="header-title">mBot Studio</h1>
       </div>
 
@@ -101,19 +102,19 @@ export default function Header({
           />
         ) : (
           <button className="project-name-btn" onClick={() => setEditingName(true)} title="Click to rename">
-            📁 {projectName || 'Untitled Project'}
+            {projectName || 'Untitled Project'}
           </button>
         )}
 
         <div className="project-actions">
           <button className="project-action-btn" onClick={() => onProjectSave()} title="Save project">
-            💾
+            <StudioIcon name="save" /><span>Save</span>
           </button>
           <button className="project-action-btn" onClick={() => setShowProjectMenu(!showProjectMenu)} title="Project menu">
-            📂
+            <StudioIcon name="folder" /><span>Projects</span>
           </button>
           <button className="project-action-btn" onClick={onProjectNew} title="New project">
-            ✨
+            <StudioIcon name="plus" /><span>New</span>
           </button>
         </div>
 
@@ -134,7 +135,7 @@ export default function Header({
                 </button>
               ))
             ) : (
-              <div className="project-dropdown-empty">No saved projects yet. Click 💾 to save!</div>
+              <div className="project-dropdown-empty">No saved projects yet. Choose Save to keep this project.</div>
             )}
           </div>
         )}
@@ -143,7 +144,7 @@ export default function Header({
       {/* Child Profile Switcher */}
       <div className="profile-controls" ref={profileRef}>
         <button className="profile-btn" onClick={() => setShowProfileMenu(!showProfileMenu)} title="Switch child profile">
-          👧 {activeProfile?.name || 'Kid 1'}
+          <StudioIcon name="person" />{activeProfile?.name || 'Kid 1'}
         </button>
 
         {showProfileMenu && (
@@ -168,7 +169,7 @@ export default function Header({
                 placeholder="Rename current profile"
                 maxLength={24}
               />
-              <button className="profile-create-btn" onClick={handleRenameProfile} title="Rename current profile">✏️</button>
+              <button className="profile-create-btn" onClick={handleRenameProfile} title="Rename current profile"><StudioIcon name="edit" /></button>
             </div>
 
             <div className="profile-create-row">
@@ -180,49 +181,44 @@ export default function Header({
                 placeholder="New child name"
                 maxLength={24}
               />
-              <button className="profile-create-btn" onClick={handleCreateProfile} title="Add child profile">➕</button>
+              <button className="profile-create-btn" onClick={handleCreateProfile} title="Add child profile"><StudioIcon name="plus" /></button>
             </div>
           </div>
         )}
       </div>
 
-      <nav className="header-tabs">
+      <nav className="header-tabs" aria-label="Main">
         <button
           className={`tab ${activeTab === 'program' ? 'tab-active' : ''}`}
           onClick={() => onTabChange('program')}
         >
-          🧩 Program
+          <StudioIcon name="program" /> Program
         </button>
         <button
           className={`tab ${activeTab === 'live' ? 'tab-active' : ''}`}
           onClick={() => onTabChange('live')}
         >
-          🎮 Live Control
+          <StudioIcon name="control" /> Live Control
         </button>
         <button
-          className={`tab ${activeTab === 'challenges' ? 'tab-active' : ''}`}
+          className={`tab ${['challenges', 'achievements'].includes(activeTab) ? 'tab-active' : ''}`}
           onClick={() => onTabChange('challenges')}
         >
-          🎯 Challenges
+          <StudioIcon name="book" /> Learn
         </button>
+
         <button
-          className={`tab ${activeTab === 'achievements' ? 'tab-active' : ''}`}
-          onClick={() => onTabChange('achievements')}
-        >
-          🏆 <span className="achievement-badge-count">{achievementCount || 0}</span>
-        </button>
-        <button
-          className={`tab ${activeTab === 'config' ? 'tab-active' : ''}`}
+          className={`tab ${['config', 'debug'].includes(activeTab) ? 'tab-active' : ''}`}
           onClick={() => onTabChange('config')}
         >
-          ⚙️ Setup
+          <StudioIcon name="robot" /> Robot
         </button>
         {showDebugTab && (
           <button
             className={`tab ${activeTab === 'debug' ? 'tab-active' : ''}`}
             onClick={() => onTabChange('debug')}
           >
-            🔧 Debug
+            Debug
           </button>
         )}
       </nav>
@@ -233,7 +229,7 @@ export default function Header({
           onClick={onSoundToggle}
           title={soundMuted ? 'Unmute sounds' : 'Mute sounds'}
         >
-          {soundMuted ? '🔇' : '🔊'}
+          <StudioIcon name={soundMuted ? 'muted' : 'sound'} />
         </button>
 
         <div className="header-status">
@@ -246,7 +242,16 @@ export default function Header({
              robotStatus?.mqttConnected ? 'Waiting for Robot' : 'Robot Offline'}
           </span>
         </div>
+        <button className="btn-danger global-stop" data-testid="global-stop" onClick={onStop} title="Emergency Stop" aria-label="Emergency Stop"><StudioIcon name="stop" /> STOP</button>
       </div>
+      {['challenges', 'achievements'].includes(activeTab) && <nav className="section-tabs" aria-label="Learning content">
+        <button className={`tab ${activeTab === 'challenges' ? 'tab-active' : ''}`} onClick={() => onTabChange('challenges')}>Challenges</button>
+        <button className={`tab ${activeTab === 'achievements' ? 'tab-active' : ''}`} onClick={() => onTabChange('achievements')}>Achievements <span className="achievement-badge-count">{achievementCount || 0}</span></button>
+      </nav>}
+      {['config', 'debug'].includes(activeTab) && <nav className="section-tabs" aria-label="Robot tools">
+        <button className={`tab ${activeTab === 'config' ? 'tab-active' : ''}`} onClick={() => onTabChange('config')}>Setup</button>
+        <button className={`tab ${activeTab === 'debug' ? 'tab-active' : ''}`} onClick={() => onTabChange('debug')}>Advanced Debug</button>
+      </nav>}
     </header>
   );
 }

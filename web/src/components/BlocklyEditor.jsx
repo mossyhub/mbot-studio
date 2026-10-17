@@ -1,8 +1,10 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import VoiceRecording from './VoiceRecording.jsx';
 import {listRecordings} from '../services/voice-recording.js';
 const RecordingRegistry = createContext([]);
 import './BlocklyEditor.css';
+import { GuidedGeometry, GuidedShape, GuidedFoot } from './guided-block-geometry.jsx';
 import { AV_PROGRAM_BUILD, getProgramPalette, getProgramBlockDefinition, getProgramBlockCapability } from '../services/program-capabilities';
 
 // Exact static subset in server/src/services/program-lowering.js, not the
@@ -567,7 +569,36 @@ function descendantIds(block) {
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDisconnectedBlocksChange, robotConfig, robotStatus }) {
+export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDisconnectedBlocksChange, robotConfig, robotStatus, guidedMode = false }) {
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryGeneration, setLibraryGeneration] = useState(0);
+  const [pendingReporter, setPendingReporter] = useState(null);
+  const [reporterTarget, setReporterTarget] = useState('');
+  const reporterTargetRef = useRef(null);
+  useEffect(() => { if (pendingReporter) reporterTargetRef.current?.focus(); }, [pendingReporter]);
+  const addBlocksRef = useRef(null);
+  const closeLibraryRef = useRef(null);
+  const closeLibrary = () => { setLibraryOpen(false); setPendingReporter(null); addBlocksRef.current?.focus(); };
+  useEffect(() => {
+    if (!guidedMode) return;
+    // Unmount before late permission/HTTP continuations can run. The existing
+    // VoiceRecording cleanup aborts requests, fences results and stops tracks.
+    // Stop must not remount a recorder until another intentional library open.
+    const stop = () => flushSync(() => {
+      setLibraryOpen(false);
+      setPendingReporter(null);
+      setLibraryGeneration(value => value + 1);
+    });
+    window.addEventListener('mbot-global-stop', stop);
+    return () => window.removeEventListener('mbot-global-stop', stop);
+  }, [guidedMode]);
+  useEffect(() => {
+    if (!guidedMode || !libraryOpen) return;
+    closeLibraryRef.current?.focus();
+    const escape = e => { if (e.key === 'Escape') closeLibrary(); };
+    window.addEventListener('keydown', escape);
+    return () => window.removeEventListener('keydown', escape);
+  }, [guidedMode, libraryOpen]);
   const [recordings, setRecordings] = useState([]);
   const registryAbort = useRef(null);
   const updateRecordings = React.useCallback(rows => {
@@ -777,17 +808,21 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
     };
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('text/plain', type);
+    // Close only after the browser has captured the palette drag image. The
+    // drawer must not cover sockets on narrow screens during an active drag.
+    if (guidedMode) requestAnimationFrame(() => setLibraryOpen(false));
     setIsDragging(true);
     setDraggingExisting(false);
   };
 
+  const newCustomBlock = block => hydrateOne({ ...block, _id: genId() });
   const startDragCustomBlock = (e, block) => {
     const def = BLOCK_DEFS[block.type];
     const sourceEl = e.currentTarget;
     const rect = sourceEl?.getBoundingClientRect();
     dragRef.current = {
       kind: 'new',
-      block: hydrateOne({ ...block, _id: genId() }),
+      block: newCustomBlock(block),
       dragShape: def?.shape || 'stack',
       measuredWidth: rect?.width || 0,
       measuredHeight: rect?.height || 0,
@@ -795,6 +830,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
     };
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('text/plain', block.type);
+    if (guidedMode) requestAnimationFrame(() => setLibraryOpen(false));
     setIsDragging(true);
     setDraggingExisting(false);
   };
@@ -848,7 +884,10 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
     e.stopPropagation();
   };
 
+  const touchDragRef = useRef(null);
   const endDrag = () => {
+    touchDragRef.current?.();
+    touchDragRef.current = null;
     dragRef.current?.restoreVisual?.();
     dragRef.current = null;
     setDropHint(null);
@@ -856,12 +895,9 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
     setIsDragging(false);
     clearSnapTarget();
   };
-  useEffect(() => () => dragRef.current?.restoreVisual?.(), []);
+  useEffect(() => () => { touchDragRef.current?.(); dragRef.current?.restoreVisual?.(); }, []);
 
-  const canDropReporter = (parentId, key, slotKind) => {
-    const drag = dragRef.current;
-    if (!drag) return false;
-    const block = drag.kind === 'new' ? drag.block : findAnywhere(drag.sourceId)?.loc.block;
+  const canPlaceReporter = (block, parentId, key) => {
     if (!isReporter(block)) return false;
     if (descendantIds(block).has(parentId)) return false;
     const parent = findAnywhere(parentId)?.loc.block;
@@ -871,6 +907,20 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
     if (robotStatus?.build === AV_PROGRAM_BUILD && !getProgramBlockCapability(block.type, robotStatus, { loweredTypes: LOWERED_TYPES }).supported) return false;
     // Never silently replace an occupied expression subtree (including wrappers).
     return !isReporter(blockValues(parent)[key]);
+  };
+  const canDropReporter = (parentId, key) => {
+    const drag = dragRef.current;
+    const block = drag?.kind === 'new' ? drag.block : drag && findAnywhere(drag.sourceId)?.loc.block;
+    return canPlaceReporter(block, parentId, key);
+  };
+  const insertNewReporter = (block, parentId, key) => {
+    // Revalidate against the current tree, not the chooser's earlier snapshot.
+    if (!canPlaceReporter(block, parentId, key)) return false;
+    const parentLoc = findAnywhere(parentId);
+    if (parentLoc.source === 'main') commit(setSlot(internal, parentId, key, block));
+    else setFloating(arr => arr.map((script, index) => index === parentLoc.floatingIndex
+      ? {...script, blocks:setSlot(script.blocks, parentId, key, block)} : script));
+    return true;
   };
 
   // ── Snap detection (Phase 2) ──────────────────────────────────────────
@@ -893,11 +943,18 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
       let bestDist = SNAP_TOLERANCE;
 
       if (!isReporterDrag) {
-        // Stack drag: nearest array slot vertically.
-        const slots = document.querySelectorAll('.se-canvas [data-arr-slot]');
+        // Guided moves match physical connectors, not the label/cursor or an
+        // arbitrary wide row. Keep legacy palette hit testing unchanged.
+        const connector = guidedMode && drag.sourceEl ? drag.sourceEl.getBoundingClientRect() : null;
+        const slots = canvasRef.current?.querySelectorAll('[data-arr-slot]') || [];
         slots.forEach((s) => {
           if (drag.sourceEl?.contains(s)) return;
           const r = s.getBoundingClientRect();
+          if (connector) {
+            const distance = Math.hypot(connector.left - r.left, connector.top - r.top);
+            if (distance <= bestDist) { best = { kind: 'arr', el: s }; bestDist = distance; }
+            return;
+          }
           // Generous horizontal hit area, tight vertical
           if (cx < r.left - 40 || cx > r.right + 80) return;
           const slotY = (r.top + r.bottom) / 2;
@@ -953,12 +1010,12 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
       }
     };
 
-    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragover', onDragOver, guidedMode);
     return () => {
-      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragover', onDragOver, guidedMode);
       clearSnapTarget();
     };
-  }, [isDragging]);
+  }, [isDragging, guidedMode, zoom]);
 
   // ── Drop handlers ──────────────────────────────────────────────────────
   // or 'float:N' (floating-script index). Default: 'main' for backward compat.
@@ -1061,16 +1118,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
 
 
     if (drag.kind === 'new') {
-      if (parentLoc.source === 'main') {
-        commit(setSlot(internal, parentId, key, block));
-      } else {
-        const fi = parentLoc.floatingIndex;
-        setFloating((arr) => {
-          const out = arr.slice();
-          out[fi] = { ...out[fi], blocks: setSlot(out[fi].blocks, parentId, key, block) };
-          return out;
-        });
-      }
+      insertNewReporter(block, parentId, key);
       return;
     }
 
@@ -1209,6 +1257,52 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
       return true;
     }
     return false;
+  };
+
+  // Touch/pen gesture adapter only. Mouse keeps native HTML5 DnD; both routes
+  // use the existing identity, compatibility, snap and transactional AST ops.
+  const onBlockTouchDown = (e, id) => {
+    if (!guidedMode || e.pointerType === 'mouse' || !e.isPrimary
+        || e.target.closest('input, select, textarea, button, [contenteditable="true"]')) return;
+    e.stopPropagation();
+    const source = e.currentTarget, pointerId = e.pointerId;
+    const x = e.clientX, y = e.clientY;
+    let active = false;
+    const cancel = () => endDrag();
+    const key = event => { if (event.key === 'Escape') cancel(); };
+    const move = event => {
+      if (event.pointerId !== pointerId) return;
+      if (!active) {
+        if (Math.hypot(event.clientX - x, event.clientY - y) < 6) return;
+        active = true;
+        startDragExisting({ currentTarget: source, clientX: x, clientY: y,
+          dataTransfer: { setData() {}, setDragImage() {} }, stopPropagation() {} }, id);
+      }
+      event.preventDefault();
+      // Reuse the original-node follower and snap listeners without a clone.
+      window.dispatchEvent(new DragEvent('dragover', { clientX: event.clientX, clientY: event.clientY }));
+    };
+    const up = event => {
+      if (event.pointerId !== pointerId) return;
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      if (active && target && canvasRef.current?.contains(target)) {
+        if (target.closest('.se-trash')) dropOnTrash();
+        else dropOnCanvas({ target, clientX: event.clientX, clientY: event.clientY,
+          preventDefault() {}, stopPropagation() {} });
+      }
+      endDrag();
+    };
+    touchDragRef.current?.();
+    touchDragRef.current = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('keydown', key);
+    };
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('keydown', key);
   };
 
   // Pointer-drag to MOVE a script's xy on the canvas.
@@ -1453,6 +1547,14 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
   };
 
   const canvasRef = useRef(null);
+  useEffect(() => {
+    if (!guidedMode || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const resize = () => canvas.style.setProperty('--guided-width', `${Math.max(160, canvas.clientWidth - 72) / zoom}px`);
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas); resize();
+    return () => observer.disconnect();
+  }, [guidedMode, zoom]);
   const disconnectedCount = useMemo(() => floating.reduce((n, s) => n + countAll(s.blocks), 0), [floating]);
   useEffect(() => { onDisconnectedBlocksChange?.(disconnectedCount); }, [disconnectedCount, onDisconnectedBlocksChange]);
   const connectScript = id => {
@@ -1467,21 +1569,53 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
     [internal, floating]
   );
 
+  // The chooser uses the same runtime/type/occupied/cycle guard as native DnD.
+  // Enumerate nested and disconnected fields without flattening params wrappers.
+  const reporterTargets = [];
+  if (guidedMode && pendingReporter && libraryOpen) {
+    const visit = (block, path) => {
+      const def = definitionFor(block.type);
+      const label = `${path}. ${def?.label || def?.infix || block.type}`;
+      const values = blockValues(block);
+      for (const slot of def?.slots || []) {
+        if (canPlaceReporter(pendingReporter, block._id, slot.key)) reporterTargets.push({
+          value:JSON.stringify([block._id, slot.key]), parentId:block._id, key:slot.key,
+          label:`${label} › ${slot.key} (${values[slot.key] == null ? 'empty' : `currently ${values[slot.key]}`})`,
+        });
+      }
+      for (const [key, value] of Object.entries(values)) {
+        if (isReporter(value)) visit(value, `${label} › ${key}`);
+      }
+      for (const key of ['then', 'else', 'do']) {
+        block[key]?.forEach?.((child, index) => visit(child, `${label} › ${key} › ${index + 1}`));
+      }
+    };
+    internal.forEach((block, index) => visit(block, `Program › ${index + 1}`));
+    floating.forEach((script, index) => script.blocks.forEach((block, blockIndex) =>
+      visit(block, `Disconnected ${index + 1} › ${blockIndex + 1}`)));
+  }
+  const chooseReporter = type => { setReporterTarget(''); setPendingReporter(newBlock(type)); };
+
   // ── Render ──────────────────────────────────────────────────────────────
   return (
     <RecordingRegistry.Provider value={recordings}>
-    <div className="scratch-editor">
+    <GuidedGeometry.Provider value={guidedMode}>
+    <div className={`scratch-editor${guidedMode ? ' se-guided' : ''}`}>
+      <div className="se-library" hidden={guidedMode && !libraryOpen}
+        role={guidedMode ? 'region' : undefined} aria-label={guidedMode ? 'Add Blocks' : undefined}>
+      {guidedMode && <div className="se-library-heading"><strong>Add Blocks</strong>
+        <button ref={closeLibraryRef} type="button" aria-label="Close Add Blocks" onClick={closeLibrary}>Close ×</button></div>}
       <div className="se-cats">
         {CATEGORIES.map((c) => (
           <button key={c.id} className={`se-cat ${activeCat === c.id ? 'active' : ''}`}
-            onClick={() => setActiveCat(c.id)} style={{ '--cat': c.color }} title={c.label}>
+            onClick={() => { setActiveCat(c.id); setPendingReporter(null); }} style={{ '--cat': c.color }} title={c.label}>
             <span className="se-cat-dot" style={{ background: c.color }}>{c.dot}</span>
             <span className="se-cat-label">{c.label}</span>
           </button>
         ))}
         {hardwareItems.length > 0 && (
           <button className={`se-cat ${activeCat === 'my_robot' ? 'active' : ''}`}
-            onClick={() => setActiveCat('my_robot')} style={{ '--cat': '#0fbd8c' }}>
+            onClick={() => { setActiveCat('my_robot'); setPendingReporter(null); }} style={{ '--cat': '#0fbd8c' }}>
             <span className="se-cat-dot" style={{ background: '#0fbd8c' }}>🤖</span>
             <span className="se-cat-label">My Robot</span>
           </button>
@@ -1496,13 +1630,31 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
           <small>{robotStatus?.build === AV_PROGRAM_BUILD ? 'Type support only; Run validates values and limits.' : 'Runtime unverified — full catalog for editing.'}</small>
         </div>
         <div className="se-palette-title">{activeCat === 'my_robot' ? 'My Robot' : (CATEGORIES.find(c => c.id === activeCat)?.label || '')}</div>
+        {guidedMode && pendingReporter && <section className="se-reporter-chooser" aria-label="Choose reporter field">
+          <strong>Choose where to put {definitionFor(pendingReporter.type)?.label || definitionFor(pendingReporter.type)?.infix || pendingReporter.type}</strong>
+          <p>Choose an empty field or replace a plain value. Existing expressions are kept.</p>
+          <label>Compatible field
+            <select ref={reporterTargetRef} value={reporterTarget} onChange={e => setReporterTarget(e.target.value)}>
+              <option value="">{reporterTargets.length ? 'Choose a field…' : 'No compatible fields — add a block first'}</option>
+              {reporterTargets.map(target => <option key={target.value} value={target.value}>{target.label}</option>)}
+            </select>
+          </label>
+          <button type="button" disabled={!reporterTargets.some(target => target.value === reporterTarget)}
+            onClick={() => {
+              const target = reporterTargets.find(target => target.value === reporterTarget);
+              if (target && insertNewReporter(pendingReporter, target.parentId, target.key)) closeLibrary();
+            }}>Insert reporter</button>
+          <button type="button" onClick={() => { setPendingReporter(null); closeLibraryRef.current?.focus(); }}>Cancel field choice</button>
+        </section>}
         <div className="se-palette-list">
-          {activeCat === 'sound' && !search.trim() && <VoiceRecording runtimeStatus={robotStatus}
+          {(!guidedMode || libraryOpen) && activeCat === 'sound' && !search.trim() && <VoiceRecording
+            key={guidedMode ? libraryGeneration : 'legacy'} runtimeStatus={robotStatus}
             onRecordingsChange={updateRecordings} onSelect={block => commit([...internal, ...hydrate([block])])} />}
           {activeCat === 'my_robot'
             ? hardwareItems.filter(it => (allBlocks || it.capability.supported || it.capability.status === 'unknown')
                 && `${it.label} ${it.block.type} ${it.block.port}`.toLowerCase().includes(search.trim().toLowerCase())).map((it) => (
-                <PaletteCustom key={it.id} item={it} onDragStart={(e) => startDragCustomBlock(e, it.block)} onDragEnd={endDrag} />
+                <PaletteCustom key={it.id} item={it} onDragStart={(e) => startDragCustomBlock(e, it.block)} onDragEnd={endDrag}
+                  onAdd={guidedMode ? () => commit([...internal, newCustomBlock(it.block)]) : undefined} />
               ))
             : palette
                 .filter(({ type, definition: def }) => search.trim()
@@ -1516,6 +1668,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
                     onDragStart={(e) => startDragNew(e, type)}
                     onDragEnd={endDrag}
                     onAdd={() => commit([...internal, newBlock(type)])}
+                    onChooseReporter={guidedMode ? () => chooseReporter(type) : undefined}
                   />
                   {!capability.supported && capability.status !== 'unknown' && <small className="se-unavailable">{capability.reason}</small>}
                   </div>
@@ -1523,8 +1676,15 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
         </div>
       </div>
 
+      </div>
       <div className="se-canvas-wrap">
         <div className="se-canvas-toolbar">
+          {guidedMode && <button ref={addBlocksRef} type="button" className="se-add-blocks" aria-expanded={libraryOpen}
+            onClick={() => {
+              if (!libraryOpen) setLibraryGeneration(value => value + 1);
+              setPendingReporter(null);
+              setLibraryOpen(open => !open);
+            }}>Add Blocks</button>}
           <span className="se-count">{totalCount} block{totalCount !== 1 ? 's' : ''}{disconnectedCount > 0 && ` · ${disconnectedCount} not connected`}</span>
           <div className="se-zoom">
             <button onClick={zoomOut} title="Zoom out">−</button>
@@ -1547,6 +1707,11 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
             if (dragRef.current) e.preventDefault();
           }}
           onDrop={(e) => dropOnCanvas(e)}
+          onDropCapture={guidedMode ? e => {
+            if (!dragRef.current?.sourceEl || e.target.closest('.se-trash')) return;
+            e.preventDefault(); e.stopPropagation();
+            dropOnCanvas(e);
+          } : undefined}
         >
           <div className="se-canvas-board" style={{ transform: `scale(${zoom})`, transformOrigin: 'top left' }}>
             {/* Main script (always present, contains the hat). Position is
@@ -1562,6 +1727,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
                 onPointerDown={(e) => onScriptHandlePointerDown(e, 'main')}
                 title="Drag to move this script. This script runs when you click Run."
               >
+                <GuidedShape shape="hat" />
                 <span className="se-block-icon">🏁</span>
                 <span className="se-block-text">when program starts</span>
               </div>
@@ -1577,9 +1743,9 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
                     topIndex={idx}
                     parentId={null}
                     scriptId="main"
-                    ctx={{ robotStatus, editingId, setEditingId, dropHint, setDropHint,
+                    ctx={{ guidedMode, robotStatus, editingId, setEditingId, dropHint, setDropHint,
                       dropOnArrSlot, dropOnReporterSlot, canDropReporter,
-                      startDragExisting, endDrag,
+                      startDragExisting, onBlockTouchDown, endDrag,
                       handleDuplicate, handleSetPrimitive,
                       openContextMenu,
                       draggingExisting,
@@ -1621,9 +1787,9 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
                         topIndex={idx}
                         parentId={null}
                         scriptId={scriptId}
-                        ctx={{ robotStatus, editingId, setEditingId, dropHint, setDropHint,
+                        ctx={{ guidedMode, robotStatus, editingId, setEditingId, dropHint, setDropHint,
                           dropOnArrSlot, dropOnReporterSlot, canDropReporter,
-                          startDragExisting, endDrag,
+                          startDragExisting, onBlockTouchDown, endDrag,
                           handleDuplicate, handleSetPrimitive,
                           openContextMenu,
                           draggingExisting,
@@ -1640,7 +1806,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
 
             {internal.length === 0 && floating.length === 0 && (
               <div className="se-empty-hint" style={{ position: 'absolute', left: 24, top: 88 }}>
-                Drag blocks here from the palette ←
+                {guidedMode ? 'Choose Add Blocks to start your program.' : 'Drag blocks here from the palette ←'}
                 <br />or describe what your robot should do in the chat.
               </div>
             )}
@@ -1665,6 +1831,7 @@ export default function BlocklyEditor({ blocks: extBlocks, onBlocksChange, onDis
         />
       )}
     </div>
+    </GuidedGeometry.Provider>
     </RecordingRegistry.Provider>
   );
 }
@@ -1730,12 +1897,18 @@ function countAll(blocks) {
 // Palette tiles
 // ─────────────────────────────────────────────────────────────────────────────
 
-function PaletteEntry({ type, def, onDragStart, onDragEnd, onAdd }) {
+function PaletteEntry({ type, def, onDragStart, onDragEnd, onAdd, onChooseReporter }) {
   const color = CAT_COLOR[def.cat] || '#888';
   if (def.shape === 'reporter' || def.shape === 'predicate') {
     return (
       <div className={`se-block-shape ${def.shape} palette`} style={{ '--cat': color }}
+        role={onChooseReporter ? 'button' : undefined} tabIndex={onChooseReporter ? 0 : undefined}
+        aria-label={onChooseReporter ? `Choose field for ${def.label || def.infix || type}` : undefined}
+        onClick={onChooseReporter} onKeyDown={e => {
+          if (onChooseReporter && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onChooseReporter(); }
+        }}
         draggable onDragStart={onDragStart} onDragEnd={onDragEnd}>
+        <GuidedShape shape={def.shape} />
         <ReporterPreview type={type} def={def} />
       </div>
     );
@@ -1749,6 +1922,7 @@ function PaletteEntry({ type, def, onDragStart, onDragEnd, onAdd }) {
       role="button" tabIndex={0} aria-label={`Add ${def.label}`} onClick={onAdd}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAdd(); } }}
       draggable onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      <GuidedShape shape={def.shape} />
       <div className="se-block-row">
         {def.icon && <span className="se-block-icon">{def.icon}</span>}
         <span className="se-block-text">{def.label}</span>
@@ -1769,17 +1943,27 @@ function PaletteEntry({ type, def, onDragStart, onDragEnd, onAdd }) {
           <div className="se-mouth" />
         </>
       )}
+      {(def.shape === 'c' || def.shape === 'e') && <GuidedFoot />}
     </div>
   );
 }
 
-function PaletteCustom({ item, onDragStart, onDragEnd }) {
+function PaletteCustom({ item, onDragStart, onDragEnd, onAdd }) {
   // Unknown runtimes retain the legacy editing catalog, not execution approval.
   const unavailable = !!item.issue || (!item.capability.supported && item.capability.status !== 'unknown');
   return (
     <div className="se-block-shape stack palette" style={{ '--cat': CAT_COLOR.hardware }}
+      role={onAdd ? 'button' : undefined} tabIndex={onAdd ? 0 : undefined}
+      aria-label={onAdd ? `Add ${item.label}` : undefined}
+      onClick={() => { if (!unavailable) onAdd?.(); }}
+      onKeyDown={e => {
+        if (onAdd && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault(); if (!unavailable) onAdd();
+        }
+      }}
       draggable={!unavailable} aria-disabled={unavailable}
       onDragStart={e => { if (unavailable) { e.preventDefault(); return; } onDragStart(e); }} onDragEnd={onDragEnd}>
+      <GuidedShape shape="stack" />
       <div className="se-block-row">
         <span className="se-block-icon">{item.icon}</span>
         <span className="se-block-text">{item.label}</span>
@@ -1864,7 +2048,9 @@ function BlockNode({ block, topIndex, parentId, scriptId, ctx }) {
         if (e.target === e.currentTarget && e.currentTarget.matches(':focus-visible')) ctx.setEditingId(block._id);
       }}
       draggable onDragStart={(e) => ctx.startDragExisting(e, block._id)} onDragEnd={ctx.endDrag}
+      onPointerDown={ctx.guidedMode ? e => ctx.onBlockTouchDown(e, block._id) : undefined}
       onContextMenu={(e) => ctx.openContextMenu && ctx.openContextMenu(e, block._id)}>
+      <GuidedShape shape={def.shape} />
       <div className="se-block-row" onClick={(e) => {
         e.stopPropagation();
         ctx.setEditingId(isEditing ? null : block._id);
@@ -1876,7 +2062,9 @@ function BlockNode({ block, topIndex, parentId, scriptId, ctx }) {
           <React.Fragment key={s.key}>
             {def.infix && i > 0 && <span className="se-rep-infix">{def.infix}</span>}
             <SlotInline
-              slot={Object.hasOwn(def.effectiveDefaults || {}, s.key) ? { ...s, effectiveDefault: def.effectiveDefaults[s.key] } : s}
+              slot={{ ...s,
+                ...(Object.hasOwn(def.effectiveDefaults || {}, s.key) ? { effectiveDefault: def.effectiveDefaults[s.key] } : {}),
+                ...(ctx.guidedMode ? { ariaLabel: s.ariaLabel || `${def.label || def.infix || block.type} ${s.label || s.key}` } : {}) }}
               value={values[s.key]}
               parentId={block._id}
               ctx={ctx}
@@ -1898,6 +2086,7 @@ function BlockNode({ block, topIndex, parentId, scriptId, ctx }) {
           {renderMouth(m)}
         </React.Fragment>
       ))}
+      {isCE && <GuidedFoot />}
     </div>
   );
 }
@@ -2049,13 +2238,14 @@ function PrimitiveControl({ slot, value: v, onChange }) {
   if (slot.control === 'number' || slot.control === 'range') {
     return (
       <input type="number" className="se-prim num" min={slot.min} max={slot.max} step={slot.step}
+        aria-label={slot.ariaLabel}
         value={v} onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
         onClick={(e) => e.stopPropagation()} />
     );
   }
   // text
   return (
-    <TextParameter value={v} maxCodePoints={slot.maxCodePoints} onChange={onChange} />
+    <TextParameter value={v} maxCodePoints={slot.maxCodePoints} label={slot.ariaLabel} onChange={onChange} />
   );
 }
 
@@ -2065,6 +2255,7 @@ function PrimitiveControl({ slot, value: v, onChange }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ArrSlot({ kind, parentId, mouthKey, index, scriptId, dropHint, setDropHint, onDrop, draggingExisting, inset }) {
+  const guided = useContext(GuidedGeometry);
   const target = kind === 'top'
     ? { kind: 'top', index, scriptId }
     : { kind: 'mouth', parentId, mouthKey, index, scriptId };
@@ -2084,7 +2275,12 @@ function ArrSlot({ kind, parentId, mouthKey, index, scriptId, dropHint, setDropH
       data-target-parent={target.parentId || ''}
       data-target-mouth={target.mouthKey || ''}
       data-target-index={target.index}
-      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropHint({ kind: 'arr', target }); }}
+      onDragOver={(e) => {
+        e.preventDefault(); e.stopPropagation();
+        // Guided capture-phase snap detection is the sole insertion indicator;
+        // a cursor crossing a wide slot is not a connector match.
+        if (!guided) setDropHint({ kind: 'arr', target });
+      }}
       onDragLeave={() => setDropHint(null)}
       onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDrop(target); }}
     />

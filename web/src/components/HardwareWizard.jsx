@@ -4,7 +4,7 @@ import './HardwareWizard.css';
 const SERVO_PORTS = ['S1', 'S2', 'S3', 'S4'];
 const MOTOR_PORTS = ['M1', 'M2', 'M3', 'M4'];
 
-export default function HardwareWizard({ usedPorts = [], existingGroups = [], robotConnected, onComplete, onCancel }) {
+export default function HardwareWizard({ usedPorts = [], existingGroups = [], robotConnected, onComplete, onCancel, onStop }) {
   const [step, setStep] = useState(0);
   const [port, setPort] = useState(null);
   const [hwType, setHwType] = useState(null);
@@ -32,6 +32,22 @@ export default function HardwareWizard({ usedPorts = [], existingGroups = [], ro
   const [homeState, setHomeState] = useState('');
   const throttle = useRef(null);
   const wsRef = useRef(null);
+
+  const cancelPendingCommands = useCallback(() => {
+    clearTimeout(throttle.current);
+    throttle.current = null;
+    calibrateStart.current = null;
+    setCalibrating(null);
+  }, []);
+
+  useEffect(() => {
+    // One-way notification: never call the App handler back from its event.
+    window.addEventListener('mbot-global-stop', cancelPendingCommands);
+    return () => {
+      window.removeEventListener('mbot-global-stop', cancelPendingCommands);
+      cancelPendingCommands();
+    };
+  }, [cancelPendingCommands]);
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -64,6 +80,16 @@ export default function HardwareWizard({ usedPorts = [], existingGroups = [], ro
     if (!port) return;
     sendCommand({ type: 'dc_motor', port, speed: 0, duration: 0 });
   }, [port, sendCommand]);
+
+  const handleEmergencyStop = () => {
+    cancelPendingCommands();
+    // The App handler also revokes Program awards and cancels other controls.
+    // Never replace it with a port-local or queued motor command.
+    if (onStop) return onStop();
+    // Standalone RobotConfig embeds have no App-owned Program observer.
+    window.dispatchEvent(new CustomEvent('mbot-global-stop'));
+    return fetch('/api/robot/stop', { method: 'POST' }).catch(error => console.error('Stop error:', error));
+  };
 
   const handlePortSelect = (p) => {
     setPort(p);
@@ -105,7 +131,7 @@ export default function HardwareWizard({ usedPorts = [], existingGroups = [], ro
   };
 
   const stopCalibrate = () => {
-    if (!calibrating) return;
+    if (!calibrating || calibrateStart.current === null) return;
     const elapsed = ((Date.now() - calibrateStart.current) / 1000);
     const duration = Math.round(elapsed * 10) / 10; // round to 0.1s
     const withMargin = Math.round((duration * 1.2) * 10) / 10; // 20% margin
@@ -116,6 +142,7 @@ export default function HardwareWizard({ usedPorts = [], existingGroups = [], ro
       setRevDuration(withMargin);
     }
     setCalibrating(null);
+    calibrateStart.current = null;
   };
 
   // Steps differ for servo vs motor
@@ -207,9 +234,10 @@ export default function HardwareWizard({ usedPorts = [], existingGroups = [], ro
 
   return (
     <div className="hw-wizard-overlay">
-      <div className="hw-wizard">
+      <div className="hw-wizard" role="dialog" aria-modal="true" aria-labelledby="hw-wizard-title">
         <div className="hw-wizard-header">
-          <h2>Add Hardware</h2>
+          <h2 id="hw-wizard-title">Add Hardware</h2>
+          <button type="button" className="btn-danger hw-wizard-stop" aria-label="Emergency Stop" onClick={handleEmergencyStop}>STOP</button>
           <button className="hw-wizard-close" onClick={onCancel}>X</button>
         </div>
 
