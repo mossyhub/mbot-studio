@@ -1,21 +1,27 @@
-# Block audit release status
+# Block audit release and acceptance
 
-## Software verification
+## Delivered scope
 
-The combined implementation passed397 Node tests (including the explicit Python suite) and322 browser tests, with3 browser skips and retries disabled. Production Docker build and isolated local audio conversion passed. The catalog audit covered all73 baseline block types; recorded audio adds one new type.
+The audit covered all 73 baseline block types and their parameters. Repairs include explicit unsupported-field removal, wrapper-aware editing, truthful defaults, zero-valued hardware settings, typed reporter connections, AI runtime contracts/Python preview, Run/Stop submission fencing and recording readiness/cancellation. Recorded audio adds one block type.
 
-Implemented fixes include parameter repair/hydration/defaults, custom hardware settings, typed reporter connections, AI runtime contracts and Python preview, Run/Stop submission fencing, current-boot recording readiness, request-owned asset cancellation, and persistent native Stop recovery through the real resident loader.
+Capability-gated indexed programs support 1,024 executed primitive steps with at most 32 distinct normalized commands, bounded wire size, holds and observation. This is not 1,024 arbitrary distinct commands.
 
-## Device acceptance boundary
+## Device proof and limitations
 
-An earlier indexed candidate completed33,256 and1024 nonmoving steps with every global index accounted for, then canceled a long wait and successfully executed new work. A separate MP3 diagnostic started supplied MP3 bytes, returned in3ms, stopped successfully and retained loader continuity. Audible output was not independently confirmed because camera frames/audio were unavailable and no listener response was received.
+Confirmed application `6ec5dda52965395c713a0b2a7d55c1c804ce62aeeb15a5cf8140bbbddafdb155` passed real 33/256/1,024-step nonmoving runs, cancellation, immediate fresh-run recovery, recording transfer/playback/deletion and restart checks. A deployed-browser test used actual Chromium MediaRecorder with synthetic microphone audio through local conversion, device hash verification, block insertion, Run and correlated device completion. It did not test a physical microphone or independent human audibility.
 
-The combined recording candidate booted and advertised its capabilities, but real asset BEGIN rejected with `maximum recursion depth exceeded`. Shallower filesystem dispatch alone did not resolve that failure. The final source additionally moves asset admission out of the MQTT callback into the outer cooperative tick; this correction is host-tested but **not yet installed/device-verified**.
+Initial native stack failures were resolved by shallow disk dispatch and deferred outer-tick asset admission. However, a later real 8,064-byte user recording exposed unacceptable transfer latency and a timeout. Earlier successful short-clip acceptance did not establish acceptable performance across the full supported size range.
 
-The robot and OTA loader became unreachable before the final candidate could be installed. Do not equate a web deployment with firmware installation or claim end-to-end browser voice playback complete. Final firmware upload, transfer/playback/Stop acceptance and explicit OTA confirmation remain pending reconnection.
+## Slow-transfer follow-up
 
-Original confirmed application remains the recovery reference: `8d0741170e7865ad656aea7cb5f883141a8bc838ffbc3d2ba7e7508f45eea9c6`. Last observed trial was `76d21db52047372095d5f0e4811a449c09914c01f4572bafff2a567fab3cee98`; its rollback request outcome could not be verified once the device disappeared. Final built candidate: `4f040460af01963f113ae6604585a5dfaa2c56127a7fa2636cbbb3f0739215e9`.
+Device instrumentation measured a 512-byte chunk spending 4,417 ms in Python admission, compared with 3 ms in application networking and 345 ms in its disk phase. Repeated retries multiplied the admission cost.
+
+The revised firmware uses native byte-search/count operations to skip string bodies while still rejecting duplicate JSON fields and escaped-key duplicates. Native hexadecimal decoding replaces a per-character Python scan. Loader, Stop, ownership, packet limits and timeouts remain unchanged.
+
+The same saved 8,064-byte “hello” recording synced and hash-verified in 19.8 seconds on candidate `7bf6597eec8a8c120ff93375b9d4440b1472394d4a7981f6b0ba86e22bee9420`; the previous run aborted after 206.8 seconds. Bounded playback, Stop, fresh-run recovery and remote deletion also passed. These are observed transfer times, not guaranteed latency bounds.
+
+The UI follow-up shows acknowledged bytes/total, transfer phase and persistent terminal errors beside Sync. Known transfer errors return explicit 409 responses instead of generic 500. Progress is acknowledgment-based, not estimated from bytes submitted to the broker. Final deployment and confirmation handles are recorded in the associated pull request.
 
 ## Separate maintenance finding
 
-The production dependency audit reports existing advisories, including a critical transitive dependency. They were not silently upgraded as part of the block/runtime changes. Dependency remediation and regression verification remain separate maintenance work.
+Existing production dependency advisories, including a critical transitive dependency, remain separate maintenance work. They were not silently upgraded as part of these block/runtime changes.

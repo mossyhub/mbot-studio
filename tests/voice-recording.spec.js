@@ -19,6 +19,7 @@ async function mount(page,{supported=true,mode='normal',holdUpload=false,list=[a
  await page.route('**/*',async route=>{
   const req=route.request(),path=new URL(req.url()).pathname;
   if(path==='/') return route.fulfill({contentType:'text/html',body:'<meta name="viewport" content="width=device-width,initial-scale=1"><div id="root"></div>'});
+  if(path==='/api/robot/recordings/transfer-status')return route.fulfill({json:{active:false,generation:0,phase:'idle',ackedBytes:0,totalBytes:null}});
   if(path==='/api/robot/recordings'&&req.method()==='GET') return route.fulfill({json:{recordings:list}});
   if(path==='/api/robot/recordings'&&req.method()==='POST') {posts.push({mime:req.headers()['content-type'],body:req.postData()});if(holdUpload)await new Promise(r=>release=r);return route.fulfill({json:{...asset,id:'new-clip'}}).catch(()=>{});}
   if(path==='/api/robot/recordings/clip-1'&&req.method()==='DELETE') {list=[];return route.fulfill({status:204});}

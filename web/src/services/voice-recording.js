@@ -46,6 +46,17 @@ export async function uploadRecording(blob, {name = '', signal, fetcher = global
   const query = name.trim() ? `?name=${encodeURIComponent(name.trim())}` : '';
   return validateRecording(await request(API + query, {method:'POST', signal, headers:{'Content-Type':blob.type}, body:blob}, fetcher));
 }
+export async function recordingTransferStatus({signal, fetcher = globalThis.fetch} = {}) {
+  const value = await request(`${API}/transfer-status`, {signal}, fetcher);
+  if (!value || typeof value.active !== 'boolean' || !Number.isSafeInteger(value.generation) || value.generation < 0
+      || !['idle','loading','beginning','transferring','verifying','committing','checking','deleting','succeeded','failed','canceled'].includes(value.phase)
+      || !Number.isSafeInteger(value.ackedBytes) || value.ackedBytes < 0
+      || (value.totalBytes !== null && (!Number.isSafeInteger(value.totalBytes) || value.totalBytes < 1 || value.totalBytes > 24576 || value.ackedBytes > value.totalBytes))
+      || (value.totalBytes === null && value.ackedBytes !== 0)
+      || (value.active && (typeof value.sessionId !== 'string' || !value.sessionId || typeof value.bootId !== 'string'))
+      || (value.assetId != null && !/^[a-f0-9]{64}$/.test(value.assetId))) throw new Error('Recording progress is unavailable. Sync is still awaiting confirmation.');
+  return value;
+}
 export async function deleteRecording(id, {signal, fetcher = globalThis.fetch} = {}) {
   if (!validId(id)) throw new Error('Invalid recording ID.');
   await request(`${API}/${encodeURIComponent(id)}`, {method:'DELETE', signal}, fetcher);
