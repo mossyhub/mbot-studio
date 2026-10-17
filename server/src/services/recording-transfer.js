@@ -153,7 +153,18 @@ export class RecordingTransfer {
         assets.push({ metadata, bytes });
       }
       for (const [index, { metadata, bytes }] of assets.entries()) {
+        this.assertSession(session);
         session.id = metadata.id;
+        const receipt = this.verifications.get(metadata.id);
+        // Reuse only a finish-confirmed receipt for this live identity AND the
+        // exact trusted metadata. All referenced bytes were copied/hashed above.
+        if (receipt?.identity === session.identity &&
+            ['id', 'sha256', 'size', 'duration_ms'].every(key => receipt.metadata?.[key] === metadata[key])) {
+          // No transfer occurred: don't report cached bytes as new chunk ACKs.
+          this.updateProgress(session, { assetId: metadata.id, assetIndex: index + 1, totalBytes: null, ackedBytes: 0, phase: 'checking' });
+          continue;
+        }
+        this.verifications.delete(metadata.id);
         session.transfer_id = randomUUID();
         this.updateProgress(session, { assetId: metadata.id, assetIndex: index + 1, totalBytes: bytes.length, ackedBytes: 0, phase: 'beginning' });
         await this.request(session, { op: 'begin', ...metadata }, 0);
@@ -168,7 +179,7 @@ export class RecordingTransfer {
         await this.request(session, { op: 'finish' }, bytes.length);
         this.assertSession(session);
         if (this.verifications.size >= 8 && !this.verifications.has(metadata.id)) this.verifications.clear();
-        this.verifications.set(metadata.id, { boot: session.boot, identity: session.identity, owner: session.owner });
+        this.verifications.set(metadata.id, { boot: session.boot, identity: session.identity, owner: session.owner, metadata });
         session.started = false;
       }
       this.assertSession(session);
