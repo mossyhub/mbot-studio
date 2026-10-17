@@ -32,6 +32,10 @@ async function dragBlockToSlot(page, source, target) {
     return { x: r.x, y: r.y };
   });
   const start = { x: from.x + 12, y: from.y + 5 };
+  expect(await source.evaluate((el, point) => {
+    const hit=document.elementFromPoint(point.x,point.y);
+    return !!hit && (el===hit || el.contains(hit));
+  }, start), 'native drag must start on the visible source, not clipped content').toBe(true);
   const reporter = await target.getAttribute('data-reporter-slot') !== null;
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
@@ -110,6 +114,10 @@ test('U3 moving a floating reporter preserves it when its source script disappea
 });
 
 test('U3 moving a stack through main and back preserves blocks and run state', async ({ page }) => {
+  // Keep both fixed-position fixture stacks visible after the submission status
+  // row appears. At 720px tall, scrolling the target can hide the source label
+  // behind the canvas toolbar; a native drag then selects text and auto-scrolls.
+  await page.setViewportSize({ width: 1280, height: 1000 });
   const destination = { id: 'destination', x: 370, y: 160, blocks: [backward] };
   await seedFloating(page, [
     { id: 'source', x: 24, y: 160, blocks: [forward] }, destination,
