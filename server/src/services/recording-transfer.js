@@ -11,7 +11,7 @@ export function recordingMetadata(value, id) {
 
 /** Application assets only; never shares OTA application/loader slots. */
 export class RecordingTransfer {
-  constructor(mqtt, { ackTimeoutMs = 800, verificationTimeoutMs = 15000, retries = 2, sessionTimeoutMs = 300000 } = {}) {
+  constructor(mqtt, { ackTimeoutMs = 5000, verificationTimeoutMs = 15000, retries = 2, sessionTimeoutMs = 300000 } = {}) {
     if (!Number.isInteger(ackTimeoutMs) || ackTimeoutMs < 1 || ackTimeoutMs > 5000 ||
         !Number.isInteger(retries) || retries < 0 || retries > 3 ||
         !Number.isInteger(verificationTimeoutMs) || verificationTimeoutMs < 1 || verificationTimeoutMs > 15000 ||
