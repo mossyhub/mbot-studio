@@ -24,7 +24,14 @@ jobs:
       - run: npm ci
       - run: npm run test:unit
       - run: npx playwright install --with-deps chromium
+      - name: Verify native drag geometry
+        run: TEST_AI_LOCAL=true npx playwright test tests/ui-regressions.spec.js --grep 'moving a stack through main' --repeat-each=3 --retries=0 --reporter=list
       - run: TEST_AI_LOCAL=true npx playwright test --retries=0 --reporter=list
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: guided-ui-failures
+          path: test-results/
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io

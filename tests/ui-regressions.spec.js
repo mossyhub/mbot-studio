@@ -46,7 +46,17 @@ async function dragBlockToSlot(page, source, target) {
   await page.waitForTimeout(200);
   end = point(await target.boundingBox());
   await page.mouse.move(end.x + 0.1, end.y);
-  await expect(target).toHaveClass(reporter ? /\b(active|snap-grow)\b/ : /snap-active/);
+  try {
+    await expect(target).toHaveClass(reporter ? /\b(active|snap-grow)\b/ : /snap-active/);
+  } catch (error) {
+    console.log('DRAG_GEOMETRY', JSON.stringify(await target.evaluate((element, start) => {
+      const rect = el => { const r=el.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}; };
+      const moving=document.querySelector('.se-moving-original');
+      const canvas=element.closest('.se-canvas');
+      return {start,target:rect(element),moving:moving?rect(moving):null,canvas:rect(canvas),scroll:[canvas.scrollLeft,canvas.scrollTop],viewport:[innerWidth,innerHeight],hit:document.elementFromPoint(start.end.x,start.end.y)?.outerHTML.slice(0,400)};
+    }, {start,end})));
+    throw error;
+  }
   await page.mouse.up();
 }
 
