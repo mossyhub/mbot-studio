@@ -116,6 +116,10 @@ test('U3 moving a stack through main and back preserves blocks and run state', a
   const response = await sent;
   expect(response.ok()).toBeTruthy();
   expect(response.request().postDataJSON().program).toEqual([forward]);
+  // The legacy simulator returns no correlated run ID; await its final,
+  // correctly unverified UI state before measuring the next native drag.
+  // A late lifecycle-row insertion would otherwise invalidate grab offsets.
+  await expect(page.getByTestId('program-lifecycle')).toContainText('Unverified — transport acknowledgement only');
   await dragBlockToSlot(page,
     page.locator('.se-script.main .se-block-shape.stack .se-block-text').first(),
     page.locator('[data-target-script="float:0"][data-target-index="1"][data-arr-slot]'));
