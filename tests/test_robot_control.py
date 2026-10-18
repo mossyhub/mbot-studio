@@ -681,14 +681,15 @@ def test_repeated_sensor_requests_do_not_restart_an_active_scan(monkeypatch):
 def test_turn_validation_is_bounded_strict_and_advertised(kind):
     m, ctx, clock, io, client = setup()
     assert kind in m.CAPS
-    assert 'turn_angle_360' in m.CAPS
-    assert 'turn_angle_360' in client.events[-1][1]['capabilities']
+    assert 'chassis_turn_calibrated_v1' in m.CAPS
+    assert 'chassis_turn_calibrated_v1' in client.events[-1][1]['capabilities']
+    assert 'turn_angle_360' not in m.CAPS
     assert kind in client.events[-1][1]['capabilities']
     assert m.validate([{'type': kind}]) == [{'type': kind, 'angle': 0}]
-    for angle in (0, 0.5, 15, 30, 31, 90, 360):
+    for angle in (0, 0.5, 15, 30, 31, 90, 180):
         assert m.validate([{'type': kind, 'params': {'angle': angle}}]) == [
             {'type': kind, 'angle': angle}]
-    for angle in (-0.1, 360.1, 361, True, False, '10', None,
+    for angle in (-0.1, 180.1, 220, 360, 361, True, False, '10', None,
                   float('nan'), float('inf'), -float('inf')):
         with pytest.raises(ValueError, match='angle'):
             m.validate([{'type': kind, 'angle': angle}])
@@ -699,7 +700,7 @@ def test_turn_validation_is_bounded_strict_and_advertised(kind):
 
 @pytest.mark.parametrize('kind,sign', [('turn_left', -1), ('turn_right', 1)])
 @pytest.mark.parametrize('failure', [False, True])
-@pytest.mark.parametrize('angle', [0, 0.5, 30, 90, 360])
+@pytest.mark.parametrize('angle', [0, 0.5, 30, 90, 180])
 def test_native_turn_sign_zero_shallow_completion_and_failure_stop(monkeypatch, kind, sign, failure, angle):
     import inspect
     import sys
@@ -731,8 +732,9 @@ def test_native_turn_sign_zero_shallow_completion_and_failure_stop(monkeypatch, 
         assert calls == [], 'zero angle must not call any native actuator'
         failure = False
     else:
-        assert calls == ([('turn', sign * angle), ('stop',), ('dc_stop',)] if failure
-                         else [('turn', sign * angle)])
+        native_angle = sign * angle * (215 if kind == 'turn_left' else 198) / 90
+        assert calls == ([('turn', native_angle), ('stop',), ('dc_stop',)] if failure
+                         else [('turn', native_angle)])
     events = [e for _, e in client.events if e.get('run_id') == 'turn-test']
     terminal = [e for e in events if e.get('type') == 'program' and
                 e.get('event') in ('completed', 'failed')]

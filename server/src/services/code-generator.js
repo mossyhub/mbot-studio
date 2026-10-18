@@ -44,6 +44,13 @@ export function programToMicroPython(blocks, robotConfig, mqtt) {
       const seconds = Math.max(1, Math.trunc(block.duration * 1000)) / 1000;
       code += `if ${block.duration} > 0:\n    try:\n        ${setpoint}\n        time.sleep(${seconds})\n    finally:\n`
         + cooperativeStopCode().split('\n').filter(Boolean).map(line => `        ${line}\n`).join('');
+    } else if (['turn_left', 'turn_right'].includes(block.type) &&
+        status.capabilities?.includes('chassis_turn_calibrated_v1')) {
+      // Preview alone references the native call. Source/lowered/wire angles
+      // remain targets; firmware owns the one conversion during actual Run.
+      const nativeAngle = block.angle * (block.type === 'turn_left' ? -215 : 198) / 90;
+      code += '# Current chassis calibration: approximate and surface dependent; left provisional.\n'
+        + `if ${block.angle} > 0:\n    mbot2.turn(${nativeAngle})\n`;
     } else if (['turn_left', 'turn_right', 'play_tone'].includes(block.type)) {
       const positive = block.type === 'play_tone' ? block.duration : block.angle;
       code += `if ${positive} > 0:\n` + generateBlockCode(block, 1, robotConfig);

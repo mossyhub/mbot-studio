@@ -14,7 +14,10 @@ DIAGNOSTIC_REVISION='native-boundary-v1'
 CAPS=('move_forward','move_backward','dc_motor','servo','wait',
     'stop','display_text','set_led','read_sensors','status','turn_left','turn_right',
     'play_tone','play_sound','set_volume','stop_sound','display_animation','drive_hold',
-    'drive_tap','motor_power_100','turn_angle_360','program_indexed_v1')
+    'drive_tap','motor_power_100','chassis_turn_calibrated_v1','program_indexed_v1')
+TURN_REFERENCE_DEGREES=90
+TURN_NATIVE_PER90={'left':215,'right':198}
+TURN_MAX_ANGLE=180
 COLORS=('red','green','blue','yellow','cyan','purple','white','orange','off')
 
 def asset_id(value):
@@ -54,8 +57,9 @@ def validate(blocks):
           raise ValueError('port')
         allowed += ('port',)
     elif t in ('turn_left','turn_right'):
-      # One native turn may block until return; never split or repeat it.
-      number(p,'angle',0,0,360)
+      # Target chassis degrees. Keep corrected native requests below the
+      # reference vendor's >720 gyro-algorithm switch; never split or clamp.
+      number(p,'angle',0,0,TURN_MAX_ANGLE)
       allowed += ('angle',)
     elif t=='servo':
       if p.get('port') not in ('S1','S2','S3','S4'):
@@ -559,6 +563,12 @@ class Control(AssetProtocol):
       'diagnostic_revision':DIAGNOSTIC_REVISION,'uptime_ms':self.clock.ticks_ms(),
       'reset_cause':self.reset_cause,
       'application':'cooperative-v1','capabilities':capabilities,
+      'turn_calibration':{'reference':'owner_visual','reference_degrees':TURN_REFERENCE_DEGREES,
+        'native_per90':dict(TURN_NATIVE_PER90),
+        'factors':{'left':TURN_NATIVE_PER90['left']/TURN_REFERENCE_DEGREES,
+          'right':TURN_NATIVE_PER90['right']/TURN_REFERENCE_DEGREES},
+        'provisional':{'left':True,'right':False},
+        'max_angle':TURN_MAX_ANGLE,'extrapolated_above':TURN_REFERENCE_DEGREES},
       'motion_enabled':True,'armed':self.client is not None,
       'self_managed_homing':True,'device':self.ctx.device,
       'boot':self.ctx.boot,'sha256':self.ctx.sha256,'build':OTA_BUILD_ID})
@@ -834,7 +844,10 @@ def native():
       elif t=='set_volume':cyberpi.audio.set_vol(b['volume'])
       elif t=='stop_sound':cyberpi.audio.stop()
       elif t in ('turn_left','turn_right'):
-        if b['angle']>0:mbot2.turn(-b['angle'] if t=='turn_left' else b['angle'])
+        # Owner-observed chassis correction, not a vendor calibration write.
+        # Preserve one blocking call and its default speed; never split turns.
+        if b['angle']>0:mbot2.turn(b['angle']*(-TURN_NATIVE_PER90['left'] if t=='turn_left'
+          else TURN_NATIVE_PER90['right'])/TURN_REFERENCE_DEGREES)
       elif b['color']=='off':cyberpi.led.off()
       else:cyberpi.led.show(' '.join([b['color']]*5))
     def sensors(self,index=0):

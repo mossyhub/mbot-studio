@@ -177,7 +177,7 @@ export class MqttService {
                   this.robotStatusMetadata = application ? { application } : {};
                   this.robotStatusLastSeen = null;
                 }
-                for (const key of ['capabilities', 'motion_enabled', 'armed', 'self_managed_homing', 'build', 'boot', 'sha256', 'device']) {
+                for (const key of ['capabilities', 'motion_enabled', 'armed', 'self_managed_homing', 'build', 'boot', 'sha256', 'device', 'turn_calibration']) {
                   if (Object.hasOwn(data, key)) this.robotStatusMetadata[key] = data[key];
                 }
                 // Sparse lifecycle messages keep metadata visible but do not renew
@@ -568,9 +568,16 @@ export class MqttService {
             boundedNumber('angle', 0, 180);
             boundedNumber('speed', 0, 0);
           }
-          // Native driver angle, not calibrated chassis rotation.
+          // Targets stay unchanged on the wire; calibrated firmware maps once at IO.
           if (['turn_left', 'turn_right'].includes(block.type)) {
-            boundedNumber('angle', 0, capabilities.includes('turn_angle_360') ? 360 : 30);
+            if (capabilities.includes('chassis_turn_calibrated_v1')) {
+              if (Object.hasOwn(params, 'angle') && (typeof params.angle !== 'number' ||
+                  !Number.isFinite(params.angle) || params.angle < 0 || params.angle > 180)) {
+                throw admissionError(`Cooperative ${block.type} target angle must be a number in 0..180; stored values are preserved. Explicitly edit incompatible native-angle programs; no automatic scaling, clamping or splitting.`);
+              }
+            } else {
+              boundedNumber('angle', 0, capabilities.includes('turn_angle_360') ? 360 : 30);
+            }
           }
         }
         if (avControl) {

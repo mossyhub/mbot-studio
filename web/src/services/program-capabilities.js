@@ -112,10 +112,14 @@ export function getProgramBlockDefinition(type, definition, runtimeStatus) {
     const speed = slots.find(slot => slot.key === 'speed');
     if (speed) Object.assign(speed, { min: type === 'dc_motor' ? -100 : 0, max: 100 });
   }
-  if (['turn_left', 'turn_right'].includes(type) &&
-      Array.isArray(runtimeStatus.capabilities) && runtimeStatus.capabilities.includes('turn_angle_360')) {
+  if (['turn_left', 'turn_right'].includes(type) && Array.isArray(runtimeStatus.capabilities)) {
     const angle = slots.find(slot => slot.key === 'angle');
-    if (angle) Object.assign(angle, { min: 0, max: 360 });
+    if (angle && runtimeStatus.capabilities.includes('chassis_turn_calibrated_v1')) {
+      Object.assign(angle, { min: 0, max: 180, label: 'target angle',
+        title: 'Current chassis calibration is approximate and surface dependent: left 215 / right 198 native per 90° target; left provisional, right owner-observed. 180° is extrapolated, not physically verified. Stored native angles are not automatically converted; explicitly edit incompatible values.' });
+    } else if (angle && runtimeStatus.capabilities.includes('turn_angle_360')) {
+      Object.assign(angle, { min: 0, max: 360 });
+    }
   }
   if (type === 'repeat') {
     const times = slots.find(slot => slot.key === 'times');
