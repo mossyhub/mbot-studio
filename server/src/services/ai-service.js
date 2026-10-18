@@ -725,12 +725,16 @@ function formatAvBlockReference(robotConfig, runtimeStatus) {
   const caps = new Set(runtimeStatus.capabilities || []);
   const { limits } = selectProgramProfile(runtimeStatus);
   const power = caps.has('motor_power_100') ? 100 : 50;
-  const angle = caps.has('turn_angle_360') ? 360 : 30;
+  const calibrated = caps.has('chassis_turn_calibrated_v1');
+  const angle = calibrated ? 180 : caps.has('turn_angle_360') ? 360 : 30;
+  const turnRule = calibrated
+    ? 'chassis_turn_calibrated_v1: target angle 0..180; current chassis calibration is approximate and surface dependent; left provisional, right owner-observed. Firmware maps once: never scale or convert source angles. Above 90 (including 180) is extrapolation, not physically verified; never generate a 360 target, split or clamp a turn to evade limits'
+    : `native angle 0..${angle}; requested native angle is not calibrated chassis rotation; never split a turn to evade limits`;
   const examples = [
     [{ type: 'move_forward', speed: 50, duration: 2 }, `driving RPM 0..${power}; duration 0..5 seconds`],
     [{ type: 'move_backward', speed: 50, duration: 2 }, `driving RPM 0..${power}; duration 0..5 seconds`],
-    [{ type: 'turn_left', angle: Math.min(90, angle) }, `angle 0..${angle}; turn speed is unsupported (never include it)`],
-    [{ type: 'turn_right', angle: Math.min(90, angle) }, `angle 0..${angle}; requested native angle is not calibrated chassis rotation; never split a turn to evade limits`],
+    [{ type: 'turn_left', angle: Math.min(90, angle) }, `${turnRule}; turn speed is unsupported (never include it)`],
+    [{ type: 'turn_right', angle: Math.min(90, angle) }, `${turnRule}; turn speed is unsupported (never include it)`],
     [{ type: 'stop' }, 'stops motors; does not terminate the remaining program'],
     [{ type: 'wait', duration: 1 }, 'duration 0..60 seconds'],
     [{ type: 'play_tone', frequency: 440, duration: 0.5 }, 'frequency 100..2000 Hz; duration 0..2 seconds'],

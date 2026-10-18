@@ -205,6 +205,34 @@ test('AV hardware context does not teach legacy percentage-position commands', a
   }
 });
 
+test('calibrated AI prompts and serialized proposals use target angles without source scaling', async () => {
+  process.env.AI_LOCAL_DEBUG = 'false';
+  for (const route of ['/generate', '/chat']) {
+    for (const calibrated of [true, false, true]) {
+      mqtt.robotStatusMetadata.capabilities = [...caps, ...(calibrated ? ['chassis_turn_calibrated_v1'] : [])];
+      const program = [{ type: 'turn_left', angle: 90 }, { type: 'turn_right', angle: 180 }];
+      completion = { program, explanation: 'Requested turns' };
+      const result = await request(route);
+      assert.equal(result.success, true, result.error);
+      assert.deepEqual(result.program, program);
+      const prompt = requests.at(-1).messages[0].content;
+      if (calibrated) {
+        assert.match(prompt, /chassis_turn_calibrated_v1/);
+        assert.match(prompt, /target angle 0\.\.180/);
+        assert.match(prompt, /approximate.*surface/);
+        assert.match(prompt, /provisional/);
+        assert.doesNotMatch(prompt, /angle 0\.\.360/);
+        assert.match(prompt, /never.*(scale|convert).*angle/i);
+      } else assert.match(prompt, /native angle.*0\.\.360|angle 0\.\.360/);
+    }
+    mqtt.robotStatusMetadata.capabilities.push('chassis_turn_calibrated_v1');
+    completion = { program: [{ type: 'turn_left', angle: 360 }] };
+    const rejected = await request(route);
+    assert.equal(rejected.success, false);
+    assert.match(JSON.stringify(rejected), /0\.\.180/);
+  }
+});
+
 test('indexed-capable AI preflight and prompts use the negotiated larger profile without rewriting source', async () => {
   process.env.AI_LOCAL_DEBUG = 'false';
   mqtt.robotStatusMetadata.capabilities.push('program_indexed_v1');

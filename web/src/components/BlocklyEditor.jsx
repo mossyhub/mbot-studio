@@ -73,14 +73,14 @@ const BLOCK_DEFS = {
     av: { slots: { speed: null, angle: { min: 0, max: 30, default: 30, label: 'native angle' } } },
     slots: [
       { key: 'speed', kind: NUM, control: 'range', min: 0, max: 100, step: 5, default: 50, label: 'speed' },
-      { key: 'angle', kind: NUM, control: 'number', min: 1, max: 360, step: 1, default: 90, label: 'angle' },
+      { key: 'angle', kind: NUM, control: 'number', min: 1, max: 360, step: 1, default: 90, label: 'native angle' },
     ],
     format: (b) => `${fmt(b.angle)}°` },
   turn_right: { cat: 'movement', shape: 'stack', icon: '↪️', label: 'turn right',
     av: { slots: { speed: null, angle: { min: 0, max: 30, default: 30, label: 'native angle' } } },
     slots: [
       { key: 'speed', kind: NUM, control: 'range', min: 0, max: 100, step: 5, default: 50, label: 'speed' },
-      { key: 'angle', kind: NUM, control: 'number', min: 1, max: 360, step: 1, default: 90, label: 'angle' },
+      { key: 'angle', kind: NUM, control: 'number', min: 1, max: 360, step: 1, default: 90, label: 'native angle' },
     ],
     format: (b) => `${fmt(b.angle)}°` },
   set_speed: { cat: 'movement', shape: 'stack', icon: '🏎️', label: 'set motor speed',
@@ -1924,7 +1924,7 @@ function SlotInline({ slot, value, parentId, ctx }) {
   if (slot.label && !slot.inline) {
     // Stack-block slot with explicit label (e.g. "speed")
     return (
-      <span className="se-slot-pair">
+      <span className="se-slot-pair" title={slot.title}>
         <span className="se-slot-label">{slot.label}</span>
         <SlotBody slot={slot} value={value} parentId={parentId} ctx={ctx}
           onDragOver={onDragOver} onDrop={onDrop} active={active} />
